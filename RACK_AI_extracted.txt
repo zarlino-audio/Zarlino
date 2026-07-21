@@ -1,0 +1,178 @@
+RACK/AI
+AI-Powered Plugin Rack for FL Studio
+Product Specification v1.0
+1. Product Overview
+RACK/AI is a VST3/AU plugin for FL Studio that functions as a self-contained signal-processing rack. It hosts any combination of FL Studio native plugins and third-party VST/VST3 plugins inside a single plugin slot, and provides an AI mixing assistant — powered by OpenRouter — that can read deep audio characteristics from the signal chain in real time and apply mixing decisions autonomously or on request.
+The goal is to give a single producer a studio-engineer-level mixing intelligence without leaving the DAW or hiring an external engineer. Every decision the AI makes is logged, reversible, and explainable in plain English.
+2. Objectives
+Replace the need to manually jump between individual plugin windows to make holistic mixing decisions.
+Provide a flexible rack architecture supporting both series (chain) and parallel signal flow within the same instance.
+Feed real-time, deep audio analysis data to an AI model via OpenRouter so it can make intelligent, context-aware mixing decisions.
+Maintain a full session memory so the AI builds a coherent picture of every decision made since the session began.
+Support two interaction modes: autonomous AI control (AI moves knobs directly) and suggestion mode (AI proposes changes, producer approves).
+3. System Architecture
+3.1 Plugin Shell
+RACK/AI is itself a VST3/AU plugin. It appears in FL Studio's plugin picker like any other effect. Internally it runs a lightweight audio host (using CLAP/VST3 SDK hosting libraries) capable of loading and running child plugins inside its own process.
+3.2 Signal Flow Engine
+Each rack instance supports both series and parallel signal routing simultaneously. The routing is configured per slot via a visual lane editor.
+Series Chain: Audio passes slot 1 → slot 2 → ... → slot N sequentially.
+Parallel Lane: Any slot can be assigned to a named parallel bus. All buses are summed at the rack output with individual blend knobs.
+Mid/Side Split: Each lane optionally operates in M/S mode — the AI can address the mid and side channels independently when making decisions.
+Wet/Dry per slot: Every plugin slot has its own wet/dry mix knob so parallel blending works at slot level too.
+Pre/Post Gain: Input and output gain trim (±24 dB) per slot with clip indicators.
+3.3 Audio Analysis Engine
+The analysis engine runs on a dedicated low-priority thread. It continuously samples the audio stream at configurable analysis window sizes (default 2048 samples, overlap 50%) and computes the following metrics per plugin slot (pre and post):
+Spectral Analysis
+Full FFT spectrum (up to 24 kHz), reported as 1/3-octave band energy in dBFS.
+Spectral centroid, spread, flux, and rolloff.
+Per-band dynamic range (peak vs RMS per octave band).
+Tonal vs noise content ratio.
+Dynamics Analysis
+RMS level (short-term 100 ms, long-term 3 s), peak level, true peak.
+Crest factor (peak-to-RMS), dynamic range (LRA via EBU R128).
+Transient density: count of transients per second, average transient strength.
+LUFS-I (integrated loudness), LUFS-S (short-term), LUFS-M (momentary).
+Attack and release time estimation of the audio material itself.
+Harmonic Analysis
+Fundamental frequency detection and confidence score.
+Harmonic-to-noise ratio (HNR).
+Odd/even harmonic balance (relevant for saturation decisions).
+Inharmonicity index.
+Stereo Analysis
+Stereo width (correlation coefficient, -1 to +1).
+Left/right balance and level difference.
+Mid/side energy ratio.
+Phase coherence across frequency bands.
+Time-Domain Analysis
+Zero-crossing rate.
+Signal density (RMS envelope shape over time).
+Resonance detection: sustained frequency peaks that ring beyond the transient.
+Comparative Analysis (cross-slot)
+Masking index: frequency content overlap between any two slots in the rack.
+Gain-staging delta: relative level differences across the chain.
+Cumulative processing summary: net EQ curve, net compression ratio, net saturation estimate.
+4. AI Mixing Assistant
+4.1 Model & API
+4.2 Interaction Modes
+The producer selects a global mode per session. The mode can be toggled at any time without clearing history.
+Mode A — Autonomous
+The AI receives the prompt and the current analysis snapshot, decides what to change, and directly writes parameter values to the child plugins via the host parameter API. Changes appear in real time on the plugin UIs. A change log entry is created instantly.
+All autonomous changes are undoable as a single transaction in FL Studio's undo stack.
+The AI narrates what it changed and why in the chat panel after applying.
+A confidence score (0–100) is shown for each decision.
+Mode B — Suggest
+The AI generates a list of proposed changes as a structured suggestion card. Each suggestion shows: the target plugin, the parameter name, current value, proposed value, and reasoning. The producer taps Accept, Reject, or Modify on each card individually.
+Accepted changes are applied and logged.
+Rejected changes are logged as rejected (the AI remembers this and avoids repeating them).
+Modify opens an inline text field to give the AI a revised instruction for that specific suggestion.
+4.3 Session Memory & Context
+RACK/AI maintains a full session transcript that is sent with every API call. The transcript is structured so the model receives rich context without exceeding typical context windows.
+Session Object Structure
+The session object is serialised to JSON and sent as the system prompt prefix on every API call. Snapshots are pruned to last 10 to stay within context limits. The full decision log is kept in a local SQLite file and summarised for the AI after 50 entries.
+4.4 Prompt Interface
+The chat panel is a floating drawer on the right side of the RACK/AI window. It contains:
+A text input field (multi-line, supports shift+enter for new line).
+Quick-prompt buttons: preset one-tap prompts such as “Make it punch harder”, “Reduce muddiness”, “Brighten the top end”, “Check gain staging”, “Explain what you changed”.
+Mode toggle: Autonomous / Suggest.
+Analysis Snapshot button: forces an immediate analysis capture and sends it with the next prompt.
+Session Intent field: shown at the top, editable at any time.
+4.5 AI System Prompt Design
+The system prompt instructs the AI to behave as a senior mixing engineer with access to full signal analysis data. Key constraints baked into the system prompt:
+Never suggest or apply changes that would cause true peak clipping (over -1 dBTP).
+Always explain every change in plain English at producer level, not technical jargon, unless asked for detail.
+Reference previous session decisions when relevant (“Earlier I boosted 3 kHz on Slot 2 — this might now be interacting with...”).
+When in Suggest mode, output JSON-formatted suggestion cards only (no prose outside the card structure).
+Confidence scores must reflect genuine uncertainty — avoid always returning 100.
+5. UI Design
+5.1 Layout
+The RACK/AI window is resizable with a minimum size of 900×600 px. It consists of three panels:
+5.2 Slot Controls
+Add Slot button: opens FL Studio’s native plugin picker (browses both FL native and scanned VST paths).
+Remove Slot: removes with confirmation dialog.
+Drag to reorder slots in the chain.
+Routing badge: click to open a mini routing popup — assign to Series or Parallel Bus A/B/C/D.
+Blend knob: wet/dry ratio 0–100%, available on every slot.
+Pre/Post meters: stereo bar meters visible in the slot list for quick gain staging overview.
+5.3 Analysis Overlay
+A toggleable Analysis View mode overlays real-time data on top of the slot list:
+Spectrum bar per slot (colour-coded: warm = low energy, cool = high energy).
+Dynamics badge: crest factor, LRA value.
+Masking indicator between adjacent slots: red/amber/green traffic light.
+Stereo width arc per slot.
+5.4 Change Log Panel
+Accessible via a tab at the bottom of the window. Shows a chronological table of every AI decision: time, slot, parameter, before, after, mode (Auto/Suggested), and producer response (Applied/Rejected/Modified). Single-click any row to jump to that slot.
+6. Parameter Control API
+RACK/AI exposes a parameter bridge that maps natural-language parameter names from the AI response to actual plugin parameter IDs. This mapping works as follows:
+On plugin load, RACK/AI enumerates all parameters from the child plugin via the VST3/CLAP parameter API and stores a parameter manifest (ID, name, min, max, default, unit).
+The parameter manifest for all slots is included in the analysis snapshot sent to the AI.
+When the AI returns a change instruction, it references parameter by slot index and parameter name. RACK/AI fuzzy-matches the name to the closest manifest entry (Levenshtein distance < 3) and confirms before applying.
+Parameter values are normalised (0.0–1.0) internally; the AI speaks in human units (dB, Hz, ms, %) and RACK/AI converts.
+A unit conversion table is maintained for common parameter types: gain (dB ↔ linear), frequency (Hz, with log mapping), time (ms ↔ samples), ratio (x:1).
+7. Data Flow Diagram (Narrative)
+Audio enters the RACK/AI VST input buffer. The routing engine distributes it through the configured series/parallel topology. At each slot boundary, the analysis engine captures a stereo snapshot. The analysis thread computes all metrics described in Section 3.3 and writes them to a shared ring buffer. The UI thread reads from this buffer to update the Analysis Overlay.
+When a prompt is submitted, the context builder reads the session object (producer intent, decision log, latest analysis snapshots, parameter manifests) and serialises it to JSON. This is prepended to the system prompt and the request is sent to OpenRouter via HTTPS. The streaming response is shown in the chat panel token by token.
+In Autonomous mode, when the response is fully received, a JSON block in the response is parsed into a change plan. Each change is validated (within range, no clipping), then applied to the target plugin parameter. The undo transaction is committed. In Suggest mode, the change plan is rendered as suggestion cards and no writes occur until the producer approves.
+8. Non-Functional Requirements
+9. Out of Scope (v1.0)
+MIDI or instrument plugin hosting (audio FX only in v1).
+Cloud session sync or multi-user collaboration.
+AI-generated parameter automation curves (the AI sets values at a point in time, not automation lanes).
+Offline AI inference (OpenRouter dependency is required; local Ollama fallback is a v2 consideration).
+Mobile or web version.
+Mastering chain or stem export pipeline.
+10. Future Considerations (v2+)
+Local AI fallback via Ollama (same chain pattern as Apex Trader) for offline studio sessions.
+Reference track import: drop in a WAV, the AI analyses it and uses its characteristics as a target.
+AI-generated automation lanes: parameter movements over time, not just static values.
+Stem comparison mode: load two versions of a mix, AI explains the differences.
+Preset library: save named rack configurations (slot layout + routing + initial settings) as shareable presets.
+MIDI instrument hosting.
+11. Technology Stack Summary
+— End of Specification —
+Khritical Research Initiative  |  Confidential
+Project | RACK/AI
+Author | Khritical Research Initiative
+Status | Draft — Internal
+Version | 1.0
+Date | 5 June 2026
+Plugin Format | VST3 (primary), AU (secondary)
+Framework | JUCE 7+ (C++)
+Child Plugin Support | FL native plugins via wrapper bridge, VST2, VST3, CLAP
+Max Slots | 16 plugin slots per rack instance
+Instances | Multiple RACK/AI instances per project, each independent
+DAW Compatibility | FL Studio 21+ primary; Logic Pro / Ableton secondary via AU/VST3
+Provider | OpenRouter API
+Default Model | anthropic/claude-3.5-sonnet (configurable per session)
+Fallback Model | openai/gpt-4o
+API Key Storage | AES-256 encrypted in local config (same pattern as Apex Trader)
+Request Mode | Streaming (for real-time response display in the chat panel)
+Context Window Use | Full session history sent on every prompt (see 4.3)
+rack_config | Current slot layout, routing topology, plugin names and types
+analysis_snapshots | Last 10 analysis snapshots (pre+post each slot), timestamped
+decision_log | All changes made this session: timestamp, slot, param, old value, new value, mode, accepted/rejected
+producer_intent | Free-text field the producer fills at session start: genre, reference track description, mood, target loudness
+rejected_suggestions | List of parameter changes the producer rejected, so AI avoids re-suggesting
+current_prompt | The latest user message
+Left Panel (Slot List) | Vertical list of plugin slots. Each slot shows: plugin thumbnail/icon, plugin name, bypass toggle, solo button, pre/post level meters, and routing badge (Series / Parallel Bus name).
+Centre Panel (Active Plugin) | Loads and displays the selected child plugin UI natively inside the rack window. Resizes to fit.
+Right Panel (AI Chat) | Floating drawer (collapsible). Contains session intent, chat history, prompt input, quick prompts, and mode toggle.
+Analysis Latency | Analysis snapshot computed within 20 ms of audio frame arrival (non-blocking).
+AI Response Time | First token streamed within 3 s of prompt submission on a standard broadband connection.
+Parameter Apply Latency | Autonomous parameter writes applied within one audio buffer cycle after response parsing.
+CPU Budget | Analysis engine must not exceed 8% single-core CPU on a mid-range machine (i5/Ryzen 5, 2020 or newer).
+Memory | Base footprint under 150 MB RAM excluding child plugin allocations.
+Child Plugin Isolation | A crashing child plugin must not bring down the RACK/AI host or FL Studio.
+Undo Safety | All AI-applied changes must be grouped into a single named undo entry in FL Studio.
+Session Persistence | Session object (intent, log, snapshots) saved to project folder alongside the FL project file.
+API Key Security | OpenRouter key stored AES-256 encrypted; never written to plain text or logged.
+Core Language | C++ (17 or later)
+Framework | JUCE 7+
+Plugin Format | VST3 SDK, CLAP SDK, AU (via JUCE)
+Child Hosting | JUCE AudioPluginInstance / clap-host reference
+DSP / Analysis | JUCE DSP module + custom FFT analysis pipeline (FFTW or JUCE FFT)
+AI API | OpenRouter REST API — HTTPS via libcurl or JUCE URL class
+Local Storage | SQLite (session log, parameter manifests, encrypted API key)
+UI Framework | JUCE Component system + custom OpenGL-accelerated meters
+Encryption | AES-256-CBC via JUCE MemoryBlock / custom AES wrapper
+Build System | CMake + Projucer
+Target OS | Windows 10+ (primary), macOS 12+ (secondary)

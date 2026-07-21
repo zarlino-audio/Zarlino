@@ -1,0 +1,16 @@
+# Build output
+build/
+
+# SDKs (too large, license-restricted — document how to get them in README.md)
+sdk/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# IDE files
+.vscode/
+*.xcuserdata/
+*.xcworkspace/
