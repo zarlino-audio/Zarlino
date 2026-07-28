@@ -1,6 +1,6 @@
 #include "AnalysisOverlay.h"
 
-AnalysisOverlay::AnalysisOverlay (RACK_AIAudioProcessor& processor) : mProcessor (processor) {}
+AnalysisOverlay::AnalysisOverlay (RackAIAudioProcessor& processor) : mProcessor (processor) {}
 
 void AnalysisOverlay::paint (juce::Graphics& g)
 {

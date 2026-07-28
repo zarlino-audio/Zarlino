@@ -6,12 +6,12 @@
 class AIChat : public juce::Component
 {
 public:
-    explicit AIChat (RACK_AIAudioProcessor& processor);
+    explicit AIChat (RackAIAudioProcessor& processor);
     void paint (juce::Graphics& g) override;
     void resized() override;
 
 private:
-    RACK_AIAudioProcessor& mProcessor;
+    RackAIAudioProcessor& mProcessor;
     std::unique_ptr<juce::TextEditor> mChatInput;
     std::unique_ptr<juce::TextEditor> mChatHistory;
     

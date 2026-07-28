@@ -1,6 +1,14 @@
 juce_add_plugin(RACK_AI
+    COMPANY_NAME "Zarlino Audio"
+    COMPANY_WEBSITE "https://zarlinoaudio.local"
+    BUNDLE_ID "com.zarlinoaudio.rack_ai"
     PLUGIN_MANUFACTURER_CODE Khri
     PLUGIN_CODE RAI1
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    COPY_PLUGIN_AFTER_BUILD FALSE
     FORMATS VST3 Standalone
     PRODUCT_NAME "RACK/AI"
 )
@@ -26,21 +34,18 @@ target_include_directories(RACK_AI
 )
 
 target_compile_definitions(RACK_AI
-    PUBLIC
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=1
-        JUCE_VST3_CAN_REPLACE_VST2=0
+    PRIVATE
         RACK_AI_VERSION="1.0.0"
 )
 
 target_link_libraries(RACK_AI
+    PUBLIC
+        zarlino_plugin_defaults
     PRIVATE
-        juce::juce_audio_utils
-        juce::juce_dsp
         juce::juce_core
         juce::juce_cryptography
-    PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
-        juce::juce_recommended_warning_flags
+        zarlino_shared
 )
+
+# RACK_AI needs curl — override the default INTERFACE setting
+target_compile_definitions(RACK_AI PRIVATE JUCE_USE_CURL=1)

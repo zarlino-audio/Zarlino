@@ -1,13 +1,14 @@
 #include "PluginEditor.h"
+#include "../../../shared/ui/theme/KriTheme.h"
 
 namespace
 {
-    const auto bg = juce::Colour (0xff17191f);
-    const auto panel = juce::Colour (0xff242833);
-    const auto panelEdge = juce::Colour (0xff3a4050);
-    const auto text = juce::Colour (0xffdce3ee);
-    const auto muted = juce::Colour (0xff8992a3);
-    const auto accent = juce::Colour (0xff00c8a0);
+    const auto bg = juce::Colour (KriTheme::FACEPLATE_SHADE);
+    const auto panel = juce::Colour (KriTheme::FACEPLATE);
+    const auto panelEdge = juce::Colour (KriTheme::FACEPLATE_EDGE);
+    const auto text = juce::Colour (KriTheme::TEXT_PRIMARY);
+    const auto muted = juce::Colour (KriTheme::TEXT_SECONDARY);
+    const auto accent = juce::Colour (KriTheme::ACCENT);
     const auto warning = juce::Colour (0xffffc857);
 
     void drawPanel (juce::Graphics& g, juce::Rectangle<int> bounds, juce::Colour colour = panel)

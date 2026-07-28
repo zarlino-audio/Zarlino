@@ -1,7 +1,7 @@
 juce_add_plugin(VocalToneShaper
-    COMPANY_NAME "Khritical Research"
-    COMPANY_WEBSITE "https://khriticalresearch.local"
-    BUNDLE_ID "com.khriticalresearch.vocaltoneshaper"
+    COMPANY_NAME "Zarlino Audio"
+    COMPANY_WEBSITE "https://zarlinoaudio.local"
+    BUNDLE_ID "com.zarlinoaudio.vocaltoneshaper"
     PLUGIN_MANUFACTURER_CODE Khri
     PLUGIN_CODE VtS2
     IS_SYNTH FALSE
@@ -27,19 +27,11 @@ target_include_directories(VocalToneShaper
 )
 
 target_compile_definitions(VocalToneShaper
-    PUBLIC
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
-        JUCE_VST3_CAN_REPLACE_VST2=0
+    PRIVATE
         VOCAL_TONE_SHAPER_VERSION="0.1.0"
 )
 
 target_link_libraries(VocalToneShaper
-    PRIVATE
-        juce::juce_audio_utils
-        juce::juce_dsp
     PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
-        juce::juce_recommended_warning_flags
+        zarlino_plugin_defaults
 )

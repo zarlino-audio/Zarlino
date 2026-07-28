@@ -1,6 +1,6 @@
 #include "AIChat.h"
 
-AIChat::AIChat (RACK_AIAudioProcessor& processor) : mProcessor (processor)
+AIChat::AIChat (RackAIAudioProcessor& processor) : mProcessor (processor)
 {
     mChatInput = std::make_unique<juce::TextEditor>();
     mChatInput->setMultiLine (true);

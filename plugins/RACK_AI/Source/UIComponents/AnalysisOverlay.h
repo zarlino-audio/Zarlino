@@ -6,10 +6,10 @@
 class AnalysisOverlay : public juce::Component
 {
 public:
-    explicit AnalysisOverlay (RACK_AIAudioProcessor& processor);
+    explicit AnalysisOverlay (RackAIAudioProcessor& processor);
     void paint (juce::Graphics& g) override;
 
 private:
-    RACK_AIAudioProcessor& mProcessor;
+    RackAIAudioProcessor& mProcessor;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AnalysisOverlay)
 };

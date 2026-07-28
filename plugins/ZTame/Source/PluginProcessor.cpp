@@ -147,12 +147,22 @@ void ZTameAudioProcessor::initChannelState (ChannelState& state,
     state.outputAccum.assign (bufSize, 0.0f);
     state.outputWritePos = 0;
 
-    // FFT work buffer
-    state.fftBuffer.assign (static_cast<size_t> (fftSize), 0.0f);
+    // FFT work buffer — complex data needs 2× real samples
+    state.fftBuffer.assign (static_cast<size_t> (fftSize * 2), 0.0f);
 
     // Hann window
     state.window.resize (static_cast<size_t> (fftSize));
     fillHannWindow (state.window);
+
+    // Precompute COLA inverse: 1 / (w[i]^2 + w[i+hopSize]^2) for perfect reconstruction
+    state.colaInv.resize (static_cast<size_t> (hopSize));
+    for (int i = 0; i < hopSize; ++i)
+    {
+        const auto wi = static_cast<size_t> (i);
+        const auto wA = state.window[wi];
+        const auto wB = state.window[wi + static_cast<size_t> (hopSize)];
+        state.colaInv[wi] = 1.0f / (wA * wA + wB * wB);
+    }
 
     // Per-bin gain states
     state.binGain.assign (static_cast<size_t> (numBins), 1.0f);
@@ -176,6 +186,8 @@ void ZTameAudioProcessor::prepareToPlay (double sampleRate,
     {
         initChannelState (ch, sampleRate);
     }
+
+    displayMagnitude.assign (static_cast<size_t> (numBins), 0.0f);
 }
 
 void ZTameAudioProcessor::releaseResources()
@@ -365,8 +377,9 @@ void ZTameAudioProcessor::processFrame (ChannelState& state, int /*channelIndex*
     if (! state.prepared
         || state.inputBuffer.size() < static_cast<size_t> (fftSize * 2)
         || state.outputAccum.size() < static_cast<size_t> (fftSize * 2)
-        || state.fftBuffer.size() < static_cast<size_t> (fftSize)
-        || state.window.size() < static_cast<size_t> (fftSize))
+        || state.fftBuffer.size() < static_cast<size_t> (fftSize * 2)
+        || state.window.size() < static_cast<size_t> (fftSize)
+        || state.colaInv.size() < static_cast<size_t> (hopSize))
     {
         return;
     }
@@ -492,12 +505,13 @@ void ZTameAudioProcessor::processFrame (ChannelState& state, int /*channelIndex*
 
     // ---- overlap-add to output accumulator ----
     const auto outSize = static_cast<size_t> (fftSize * 2);
+    const auto colaSize = static_cast<size_t> (hopSize);
     for (int i = 0; i < fftSize; ++i)
     {
         const auto idx = static_cast<size_t> (i);
         const auto accPos = (state.outputWritePos + i) % outSize;
         state.outputAccum[accPos] += state.fftBuffer[idx] * state.window[idx]
-                                   / static_cast<float> (hopSize);  // correct gain
+                                     * state.colaInv[idx % colaSize];
     }
 
     state.outputWritePos = (state.outputWritePos + hopSize) % (fftSize * 2);
@@ -517,6 +531,16 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     if (numChannels <= 0)
         return;
 
+    // ---- input metering (channel 0 RMS) ----
+    {
+        float sumSq = 0.0f;
+        const auto* in = buffer.getReadPointer (0);
+        for (int s = 0; s < numSamples; ++s)
+            sumSq += in[s] * in[s];
+        inputLevelDb.store (juce::Decibels::gainToDecibels (
+            std::sqrt (sumSq / static_cast<float> (numSamples)), -100.0f));
+    }
+
     // Read dry/wet for final mix
     const auto dryWet = readFloatParam (parameters, paramDryWet) / 100.0f;
 
@@ -527,6 +551,7 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         // Clear extra output channels but leave processed channels untouched (passthrough)
         for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
             buffer.clear (ch, 0, numSamples);
+        outputLevelDb.store (inputLevelDb.load()); // bypass = passthrough
         return;
     }
 
@@ -548,8 +573,9 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if (! state.prepared
             || state.inputBuffer.size() < static_cast<size_t> (fftSize * 2)
             || state.outputAccum.size() < static_cast<size_t> (fftSize * 2)
-            || state.fftBuffer.size() < static_cast<size_t> (fftSize)
-            || state.window.size() < static_cast<size_t> (fftSize))
+            || state.fftBuffer.size() < static_cast<size_t> (fftSize * 2)
+            || state.window.size() < static_cast<size_t> (fftSize)
+            || state.colaInv.size() < static_cast<size_t> (hopSize))
         {
             continue;
         }
@@ -566,8 +592,11 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             state.inputWritePos = (state.inputWritePos + 1) % (fftSize * 2);
 
             // 2. Read output sample from overlap-add accumulator
+            // Subtract hopSize because outputWritePos was already advanced by
+            // processFrame; we need the overlap-added region from the *previous*
+            // write position, which now has contributions from two frames.
             const auto outReadPos = static_cast<size_t> (
-                (state.outputWritePos + state.samplesSinceFFT) % (fftSize * 2));
+                (state.outputWritePos + state.samplesSinceFFT - hopSize + fftSize * 2) % (fftSize * 2));
             outputData[idx] = state.outputAccum[outReadPos];
             state.outputAccum[outReadPos] = 0.0f; // clear consumed sample
 
@@ -577,6 +606,15 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             {
                 state.samplesSinceFFT = 0;
                 processFrame (state, ch);
+
+                // Snapshot channel-0 magnitude for the resonance analyzer
+                if (ch == 0)
+                {
+                    const auto magSize = static_cast<size_t> (numBins);
+                    jassert (state.magnitude.size() >= magSize);
+                    for (size_t i = 0; i < magSize; ++i)
+                        displayMagnitude[i] = state.magnitude[i];
+                }
             }
         }
     }
@@ -594,6 +632,16 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                            + outData[s] * dryWet;
             }
         }
+    }
+
+    // ---- output metering (channel 0 RMS) ----
+    {
+        float sumSq = 0.0f;
+        const auto* out = buffer.getReadPointer (0);
+        for (int s = 0; s < numSamples; ++s)
+            sumSq += out[s] * out[s];
+        outputLevelDb.store (juce::Decibels::gainToDecibels (
+            std::sqrt (sumSq / static_cast<float> (numSamples)), -100.0f));
     }
 }
 

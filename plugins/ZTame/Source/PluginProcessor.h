@@ -70,6 +70,18 @@ public:
 
     // Meter values for the UI
     float getGainReductionDb() const { return gainReductionDb.load(); }
+    float getInputLevelDb()    const { return inputLevelDb.load(); }
+    float getOutputLevelDb()   const { return outputLevelDb.load(); }
+    double getCurrentSampleRate() const noexcept { return currentSampleRate; }
+
+    // Live magnitude spectrum for the resonance analyzer (channel 0, numBins floats)
+    const float* getMagnitudeData() const noexcept { return displayMagnitude.data(); }
+    int getNumBins()           const noexcept { return numBins; }
+    float binToFrequency (int bin) const noexcept
+    {
+        return static_cast<float> (bin) * static_cast<float> (currentSampleRate)
+               / static_cast<float> (fftSize);
+    }
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -95,8 +107,11 @@ private:
         std::vector<float> outputAccum;
         int outputWritePos = 0;
 
-        // FFT work buffer (real data, size fftSize)
+        // FFT work buffer (complex data, size fftSize * 2)
         std::vector<float> fftBuffer;
+
+        // COLA inverse normalisation — precomputed 1 / (w[i]^2 + w[i+hopSize]^2)
+        std::vector<float> colaInv;
 
         // Hann window coefficients
         std::vector<float> window;
@@ -175,6 +190,12 @@ private:
     //==============================================================================
     // Atomic meter values for UI
     std::atomic<float> gainReductionDb { 0.0f };
+    std::atomic<float> inputLevelDb    { -100.0f };
+    std::atomic<float> outputLevelDb   { -100.0f };
+
+    // Snapshot of latest channel-0 magnitude for the UI analyzer
+    // Pre-allocated to numBins so getMagnitudeData() is never null
+    std::vector<float> displayMagnitude = std::vector<float> (static_cast<size_t> (numBins), 0.0f);
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ZTameAudioProcessor)

@@ -50,8 +50,12 @@ public:
 
 private:
     Mode mMode = Mode::Autonomous;
+    // IMPORTANT: In production, use juce::Keychain or platform-specific secure storage
+    // instead of keeping API keys in plain-text member variables.
     juce::String mAPIKey;
+    // NOTE: Make base URL user-configurable in production instead of hardcoding.
     juce::String mOpenRouterBaseURL = "https://openrouter.io/api/v1";
+    // NOTE: Make default model configurable by the user in production.
     juce::String mDefaultModel = "anthropic/claude-3.5-sonnet";
 
     struct ChatMessage

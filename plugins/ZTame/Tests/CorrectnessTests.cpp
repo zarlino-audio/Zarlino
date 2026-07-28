@@ -278,7 +278,7 @@ public:
             {"sensitivity", 0.0f, 100.0f, 50.0f},
             {"range", 0.0f, 24.0f, 12.0f},
             {"selectivity", 0.0f, 100.0f, 50.0f},
-            {"crossoverFreq", 20.0f, 20000.0f, 0.0f},
+            {"crossoverFreq", 20.0f, 20000.0f, 1000.0f},  // legal default within range
             {"attack", 0.1f, 100.0f, 30.0f},
             {"release", 10.0f, 1000.0f, 200.0f},
             {"dryWet", 0.0f, 100.0f, 100.0f},

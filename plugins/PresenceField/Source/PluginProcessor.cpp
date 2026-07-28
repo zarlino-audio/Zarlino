@@ -125,7 +125,7 @@ void PresenceFieldAudioProcessor::updateFilters()
 float PresenceFieldAudioProcessor::softClip (float x, float drive)
 {
     const auto amount = juce::jlimit (0.0f, 1.0f, drive);
-    return juce::jmap (amount, x, std::tanh (x * (1.0f + amount * 4.0f)) / (1.0f + amount * 0.8f));
+    return juce::jmap (amount, x, juce::dsp::FastMathApproximations::tanh (x * (1.0f + amount * 4.0f)) / (1.0f + amount * 0.8f));
 }
 
 void PresenceFieldAudioProcessor::applyWidth (float& left, float& right, float width)

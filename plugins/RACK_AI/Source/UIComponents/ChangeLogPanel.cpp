@@ -1,6 +1,6 @@
 #include "ChangeLogPanel.h"
 
-ChangeLogPanel::ChangeLogPanel (RACK_AIAudioProcessor& processor) : mProcessor (processor) {}
+ChangeLogPanel::ChangeLogPanel (RackAIAudioProcessor& processor) : mProcessor (processor) {}
 
 void ChangeLogPanel::paint (juce::Graphics& g)
 {

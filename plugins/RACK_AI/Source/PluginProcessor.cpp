@@ -1,189 +1,19 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 
-RACK_AIAudioProcessor::RACK_AIAudioProcessor()
-    : AudioProcessor (BusesProperties()
-                      .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
-{
-    mAnalysisEngine = std::make_unique<AudioAnalysisEngine>();
-    mParameterControl = std::make_unique<ParameterControl>();
-    mAIIntegration = std::make_unique<AIIntegration>();
-}
-
-RACK_AIAudioProcessor::~RACK_AIAudioProcessor() {}
-
-void RACK_AIAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
-{
-    mSampleRate = sampleRate;
-    mBlockSize = samplesPerBlock;
-    mAnalysisEngine->prepare (sampleRate, samplesPerBlock);
-
-    juce::ScopedLock lock (mSlotLock);
-    for (int i = 0; i < mNumActiveSlots; ++i)
-    {
-        if (mSlotConfigs[i].pluginInstance)
-            mSlotConfigs[i].pluginInstance->prepareToPlay (sampleRate, samplesPerBlock);
-    }
-}
-
-void RACK_AIAudioProcessor::releaseResources()
-{
-    juce::ScopedLock lock (mSlotLock);
-    for (int i = 0; i < mNumActiveSlots; ++i)
-    {
-        if (mSlotConfigs[i].pluginInstance)
-            mSlotConfigs[i].pluginInstance->releaseResources();
-    }
-}
-
-bool RACK_AIAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
-{
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
-        return false;
-    if (layouts.getMainOutputChannelSet() != layouts.getMainInputChannelSet())
-        return false;
-    return true;
-}
-
-void RACK_AIAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
-{
-    juce::ScopedNoDenormals noDenormals;
-    juce::ScopedLock lock (mSlotLock);
-
-    // Process through each slot in series
-    for (int i = 0; i < mNumActiveSlots; ++i)
-    {
-        if (mSlotConfigs[i].isBypassed || !mSlotConfigs[i].pluginInstance)
-            continue;
-
-        // Capture pre-analysis
-        mAnalysisEngine->analyzeAudio (buffer);
-        mSlotConfigs[i].preAnalysis = mAnalysisEngine->getLatestSnapshot();
-
-        // Process through plugin
-        mSlotConfigs[i].pluginInstance->processBlock (buffer, juce::MidiBuffer());
-
-        // Apply wet/dry mix
-        // (simplified - full implementation would handle parallel routing)
-
-        // Capture post-analysis
-        mAnalysisEngine->analyzeAudio (buffer);
-        mSlotConfigs[i].postAnalysis = mAnalysisEngine->getLatestSnapshot();
-    }
-}
-
-juce::AudioProcessorEditor* RACK_AIAudioProcessor::createEditor()
-{
-    return new RACK_AIAudioProcessorEditor (*this);
-}
-
-void RACK_AIAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
-{
-    juce::ScopedLock lock (mSlotLock);
-    // TODO: Serialize slot configuration and change log
-}
-
-void RACK_AIAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
-{
-    juce::ScopedLock lock (mSlotLock);
-    // TODO: Deserialize slot configuration
-}
-
-void RACK_AIAudioProcessor::addSlot()
-{
-    juce::ScopedLock lock (mSlotLock);
-    if (mNumActiveSlots < 16)
-    {
-        mSlotConfigs[mNumActiveSlots].pluginName = "Empty Slot";
-        mNumActiveSlots++;
-    }
-}
-
-void RACK_AIAudioProcessor::removeSlot (int slotIndex)
-{
-    juce::ScopedLock lock (mSlotLock);
-    if (slotIndex >= 0 && slotIndex < mNumActiveSlots)
-    {
-        for (int i = slotIndex; i < mNumActiveSlots - 1; ++i)
-            mSlotConfigs[i] = mSlotConfigs[i + 1];
-        mNumActiveSlots--;
-    }
-}
-
-void RACK_AIAudioProcessor::setSlotBypass (int slotIndex, bool isBypassed)
-{
-    juce::ScopedLock lock (mSlotLock);
-    if (slotIndex >= 0 && slotIndex < mNumActiveSlots)
-        mSlotConfigs[slotIndex].isBypassed = isBypassed;
-}
-
-void RACK_AIAudioProcessor::setSlotMix (int slotIndex, float wetDryMix)
-{
-    juce::ScopedLock lock (mSlotLock);
-    if (slotIndex >= 0 && slotIndex < mNumActiveSlots)
-        mSlotConfigs[slotIndex].wetDryMix = juce::jlimit (0.0f, 1.0f, wetDryMix);
-}
-
-void RACK_AIAudioProcessor::setSlotRouting (int slotIndex, juce::String routing)
-{
-    juce::ScopedLock lock (mSlotLock);
-    if (slotIndex >= 0 && slotIndex < mNumActiveSlots)
-        mSlotConfigs[slotIndex].routing = routing;
-}
-
-const AnalysisSnapshot& RACK_AIAudioProcessor::getLatestAnalysis (int slotIndex) const
-{
-    if (slotIndex >= 0 && slotIndex < mNumActiveSlots)
-        return mSlotConfigs[slotIndex].postAnalysis;
-    
-    static AnalysisSnapshot empty;
-    return empty;
-}
-
-std::vector<AnalysisSnapshot> RACK_AIAudioProcessor::getAnalysisHistory() const
-{
-    return mAnalysisEngine->getAnalysisHistory();
-}
-
-void RACK_AIAudioProcessor::sendPromptToAI (const juce::String& userPrompt)
-{
-    // Serialize current session state to JSON
-    juce::String sessionJSON = "{}"; // TODO: implement
-    auto history = getAnalysisHistory();
-    mAIIntegration->sendPrompt (userPrompt, sessionJSON, history);
-}
-
-juce::String RACK_AIAudioProcessor::getAIChatHistory() const
-{
-    return mAIIntegration->getChatHistory();
-}
-
-void RACK_AIAudioProcessor::setAIMode (AIIntegration::Mode mode)
-{
-    mAIIntegration->setMode (mode);
-}
-
-AIIntegration::Mode RACK_AIAudioProcessor::getAIMode() const
-{
-    return mAIIntegration->getMode();
-}
-
-void RACK_AIAudioProcessor::applyChangeLogEntry (const ChangeLogEntry& entry)
-{
-    // TODO: Apply the parameter change from the entry
-    mChangeLog.addEntry (entry);
-}
-
+RackAIAudioProcessor::RackAIAudioProcessor()
 #ifndef JucePlugin_PreferredChannelConfigurations
     : AudioProcessor (BusesProperties()
                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
 #endif
 {
+    mAnalysisEngine = std::make_unique<AudioAnalysisEngine>();
+    mParameterControl = std::make_unique<ParameterControl>();
+    mAIIntegration = std::make_unique<AIIntegration>();
+
     seedDefaultSession();
 }
-
 RackAIAudioProcessor::~RackAIAudioProcessor() {}
 
 const juce::String RackAIAudioProcessor::getName() const { return JucePlugin_Name; }
@@ -202,9 +32,15 @@ void RackAIAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock
 {
     currentSampleRate = sampleRate;
     currentBlockSize = samplesPerBlock;
+
+    if (mAnalysisEngine)
+        mAnalysisEngine->prepare (sampleRate, samplesPerBlock);
 }
 
-void RackAIAudioProcessor::releaseResources() {}
+void RackAIAudioProcessor::releaseResources()
+{
+    // nothing to free currently
+}
 
 #ifndef JucePlugin_PreferredChannelConfigurations
 bool RackAIAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -491,6 +327,33 @@ void RackAIAudioProcessor::appendDecision (const DecisionLogEntry& entry)
     decisionLog.add (entry);
     if (decisionLog.size() > 50)
         decisionLog.remove (0);
+}
+
+juce::String RackAIAudioProcessor::nowForLog()
+{
+    return juce::Time::getCurrentTime().toString (true, true);
+}
+
+void RackAIAudioProcessor::sendPromptToAI (const juce::String& userPrompt)
+{
+    if (! mAIIntegration)
+        return;
+
+    // Basic serialization — derive from state tree when available
+    juce::String sessionJSON = "{}";
+    if (auto xml = createStateTree().createXml())
+        sessionJSON = xml->toString();
+
+    std::vector<AnalysisSnapshot> history;
+    if (mAnalysisEngine)
+        history = mAnalysisEngine->getAnalysisHistory();
+
+    mAIIntegration->sendPrompt (userPrompt, sessionJSON, history);
+}
+
+juce::String RackAIAudioProcessor::getAIChatHistory() const
+{
+    return mAIIntegration ? mAIIntegration->getChatHistory() : juce::String();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

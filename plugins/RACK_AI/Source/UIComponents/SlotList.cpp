@@ -1,6 +1,6 @@
 #include "SlotList.h"
 
-SlotList::SlotList (RACK_AIAudioProcessor& processor) : mProcessor (processor) {}
+SlotList::SlotList (RackAIAudioProcessor& processor) : mProcessor (processor) {}
 
 void SlotList::paint (juce::Graphics& g)
 {
