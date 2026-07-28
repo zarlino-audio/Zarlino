@@ -19,6 +19,11 @@ target_sources(ZAdaptiveHarmonics
     PRIVATE
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/AnalysisCore.cpp
+        Source/ControlLayer.cpp
+        Source/Saturator.cpp
+        Source/Tilt.cpp
+        Source/Exciter.cpp
 )
 
 target_include_directories(ZAdaptiveHarmonics

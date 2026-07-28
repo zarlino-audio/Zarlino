@@ -1,6 +1,11 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "AnalysisCore.h"
+#include "ControlLayer.h"
+#include "Saturator.h"
+#include "Tilt.h"
+#include "Exciter.h"
 
 //==============================================================================
 /**
@@ -66,12 +71,29 @@ public:
     std::atomic<float>* exciterAmountParam       = nullptr;
     std::atomic<float>* exciterEnabledParam      = nullptr;
 
+    // Metering: updated in processBlock, read by UI timer (atomic)
+    std::atomic<float> meterLevel { 0.0f };
+
 private:
     //==============================================================================
     juce::AudioProcessorValueTreeState apvts;
 
     double currentSampleRate    = 44100.0;
     int    currentSamplesPerBlock = 512;
+
+    // DSP modules
+    AnalysisCore analysisCore;
+    ControlLayer  controlLayer;
+    Saturator     saturator;
+    Tilt          tilt;
+    Exciter       exciter;
+
+    // Dry buffer for wet/dry mix
+    juce::AudioBuffer<float> dryBuffer;
+
+    // Control-rate counter (update analysis every kControlInterval samples)
+    static constexpr int kControlInterval = 256;
+    int controlCounter = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ZAdaptiveHarmonicsAudioProcessor)
 };

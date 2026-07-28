@@ -75,10 +75,37 @@ void ZAdaptiveHarmonicsAudioProcessor::prepareToPlay (double sampleRate,
 {
     currentSampleRate    = sampleRate;
     currentSamplesPerBlock = samplesPerBlock;
+
+    const auto numChannels = static_cast<int> (
+        juce::jmin (getTotalNumOutputChannels(), getTotalNumInputChannels()));
+
+    // Allocate dry buffer for wet/dry mix
+    dryBuffer.setSize (numChannels, samplesPerBlock, false, true);
+    dryBuffer.clear();
+
+    // Initialize DSP modules
+    analysisCore.prepare (sampleRate, samplesPerBlock);
+    controlLayer.prepare (sampleRate);
+    saturator.prepare (sampleRate, samplesPerBlock, numChannels);
+    tilt.prepare (sampleRate, samplesPerBlock, numChannels);
+    exciter.prepare (sampleRate, samplesPerBlock, numChannels);
+
+    // Report combined latency from oversampling stages
+    const int totalLatency = saturator.getLatencySamples()
+                           + exciter.getLatencySamples();
+    setLatencySamples (totalLatency);
+
+    controlCounter = 0;
 }
 
 void ZAdaptiveHarmonicsAudioProcessor::releaseResources()
 {
+    analysisCore.reset();
+    controlLayer.reset();
+    saturator.reset();
+    tilt.reset();
+    exciter.reset();
+    dryBuffer.clear();
 }
 
 //==============================================================================
@@ -106,8 +133,77 @@ void ZAdaptiveHarmonicsAudioProcessor::processBlock (juce::AudioBuffer<float>& b
     if (numChannels <= 0)
         return;
 
-    // Passthrough: input samples are already in the buffer; output is unchanged.
-    // DSP modules will be added here to process each channel.
+    // --- Read atomic parameter values once per block ---
+    const float liftVal         = liftParam->load();
+    const float characterVal    = characterParam->load();
+    const float mixVal          = mixParam->load();
+    const float satEvenVal      = saturatorEvenParam->load();
+    const float satOddVal       = saturatorOddParam->load();
+    const float satHarmRedVal   = saturatorHarmReductionParam->load();
+    const float tiltVal         = tiltAmountParam->load();
+    const float exciterAmtVal   = exciterAmountParam->load();
+    const float exciterEnVal    = exciterEnabledParam->load();
+
+    // --- Save dry buffer for wet/dry mix ---
+    dryBuffer.makeCopyOf (buffer, true);
+
+    // --- Control-rate analysis (every ~256 samples) ---
+    controlCounter += numSamples;
+    if (controlCounter >= kControlInterval)
+    {
+        controlCounter -= kControlInterval;
+
+        analysisCore.process (buffer, numSamples, numChannels);
+        const auto& cv = analysisCore.getControlVector();
+
+        controlLayer.update (cv, liftVal, characterVal,
+                             satEvenVal, satOddVal, satHarmRedVal,
+                             tiltVal, exciterAmtVal, exciterEnVal,
+                             currentSampleRate);
+
+        // Update meter level (smoothed activity)
+        const float targetMeter = cv.activity * liftVal;
+        meterLevel.store (targetMeter, std::memory_order_relaxed);
+    }
+
+    // --- Advance smoothed targets through this block ---
+    controlLayer.skipSamples (numSamples);
+
+    // --- Block processing with current smoothed targets ---
+    const auto targets = controlLayer.getCurrentTargets();
+
+    // 1. Saturator
+    if (liftVal > 0.001f)
+    {
+        saturator.process (buffer, targets.satEven, targets.satOdd,
+                           targets.satHarmReduction);
+    }
+
+    // 2. Dynamic Spectral Tilt
+    if (liftVal > 0.001f)
+    {
+        tilt.process (buffer, targets.tiltAmount);
+    }
+
+    // 3. Exciter (gated)
+    if (exciterEnVal > 0.5f && liftVal > 0.001f)
+    {
+        exciter.process (buffer, targets.exciterAmount, targets.exciterEnabled);
+    }
+
+    // 4. Dry/Wet mix
+    if (mixVal < 0.999f)
+    {
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* wetData = buffer.getWritePointer (ch);
+            const auto* dryData = dryBuffer.getReadPointer (ch);
+            for (int s = 0; s < numSamples; ++s)
+            {
+                wetData[s] = dryData[s] + mixVal * (wetData[s] - dryData[s]);
+            }
+        }
+    }
 
     // Mute any unused output channels
     for (int ch = numChannels; ch < getTotalNumOutputChannels(); ++ch)
