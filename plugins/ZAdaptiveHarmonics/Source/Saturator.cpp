@@ -67,7 +67,10 @@ void Saturator::process (juce::AudioBuffer<float>& buffer,
         for (int i = 0; i < osNumSamples; ++i)
         {
             const float x = data[i];
-            data[i] = x + evenAmount * x * x + oddAmount * x * x * x;
+            if (std::isnan (x) || std::isinf (x))
+                data[i] = 0.0f;
+            else
+                data[i] = x + evenAmount * x * x + oddAmount * x * x * x;
         }
     }
 

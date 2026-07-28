@@ -4,7 +4,8 @@
 void AnalysisCore::prepare (double sampleRate, int maxBlockSize)
 {
     fft = std::make_unique<juce::dsp::FFT> (kFFTOrder);
-    fftBuffer.setSize (1, kFFTSize, false, true);
+    // JUCE's performFrequencyOnlyForwardTransform requires 2 * fft->getSize() elements
+    fftBuffer.setSize (1, kFFTSize * 2, false, true);
     fftBuffer.clear();
     fftWritePos = 0;
 

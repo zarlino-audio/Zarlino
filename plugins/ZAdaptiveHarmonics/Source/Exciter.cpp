@@ -84,8 +84,11 @@ void Exciter::process (juce::AudioBuffer<float>& buffer,
         for (int i = 0; i < osNumSamples; ++i)
         {
             const float x = data[i];
-            // Soft clipper polynomial: tanh-like but cheaper
-            data[i] = x + drive * x * x * x;
+            if (std::isnan (x) || std::isinf (x))
+                data[i] = 0.0f;
+            else
+                // Soft clipper polynomial: tanh-like but cheaper
+                data[i] = x + drive * x * x * x;
         }
     }
 
