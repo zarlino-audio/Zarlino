@@ -1,0 +1,83 @@
+name: ZScorch Release Gate
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/ZScorch/**'
+      - 'shared/**'
+      - 'cmake/ZarlinoTest.cmake'
+      - '.github/workflows/zscorch-release-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/ZScorch/**'
+      - 'shared/**'
+      - 'cmake/ZarlinoTest.cmake'
+  workflow_dispatch:
+
+jobs:
+  windows-build-package:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
+
+      - name: Build ZScorch (VST3 + Standalone) and test runner
+        run: cmake --build build --config Release --target ZScorch ZScorch_Tests --parallel
+
+      - name: Run automated release-gate tests
+        run: ctest --test-dir build -C Release --output-on-failure -L release-gate
+
+      # --- Package raw format artifacts ---
+      - name: Package VST3 artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/vst3
+          Copy-Item -Recurse -Path "build/plugins/ZScorch/ZScorch_artefacts/Release/VST3/ZScorch.vst3/*" -Destination artifacts/vst3/ -Force
+          Compress-Archive -Path artifacts/vst3/* -DestinationPath "artifacts/ZScorch-v1.0.0-Windows-VST3.zip"
+
+      - name: Package Standalone artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/standalone
+          Copy-Item -Path "build/plugins/ZScorch/ZScorch_artefacts/Release/Standalone/ZScorch.exe" -Destination artifacts/standalone/ -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "plugins/ZScorch/README.md" -Destination artifacts/standalone/ -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path artifacts/standalone/* -DestinationPath "artifacts/ZScorch-v1.0.0-Windows-Standalone.zip"
+
+      # --- NSIS installer ---
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          cd plugins/ZScorch/installer
+          makensis /DVERSION=1.0.0 ZScorch.nsi
+          Move-Item -Force "ZScorch-v1.0.0-Windows-Installer.exe" "../../../artifacts/"
+
+      # --- Upload all artifacts ---
+      - name: Upload VST3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZScorch-v1.0.0-Windows-VST3
+          path: artifacts/ZScorch-v1.0.0-Windows-VST3.zip
+          if-no-files-found: error
+
+      - name: Upload Standalone zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZScorch-v1.0.0-Windows-Standalone
+          path: artifacts/ZScorch-v1.0.0-Windows-Standalone.zip
+          if-no-files-found: warn
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZScorch-v1.0.0-Windows-Installer
+          path: artifacts/ZScorch-v1.0.0-Windows-Installer.exe
+          if-no-files-found: warn
