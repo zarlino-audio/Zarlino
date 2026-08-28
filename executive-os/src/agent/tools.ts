@@ -14,6 +14,7 @@ import { cloudflareTools } from "../integrations/cloudflare";
 import { websiteTools } from "../integrations/website";
 import { webTools } from "../integrations/web";
 import { visionTools } from "../integrations/vision";
+import { paystackTools } from "../integrations/paystack";
 import { assessFinancials } from "../core/finance/calc";
 import { createTask } from "../core/tasks/model";
 import { createApprovalRequest } from "../core/approvals/queue";
@@ -1223,6 +1224,7 @@ export function buildToolRegistry(deps: {
     ...websiteTools({ env }),
     ...webTools({ env }),
     ...visionTools({ env }),
+    ...paystackTools({ env }),
     ...internalTools(),
   ]) {
     registry.register(tool);
