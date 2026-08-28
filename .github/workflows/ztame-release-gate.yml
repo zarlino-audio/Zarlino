@@ -37,6 +37,26 @@ jobs:
       - name: Run automated release-gate tests
         run: ctest --test-dir build -C Release --output-on-failure -L release-gate
 
+      # --- Sign plugin binaries IN-PLACE before packaging (inert until enabled) ---
+      # Master switch: ZARLINO_SIGNING_ENABLED must be 'true' at repo/org level.
+      # Signs the VST3 module DLL(s) and the standalone exe so the installer embeds
+      # signed binaries. File-digest SHA-256 with an RFC3161 trust timestamp (the
+      # action defaults to a Microsoft timestamp service).
+      - name: Sign VST3 + Standalone binaries (Azure Artifact Signing)
+        if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
+        uses: Azure/artifact-signing-action@v3
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files: |
+            build/plugins/ZTame/ZTame_artefacts/Release/VST3/ZTame.vst3/Contents/x86_64-win/ZTame.vst3
+            build/plugins/ZTame/ZTame_artefacts/Release/Standalone/ZTame.exe
+          file-digest: SHA256
+
       # --- Package raw format artifacts ---
       - name: Package VST3 artifact
         shell: pwsh
@@ -63,6 +83,34 @@ jobs:
           cd plugins/ZTame/installer
           makensis /DVERSION=1.0.0 ZTame.nsi
           Move-Item -Force "ZTame-v1.0.0-Windows-Installer.exe" "../../../artifacts/"
+
+      # --- Sign the NSIS installer stub AFTER NSIS compiles (inert until enabled) ---
+      # The installer stub must itself be signed, not only the inner payload.
+      - name: Sign NSIS installer (Azure Artifact Signing)
+        if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
+        uses: Azure/artifact-signing-action@v3
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files: |
+            artifacts/ZTame-v1.0.0-Windows-Installer.exe
+          file-digest: SHA256
+
+      # --- Verify signature (inert until enabled) ---
+      - name: Verify Authenticode signatures
+        if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
+        shell: pwsh
+        run: |
+          Get-AuthenticodeSignature "build/plugins/ZTame/ZTame_artefacts/Release/VST3/ZTame.vst3/Contents/x86_64-win/ZTame.vst3" |
+            ForEach-Object { if ($_.Status -ne 'Valid') { throw "VST3 signature invalid: $($_.Status)" } }
+          Get-AuthenticodeSignature "build/plugins/ZTame/ZTame_artefacts/Release/Standalone/ZTame.exe" |
+            ForEach-Object { if ($_.Status -ne 'Valid') { throw "Standalone signature invalid: $($_.Status)" } }
+          Get-AuthenticodeSignature "artifacts/ZTame-v1.0.0-Windows-Installer.exe" |
+            ForEach-Object { if ($_.Status -ne 'Valid') { throw "Installer signature invalid: $($_.Status)" } }
 
       # --- Upload all artifacts ---
       - name: Upload VST3 zip
