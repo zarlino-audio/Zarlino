@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-worker/
+build/
+coverage/
+.wrangler/
+.dev.vars
+web/dist/
+web/node_modules/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
