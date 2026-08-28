@@ -1,0 +1,23 @@
+# Copy to .dev.vars for local development (wrangler dev reads .dev.vars).
+# NEVER commit real secrets. In production use `wrangler secret put <NAME>`.
+
+# ---- Model providers (pick whichever you use) ---------------------------
+DEEPSEEK_API_KEY=
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+# Workers AI does not need a key — use the AI binding in wrangler.jsonc if used.
+
+# ---- GitHub integration -------------------------------------------------
+GITHUB_TOKEN=
+
+# ---- Cloudflare integration --------------------------------------------
+CF_API_TOKEN=
+CF_ACCOUNT_ID=
+
+# ---- Auth for the Executive Console / API -------------------------------
+# The founder signs every /api/* request with this bearer token.
+# Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+FOUNDER_AUTH_TOKEN=
+
+# ---- Seed data source (path to plugin specs, optional) ------------------
+# SEED_PLUGIN_SPECS_DIR=../specs

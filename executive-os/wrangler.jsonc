@@ -1,0 +1,108 @@
+// Zarlino Executive OS — Cloudflare Worker configuration.
+// See docs/deployment.md for full environment setup.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "zarlino-executive-os",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // The Executive Agent is a single Durable Object instance ("zarlino") that
+  // holds durable executive state (SQLite-backed) and runs the decision engine.
+  "durable_objects": {
+    "bindings": [
+      { "name": "ExecutiveAgent", "class_name": "ExecutiveAgent" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ExecutiveAgent"] }
+  ],
+
+  // Serve the built web console (npm --prefix web run build) from the same
+  // Worker origin. The /api/* routes are handled by src/index.ts.
+  "assets": {
+    "directory": "./web/dist",
+    "not_found_handling": "404-page"
+  },
+
+  "vars": {
+    "ENVIRONMENT": "production",
+    "APP_NAME": "zarlino-executive-os",
+
+    // ---- Model gateway (non-secret routing config) ---------------------
+    // All keys live in .dev.vars / secrets in prod.
+    //
+    // Zarlino model tiers (documented as V4 Flash / V4 Pro):
+    //   V4 Flash  = deepseek-chat      → agentic work: chat, tool loops,
+    //                classification, summarization, briefings (cheap + medium).
+    //   V4 Pro    = deepseek-reasoner  → high-intelligence decisions:
+    //                financial/technical/strategic reasoning, lenses, synthesis
+    //                (strong + strongest).
+    "MODEL_TIER_CHEAP": "deepseek:deepseek-chat",
+    "MODEL_TIER_MEDIUM": "deepseek:deepseek-chat",
+    "MODEL_TIER_STRONG": "deepseek:deepseek-reasoner",
+    "MODEL_TIER_STRONGEST": "deepseek:deepseek-reasoner",
+    "MODEL_DEFAULT_TIER": "medium",
+    // Vision model for the vision.* tools (image analysis). Requires a key
+    // with vision access; falls back to the default experimental vision model.
+    "DEEPSEEK_VISION_MODEL": "deepseek-v4-flash-vision-exp",
+
+    // ---- Cost controls ------------------------------------------------
+    // Daily budget raised (was 2.00) so the Founder can actually use the
+    // Executive for real multi-turn tool loops + vision without hitting the
+    // stop-wall mid-task. Monthly/per-run raised to match. DeepSeek is cheap
+    // (≈$0.001–0.01/task), so this is still a small number in practice.
+    "AI_DAILY_BUDGET": "8.00",
+    "AI_MONTHLY_BUDGET": "150.00",
+    "AI_PER_TASK_BUDGET": "1.00",
+    "AI_PER_RUN_BUDGET": "2.00",
+    // Soft token budgets — shown as the AI Fuel gauge "tokens" meter. Cost
+    // budgets above are what actually STOP runaway spend; token budgets are
+    // guidance for the Founder's visibility. Calibrated to the $8/day cost
+    // budget at DeepSeek pricing (≈$0.27–1.10 per 1M) ≈ 30M tokens/day.
+    "AI_DAILY_TOKEN_BUDGET": "30000000",
+    "AI_MONTHLY_TOKEN_BUDGET": "900000000",
+    // Soft by default (false) — the USD cost budgets are what STOP runaway
+    // spend. Set "true" to also hard-stop at the daily token budget.
+    "AI_TOKEN_BUDGET_ENFORCE": "false",
+
+    // ---- Autonomy / approval thresholds (configurable) ----------------
+    "SPEND_APPROVAL_THRESHOLD": "100.00",
+    "MAX_AUTONOMOUS_SPEND": "25.00",
+    "AUTONOMY_MODE": "CONTROLLED", // CONTROLLED | APPROVAL_ONLY | PAUSED
+
+    // Long-horizon runs: 200 tool iterations, 30-min wall clock (checkpoint +
+    // resume makes them safe to bound loosely). Chat tool loops keep the
+    // tighter 10-min bound.
+    "MAX_TOOL_ITERATIONS": "200",
+    "MAX_AGENT_RUN_MS": "600000",
+    "MAX_LONG_RUN_MS": "1800000",
+
+    // ---- Routing defaults ---------------------------------------------
+    "DEFAULT_MODEL_PROVIDER": "deepseek",
+
+    // ---- External integrations (non-secret defaults) -------------------
+    // Repo-level: the agent's GitHub tools target the real repository. Set
+    // GITHUB_TOKEN via `wrangler secret put` to unlock write tools (the repo
+    // is private, so read tools also need it).
+    "GITHUB_OWNER": "zarlino-audio",
+    "GITHUB_REPO": "Zarlino",
+    // Website-level: live site the agent checks.
+    "WEBSITE_URL": "https://zarlinoaudio.com",
+    // Cloudflare monitoring (analytics/deployments). Set CF_API_TOKEN via
+    // `wrangler secret put` — the account id is non-secret.
+    "CF_ACCOUNT_ID": "ae604b602fdbcb1b48b41e975c6dbd19",
+
+    // Optional: use Cloudflare AI Gateway as a unified proxy. When set, the
+    // gateway routes through https://gateway.ai.cloudflare.com/v1/{account}/{gateway}.
+    "AI_GATEWAY_ENABLED": "false",
+    "AI_GATEWAY_ACCOUNT_ID": "",
+    "AI_GATEWAY_NAME": ""
+
+    // NOTE: never put secrets (API keys, tokens) in this file. Use
+    // `wrangler secret put` or `.dev.vars` locally. See .dev.vars.example.
+  }
+}

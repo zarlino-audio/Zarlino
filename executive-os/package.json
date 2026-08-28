@@ -1,0 +1,37 @@
+{
+  "name": "zarlino-executive-os",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zarlino Executive OS — an institutional intelligence and execution layer (CEO/CFO/CTO lenses + Chief of Staff) running on Cloudflare Agents.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:remote": "wrangler dev --remote",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:worker": "wrangler deploy --dry-run --outdir dist-worker",
+    "build:web": "npm --prefix web run build",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy",
+    "smoke:deepseek": "tsx scripts/deepseek-smoke.ts",
+    "agent:local": "tsx scripts/local-agent.ts",
+    "agent:daemon": "tsx scripts/local-daemon.ts",
+    "agent:daemon:loop": "tsx scripts/local-daemon.ts --loop --yes",
+    "seed": "wrangler dev --test-scheduled"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "agents": "^0.21.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260823.1",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.125.0"
+  }
+}
