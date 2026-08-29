@@ -143,6 +143,28 @@ export function migrate(sql: Sql): Migration[] {
       applied_at TEXT NOT NULL
     )
   `);
+  // The production store's schema_migrations predates the `name`/`applied_at`
+  // columns (older shape: version + applied_at only). The CREATE above no-ops
+  // on an existing table, so adapt it in place with ALTER TABLE ADD COLUMN
+  // before inserting rows — otherwise every INSERT fails with
+  // "table schema_migrations has no column named name".
+  const existingCols = new Set(
+    (sql.all<{ name: string }>("PRAGMA table_info(schema_migrations)") ?? []).map((r) => String(r.name)),
+  );
+  if (!existingCols.has("name")) {
+    try {
+      sql.run("ALTER TABLE schema_migrations ADD COLUMN name TEXT");
+    } catch {
+      /* another DO instance may have raced us — re-checked below */
+    }
+  }
+  if (!existingCols.has("applied_at")) {
+    try {
+      sql.run("ALTER TABLE schema_migrations ADD COLUMN applied_at TEXT");
+    } catch {
+      /* raced */
+    }
+  }
   const appliedRows = sql.all<{ version: number }>("SELECT version FROM schema_migrations");
   const applied = new Set(appliedRows.map((r) => Number(r.version)));
   const ran: Migration[] = [];

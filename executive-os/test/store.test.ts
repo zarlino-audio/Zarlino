@@ -114,4 +114,25 @@ describe("ExecutiveStore (node:sqlite)", () => {
     // A third claim should grab nothing (no PENDING tasks left).
     expect(store.claimLocalTask("daemon-b")).toBeNull();
   });
+
+  it("adapts to a legacy schema_migrations table (no name column) — production bug", () => {
+    // The production store's schema_migrations predates the `name` column.
+    // Reproduce that exact shape and confirm migrate() adapts in place instead
+    // of throwing "no column named name" on the first INSERT.
+    const legacy = new DatabaseSync(":memory:");
+    legacy.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      )
+    `);
+    const legacyStore = new ExecutiveStore(createNodeSql(legacy as never));
+    expect(() => legacyStore.migrate()).not.toThrow();
+    // All migrations applied, including doctor_logs (v17) — and the ALTER
+    // recorded the applied versions into the adapted table.
+    const rows = legacy.prepare("SELECT version, name FROM schema_migrations").all() as Array<{ version: number; name: string }>;
+    expect(rows.some((r) => r.version === 17 && r.name.length > 0)).toBe(true);
+    expect(legacyStore.latestDoctorLog()).toBeNull(); // doctor_logs exists, just empty
+    legacy.close();
+  });
 });

@@ -32,6 +32,7 @@ type ModelCall = _M;
 export interface Env {
   EXECUTIVE_AGENT: DurableObjectNamespace;
   ZARLINO_KV?: KVNamespace;
+  ASSETS?: Fetcher;
   DEEPSEEK_API_KEY?: string;
   FOUNDER_AUTH_TOKEN?: string;
   GITHUB_TOKEN?: string;
@@ -893,7 +894,11 @@ export default {
       const stub = env.EXECUTIVE_AGENT.get(id);
       return stub.fetch(request);
     }
-    return json({ error: "Executive OS API only — no static assets are served here." }, 404);
+    // Serve the Founder web console from worker static assets.
+    if (env.ASSETS) {
+      return env.ASSETS.fetch(request);
+    }
+    return json({ error: "Executive OS API only — build the console (npm run build:console) to enable assets." }, 404);
   },
 
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {

@@ -24,9 +24,23 @@ binding = "ZARLINO_KV"
 id = "66bc47e33fe145f697cf1f80912f269e"
 
 # ---------------------------------------------------------------------------
+# Static assets: the Founder web console (React+Vite, built to web/dist).
+# run_worker_first = true so /api/* reaches the Worker; the Worker then serves
+# the console via env.ASSETS.fetch(request) for every non-API path.
+# ---------------------------------------------------------------------------
+[assets]
+directory = "./web/dist"
+binding = "ASSETS"
+not_found_handling = "none"
+run_worker_first = true
+
+# ---------------------------------------------------------------------------
 # Static vars. Secrets (DEEPSEEK_API_KEY, FOUNDER_AUTH_TOKEN, PAYSTACK_SECRET_KEY,
 # GITHUB_TOKEN, CF_API_TOKEN, ZARLINO_LICENSE_PRIVATE_KEY) are set via
 # `wrangler secret put <NAME>` in production and live in .dev.vars locally.
+# NOTE: FOUNDER_AUTH_TOKEN must NOT also appear here as a var — Cloudflare
+# rejects a binding that is both a secret and a var (error 10053), and an
+# empty var would shadow the real secret at runtime (auth would always 401).
 # ---------------------------------------------------------------------------
 [vars]
 WEBSITE_URL = "https://zarlinoaudio.com"
@@ -34,8 +48,6 @@ AI_DAILY_BUDGET = "5"
 AI_MONTHLY_BUDGET = "80"
 AI_PER_TASK_BUDGET = "2"
 AI_PER_RUN_BUDGET = "8"
-# Rotate in production: `wrangler secret put FOUNDER_AUTH_TOKEN`.
-FOUNDER_AUTH_TOKEN = ""
 
 # ---------------------------------------------------------------------------
 # Constant maintenance: the System Doctor auto-runs on this schedule (and on
