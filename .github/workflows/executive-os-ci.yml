@@ -1,0 +1,58 @@
+name: executive-os-ci
+
+# Continuous validation for the Executive OS. Runs typecheck + the full test
+# suite on every push touching executive-os, and (only on the default branch)
+# a wrangler dry-run so bundle breakage is caught before deploy.
+#
+# Production deploy stays MANUAL (`npm run deploy` from executive-os) — the
+# System Doctor then self-heals migrations/runs on the live DO.
+
+on:
+  push:
+    paths:
+      - "executive-os/**"
+  pull_request:
+    paths:
+      - "executive-os/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: executive-os
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: executive-os/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Tests
+        run: npx vitest run
+
+  bundle:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        working-directory: executive-os
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: executive-os/package-lock.json
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Bundle check (dry-run deploy)
+        run: npx wrangler deploy --dry-run --outdir .wrangler/ci-dist

@@ -1,0 +1,91 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { createNodeSql } from "../src/db/sql";
+import { ExecutiveStore } from "../src/db/store";
+import { runDoctor, DOCTOR_CHECKS, doctorTools } from "../src/core/doctor";
+
+describe("System Doctor", () => {
+  let db: DatabaseSync;
+  let store: ExecutiveStore;
+
+  beforeAll(() => {
+    db = new DatabaseSync(":memory:");
+    store = new ExecutiveStore(createNodeSql(db as never));
+    store.migrate();
+  });
+
+  afterAll(() => {
+    db.close();
+  });
+
+  it("runs every check and logs the run", async () => {
+    const report = await runDoctor(
+      { store, env: {}, now: () => new Date().toISOString() },
+      { autoFix: true, trigger: "test" },
+    );
+    expect(report.summary.total).toBe(DOCTOR_CHECKS.length);
+    expect(report.healthy).toBe(true); // missing secrets are WARN, not FAIL
+    const logs = store.listDoctorLogs();
+    expect(logs.length).toBe(1);
+    expect(logs[0]!.trigger).toBe("test");
+  });
+
+  it("auto-fixes a stale RUNNING agent run", async () => {
+    const now = new Date().toISOString();
+    store.createAgentRun({
+      id: "run_bad", prompt: "x", status: "RUNNING", iterations: 0, tools_called: 0,
+      started_at: now, source: "test", created_at: now, updated_at: now,
+      last_heartbeat: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    const report = await runDoctor(
+      { store, env: {}, now: () => new Date().toISOString() },
+      { autoFix: true, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "jobs.stale_runs")!;
+    expect(check.fixed).toBeTruthy();
+    expect(store.getAgentRun("run_bad")?.status).toBe("FAILED");
+  });
+
+  it("auto-fixes an expired local-task lease", async () => {
+    const now = new Date().toISOString();
+    store.createLocalTask({
+      id: "lt_expired", prompt: "y", status: "RUNNING", claimed_by: "ghost", source: "test",
+      created_at: now, updated_at: now,
+      lease_expires_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const report = await runDoctor(
+      { store, env: {}, now: () => new Date().toISOString() },
+      { autoFix: true, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "tasks.expired_leases")!;
+    expect(check.fixed).toBeTruthy();
+    expect(store.getLocalTask("lt_expired")?.status).toBe("PENDING");
+  });
+
+  it("reports missing secrets as WARN without reading values", async () => {
+    const report = await runDoctor(
+      { store, env: { DEEPSEEK_API_KEY: "x" }, now: () => new Date().toISOString() },
+      { autoFix: false, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "secrets.required")!;
+    expect(check.status).toBe("WARN");
+    expect(check.detail).not.toContain("x"); // never echo values
+  });
+
+  it("exposes system.doctor / system.self_test / system.maintenance tools", () => {
+    const names = doctorTools().map((t) => t.name);
+    expect(names).toContain("system.doctor");
+    expect(names).toContain("system.self_test");
+    expect(names).toContain("system.maintenance");
+  });
+
+  it("system.self_test passes on a healthy store", async () => {
+    const tool = doctorTools().find((t) => t.name === "system.self_test")!;
+    const out = (await tool.run(
+      { store, env: {}, audit: () => {} } as never,
+      {},
+    )) as { ok: boolean; checks: Array<{ name: string; ok: boolean }> };
+    expect(out.ok).toBe(true);
+    expect(out.checks.length).toBeGreaterThan(5);
+  });
+});
