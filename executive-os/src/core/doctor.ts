@@ -241,6 +241,82 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
       }
     },
   },
+  {
+    id: "productivity.stale_assignments",
+    label: "Productivity assignments are progressing",
+    severity: "MEDIUM",
+    run: (ctx, autoFix) => {
+      const stale = ctx.store.countStaleAssignments(48 * 60 * 60 * 1000);
+      if (stale > 0) {
+        if (autoFix) {
+          const ids = ctx.store.reapStaleAssignments(48 * 60 * 60 * 1000);
+          return failResult(
+            "productivity.stale_assignments",
+            "Productivity assignments are progressing",
+            "MEDIUM",
+            `${stale} assignment(s) with no progress in 48h.`,
+            "Assignments are auto-marked STALLED so they can be re-planned.",
+            `marked ${ids.length} assignment(s) STALLED`,
+          );
+        }
+        return warnResult(
+          "productivity.stale_assignments",
+          "Productivity assignments are progressing",
+          "MEDIUM",
+          `${stale} assignment(s) with no progress in 48h.`,
+          "Run with auto-fix to mark them STALLED.",
+        );
+      }
+      return okResult("productivity.stale_assignments", "Productivity assignments are progressing", "MEDIUM", "No stale assignments.");
+    },
+  },
+  {
+    id: "productivity.budget_health",
+    label: "Token budgets are within limits",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      try {
+        const budgets = ctx.store.listTokenBudgets();
+        if (budgets.length === 0) {
+          return warnResult("productivity.budget_health", "Token budgets are within limits", "MEDIUM", "No token budgets tracked yet.", "Run productivity.optimize once to seed the global budget.");
+        }
+        const over = budgets.filter((b) => {
+          const monthly = b.monthly_budget ?? 0;
+          return monthly > 0 && b.tokens_used_month >= monthly * 0.9;
+        });
+        if (over.length) {
+          return warnResult(
+            "productivity.budget_health",
+            "Token budgets are within limits",
+            "MEDIUM",
+            `${over.length} scope(s) at ≥90% of monthly token budget: ${over.map((b) => b.scope).join(", ")}.`,
+            "Reallocate budget (productivity.optimize) or raise the cap in wrangler vars.",
+          );
+        }
+        return okResult("productivity.budget_health", "Token budgets are within limits", "MEDIUM", "All token budgets within limits.");
+      } catch {
+        return okResult("productivity.budget_health", "Token budgets are within limits", "MEDIUM", "Budget check unavailable (no productivity tables yet).");
+      }
+    },
+  },
+  {
+    id: "productivity.contradictions",
+    label: "No open contradictions/misconceptions",
+    severity: "LOW",
+    run: (ctx, _autoFix) => {
+      const open = ctx.store.countOpenContradictions();
+      if (open > 0) {
+        return warnResult(
+          "productivity.contradictions",
+          "No open contradictions/misconceptions",
+          "LOW",
+          `${open} open contradiction(s)/misconception(s) — run productivity.detect_contradictions, review and resolve.`,
+          "Review and resolve in the Productivity view.",
+        );
+      }
+      return okResult("productivity.contradictions", "No open contradictions/misconceptions", "LOW", "No open contradictions.");
+    },
+  },
 ];
 
 /** Probe whether a table exists by running a guarded SELECT against it. */

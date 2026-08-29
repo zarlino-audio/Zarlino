@@ -22,8 +22,9 @@ research & maintenance tasks, gates risky actions behind approvals, and — sinc
 | **Chat** | SSE-streamed DeepSeek chat with tool-calling loop, budget-gated |
 | **Files** | Uploaded-file registry with size/type validation |
 | **Local bridge** | `local_tasks` — the CLI agent (`scripts/local-agent.ts`) claims & executes machine tasks, heartbeats progress, reports results |
-| **System Doctor** | 11 health checks, auto-fixes safe issues, logs every run, exposes `/api/doctor/run` + `/api/doctor/logs` |
-| **Console** | Founder web console (`web/`): overview, Doctor, chat, tasks, approvals, budget settings |
+| **Productivity Manager** | Token budgets per scope, task→role/skill assignment, cost-efficiency optimization (stale-assignment reaping, budget reallocation, batching/model-tier recommendations), contradiction & misconception detection with audit-trailed resolution |
+| **System Doctor** | 14 health checks, auto-fixes safe issues, logs every run, exposes `/api/doctor/run` + `/api/doctor/logs` |
+| **Console** | Founder web console (`web/`): overview, Doctor, chat, tasks, approvals, productivity, budget settings |
 
 ---
 
@@ -51,10 +52,50 @@ Checks (`src/core/doctor.ts`):
 | `metrics.seed` | LOW | seeds missing product metrics |
 | `secrets.required` | HIGH | — (reported; values never read) |
 | `kv.health` | LOW | — (reported when KV unbindable) |
+| `productivity.stale_assignments` | MEDIUM | marks 48h-no-progress assignments STALLED |
+| `productivity.budget_health` | MEDIUM | — (reported; warns at ≥90% of monthly budget) |
+| `productivity.contradictions` | LOW | — (reported; count of open findings) |
 
 Every run is logged to `doctor_logs` (migration v17) and is visible in the console and via
 `GET /api/doctor/logs`. The public `GET /api/health` reports the last Doctor result so
 uptime monitors can alert on `doctorHealthy: false`.
+
+---
+
+## Productivity Manager (do more with less)
+
+The Productivity Manager (`src/core/productivity/manager.ts`, migration v18) is the
+Executive's efficiency layer. It runs a **safe, local maintenance pass on every DO wake**
+(no model calls): daily rollup + safe optimizations.
+
+### What it tracks & manages
+
+| Concern | How |
+| --- | --- |
+| **Token budgets** | `token_budgets` per scope (global/role/task): daily+monthly caps, actual usage, cost. Global budget recalibrated to env vars; under-utilized scopes release budget to over-utilized ones. |
+| **Task assignment** | `productivity_assignments` link tasks to roles with a token budget + cost estimate; `productivity.recommend_assignment` picks the best role by **skill coverage + historical cost per task**. |
+| **Roles & skills** | `role_skills` (proficiency 1–5) seeded from the 12 technical roles; `task_skills` infer required skills from task text; skill gaps are surfaced. |
+| **Optimization** | `optimize()` applies **safe/reversible** fixes (stale assignments → STALLED, budget recalibration, budget reallocation) and records recommendations (batching ≥3 same-priority tasks, model-tier downgrades, skill gaps). Every event is audited in `optimization_events`. |
+| **Contradictions** | `detectContradictions()` scans for stale approved decisions with open tasks, done-but-running tasks, duplicate open tasks, shipped products with open gates, auto-run blocked tasks, misassignments, budget-override mismatches. Idempotent; resolve with an audited resolution. |
+| **Metrics** | Daily rollups (`productivity_metrics`): tasks done, tokens, cost, tasks/$ and avg tokens/task. |
+
+### API
+
+`GET /api/productivity/report` · `GET /api/productivity/budget` · `GET /api/productivity/assignments` ·
+`POST /api/productivity/assign` · `POST /api/productivity/optimize` ·
+`GET /api/productivity/contradictions` · `POST /api/productivity/contradictions/detect` ·
+`POST /api/productivity/contradictions/:id/resolve` · `GET /api/productivity/metrics`
+
+Agent tools: `productivity.report`, `productivity.budget`, `productivity.recommend_assignment`,
+`productivity.assign`, `productivity.optimize`, `productivity.detect_contradictions`,
+`productivity.list_contradictions`, `productivity.resolve_contradiction`,
+`productivity.record_token_usage`, `productivity.skills`.
+
+### Safety rails
+
+- Only **reversible** optimizations are auto-applied; judgment calls become recommendations.
+- Contradiction detection is idempotent (identical OPEN findings never duplicate).
+- Budget reallocation is bounded (±10%) and audited.
 
 ### CLI
 
@@ -124,11 +165,13 @@ Worker entry (src/index.ts)
  └─ integrations/           → web, website, github, cloudflare, vision, paystack
 ```
 
-### Schema (migrations v1 → v17)
+### Schema (migrations v1 → v18)
 
 `db/schema.ts` + `db/migrations.ts` (deterministic baseline seed, idempotent
-`INSERT OR IGNORE`). Latest: **v17** adds `doctor_logs`. The Doctor auto-applies any
-pending migrations on wake, so deploys with new migrations self-heal.
+`INSERT OR IGNORE`). Latest: **v18** adds the Productivity Manager tables
+(assignments, role/task skills, token budgets, optimization events,
+contradictions, metrics). The Doctor auto-applies any pending migrations on
+wake, so deploys with new migrations self-heal.
 
 ---
 

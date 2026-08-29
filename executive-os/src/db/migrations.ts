@@ -30,6 +30,7 @@ import {
   AUTO_RUN_SQL,
   PRODUCT_METRICS_SQL,
   DOCTOR_LOG_SQL,
+  PRODUCTIVITY_SQL,
 } from "./schema";
 import type { Sql } from "./sql";
 
@@ -126,6 +127,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 15, name: "auto_run", sql: [AUTO_RUN_SQL] },
   { version: 16, name: "product_metrics", sql: [PRODUCT_METRICS_SQL] },
   { version: 17, name: "system_doctor", sql: [DOCTOR_LOG_SQL] },
+  { version: 18, name: "productivity_manager", sql: [PRODUCTIVITY_SQL] },
 ];
 
 /** Latest schema version this code knows how to migrate to. */

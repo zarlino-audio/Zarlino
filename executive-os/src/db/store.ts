@@ -21,6 +21,8 @@ import type {
   CalendarEvent,
   ChatMessage,
   Contact,
+  Contradiction,
+  ContradictionStatus,
   Decision,
   DoctrineRule,
   DoctorLog,
@@ -33,16 +35,22 @@ import type {
   Metric,
   Note,
   Objective,
+  OptimizationEvent,
   Organization,
   Person,
   PipelineGate,
   Policy,
   Product,
+  ProductivityAssignment,
+  ProductivityMetric,
   ProductStatusRecord,
   Project,
   Reminder,
   Risk,
+  RoleSkill,
   Task,
+  TaskSkill,
+  TokenBudget,
   ToolExecution,
   UploadedFile,
   Workstream,
@@ -1068,6 +1076,266 @@ export class ExecutiveStore implements CostStorage {
       staleAgentRuns: Number(staleAgentRuns[0]?.c ?? 0),
       expiredLeases: Number(expiredLeases[0]?.c ?? 0),
     };
+  }
+
+  // -- Productivity Manager (migration v18) --------------------------------
+  // Assignments ----------------------------------------------------------
+  insertAssignment(a: ProductivityAssignment): void {
+    this.insert("productivity_assignments", a);
+  }
+  getAssignment(id: string): ProductivityAssignment | null {
+    const rows = this.sql.all<Row>("SELECT * FROM productivity_assignments WHERE id = ?", id);
+    return rows.length ? rowTo<ProductivityAssignment>(rows[0]) : null;
+  }
+  listAssignments(opts: { status?: string; limit?: number } = {}): ProductivityAssignment[] {
+    const limit = Math.max(1, Math.min(500, opts.limit ?? 200));
+    if (opts.status) {
+      return this.sql
+        .all<Row>("SELECT * FROM productivity_assignments WHERE status = ? ORDER BY created_at DESC LIMIT ?", opts.status, limit)
+        .map((r) => rowTo<ProductivityAssignment>(r));
+    }
+    return this.sql.all<Row>("SELECT * FROM productivity_assignments ORDER BY created_at DESC LIMIT ?", limit).map((r) => rowTo<ProductivityAssignment>(r));
+  }
+  updateAssignment(id: string, patch: Partial<ProductivityAssignment>): void {
+    this.update("productivity_assignments", id, patch);
+  }
+  assignmentByTask(taskId: string): ProductivityAssignment | null {
+    const rows = this.sql.all<Row>("SELECT * FROM productivity_assignments WHERE task_id = ? ORDER BY created_at DESC LIMIT 1", taskId);
+    return rows.length ? rowTo<ProductivityAssignment>(rows[0]) : null;
+  }
+  /** Add token/cost usage to an assignment (task-scope actuals). */
+  addAssignmentUsage(taskId: string, tokens: number, cost: number): void {
+    this.sql.run(
+      "UPDATE productivity_assignments SET tokens_used = tokens_used + ?, cost_actual = cost_actual + ?, updated_at = ? WHERE task_id = ?",
+      tokens,
+      cost,
+      new Date().toISOString(),
+      taskId,
+    );
+  }
+  /** Count assignments stuck in ASSIGNED/IN_PROGRESS past the given age (ms). */
+  countStaleAssignments(olderThanMs: number): number {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const rows = this.sql.all<Row>(
+      "SELECT COUNT(*) AS c FROM productivity_assignments WHERE status IN ('ASSIGNED','IN_PROGRESS') AND (started_at IS NULL OR started_at < ?)",
+      cutoff,
+    );
+    return Number(rows[0]?.c ?? 0);
+  }
+  /** Mark stale assignments STALLED (Doctor auto-fix). Returns ids touched. */
+  reapStaleAssignments(olderThanMs: number): string[] {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const rows = this.sql.all<Row>(
+      "SELECT id FROM productivity_assignments WHERE status IN ('ASSIGNED','IN_PROGRESS') AND (started_at IS NULL OR started_at < ?)",
+      cutoff,
+    );
+    const ids = rows.map((r) => String(r.id));
+    for (const id of ids) {
+      this.sql.run(
+        "UPDATE productivity_assignments SET status = 'STALLED', note = COALESCE(note, '') || 'Auto-marked STALLED by System Doctor (no progress within window).', updated_at = ? WHERE id = ?",
+        new Date().toISOString(),
+        id,
+      );
+    }
+    return ids;
+  }
+
+  // Role skills -----------------------------------------------------------
+  upsertRoleSkill(roleId: string, skill: string, proficiency: number, source = "manager"): void {
+    const rows = this.sql.all<Row>("SELECT id FROM role_skills WHERE role_id = ? AND skill = ?", roleId, skill);
+    const now = new Date().toISOString();
+    if (rows.length) {
+      this.sql.run("UPDATE role_skills SET proficiency = ?, updated_at = ? WHERE id = ?", proficiency, now, String(rows[0]!.id));
+    } else {
+      this.insert("role_skills", { id: newId("sk"), role_id: roleId, skill, proficiency, source, updated_at: now });
+    }
+  }
+  listRoleSkills(roleId?: string): RoleSkill[] {
+    if (roleId) {
+      return this.sql.all<Row>("SELECT * FROM role_skills WHERE role_id = ? ORDER BY proficiency DESC", roleId).map((r) => rowTo<RoleSkill>(r));
+    }
+    return this.sql.all<Row>("SELECT * FROM role_skills ORDER BY role_id, proficiency DESC").map((r) => rowTo<RoleSkill>(r));
+  }
+  removeRoleSkill(roleId: string, skill: string): void {
+    this.sql.run("DELETE FROM role_skills WHERE role_id = ? AND skill = ?", roleId, skill);
+  }
+
+  // Task skills -----------------------------------------------------------
+  setTaskSkills(taskId: string, skills: Array<{ skill: string; weight: number }>): void {
+    this.sql.run("DELETE FROM task_skills WHERE task_id = ?", taskId);
+    const now = new Date().toISOString();
+    for (const s of skills) {
+      this.insert("task_skills", { id: newId("tsk"), task_id: taskId, skill: s.skill, weight: s.weight, updated_at: now });
+    }
+  }
+  listTaskSkills(taskId: string): TaskSkill[] {
+    return this.sql.all<Row>("SELECT * FROM task_skills WHERE task_id = ? ORDER BY weight DESC", taskId).map((r) => rowTo<TaskSkill>(r));
+  }
+
+  // Token budgets ---------------------------------------------------------
+  getTokenBudget(scope: string, scopeId?: string): TokenBudget | null {
+    const rows = this.sql.all<Row>("SELECT * FROM token_budgets WHERE scope = ? AND scope_id IS ?", scope, scopeId ?? null);
+    return rows.length ? rowTo<TokenBudget>(rows[0]) : null;
+  }
+  listTokenBudgets(): TokenBudget[] {
+    return this.sql.all<Row>("SELECT * FROM token_budgets ORDER BY scope, scope_id").map((r) => rowTo<TokenBudget>(r));
+  }
+  upsertTokenBudget(b: { scope: string; scopeId?: string; dailyBudget?: number; monthlyBudget?: number; modelTier?: string }): void {
+    const existing = this.getTokenBudget(b.scope, b.scopeId);
+    const now = new Date().toISOString();
+    if (existing) {
+      this.sql.run(
+        "UPDATE token_budgets SET daily_budget = ?, monthly_budget = ?, model_tier = COALESCE(?, model_tier), updated_at = ? WHERE id = ?",
+        b.dailyBudget ?? existing.daily_budget ?? null,
+        b.monthlyBudget ?? existing.monthly_budget ?? null,
+        b.modelTier ?? null,
+        now,
+        existing.id,
+      );
+    } else {
+      this.insert("token_budgets", {
+        id: newId("tb"),
+        scope: b.scope,
+        scope_id: b.scopeId ?? null,
+        daily_budget: b.dailyBudget ?? null,
+        monthly_budget: b.monthlyBudget ?? null,
+        tokens_used_today: 0,
+        tokens_used_month: 0,
+        cost_used_today: 0,
+        cost_used_month: 0,
+        model_tier: b.modelTier ?? null,
+        updated_at: now,
+      });
+    }
+  }
+  /** Add token/cost usage to a scope budget (and matching task assignment). */
+  addTokenUse(scope: string, scopeId: string | undefined, tokens: number, cost: number): void {
+    let budget = this.getTokenBudget(scope, scopeId);
+    if (!budget) {
+      this.upsertTokenBudget({ scope, scopeId });
+      budget = this.getTokenBudget(scope, scopeId);
+    }
+    if (!budget) return;
+    this.sql.run(
+      "UPDATE token_budgets SET tokens_used_today = tokens_used_today + ?, tokens_used_month = tokens_used_month + ?, cost_used_today = cost_used_today + ?, cost_used_month = cost_used_month + ?, updated_at = ? WHERE id = ?",
+      tokens,
+      tokens,
+      cost,
+      cost,
+      new Date().toISOString(),
+      budget.id,
+    );
+    if (scope === "task" && scopeId) this.addAssignmentUsage(scopeId, tokens, cost);
+  }
+  /** Recalibrate the global budget from env defaults (idempotent, safe). */
+  recalibrateGlobalBudget(envDaily: number, envMonthly: number): void {
+    const g = this.getTokenBudget("global");
+    if (!g) {
+      this.upsertTokenBudget({ scope: "global", dailyBudget: envDaily, monthlyBudget: envMonthly });
+      return;
+    }
+    this.sql.run("UPDATE token_budgets SET daily_budget = ?, monthly_budget = ?, updated_at = ? WHERE id = ?", envDaily, envMonthly, new Date().toISOString(), g.id);
+  }
+
+  // Optimization events ---------------------------------------------------
+  insertOptimizationEvent(e: Omit<OptimizationEvent, "id" | "created_at" | "updated_at"> & { scopeId?: string }): void {
+    const { scopeId, ...rest } = e;
+    this.insert("optimization_events", {
+      ...rest,
+      scope_id: rest.scope_id ?? scopeId ?? null,
+      id: newId("opt"),
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+  }
+  listOptimizationEvents(limit = 50): OptimizationEvent[] {
+    return this.sql.all<Row>("SELECT * FROM optimization_events ORDER BY created_at DESC LIMIT ?", limit).map((r) => rowTo<OptimizationEvent>(r));
+  }
+
+  // Contradictions --------------------------------------------------------
+  /** Insert a contradiction; returns true if a new row was created (dedupes identical OPEN findings). */
+  insertContradiction(c: Omit<Contradiction, "id" | "created_at" | "updated_at">): boolean {
+    // Dedupe: skip if an identical OPEN contradiction already exists.
+    const rows = this.sql.all<Row>(
+      "SELECT id FROM contradictions WHERE kind = ? AND subject_a IS ? AND subject_b IS ? AND status = 'OPEN'",
+      c.kind,
+      c.subject_a ?? null,
+      c.subject_b ?? null,
+    );
+    if (rows.length) return false;
+    this.insert("contradictions", {
+      ...c,
+      id: newId("con"),
+      status: c.status ?? "OPEN",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    return true;
+  }
+  listContradictions(opts: { status?: string; limit?: number } = {}): Contradiction[] {
+    const limit = Math.max(1, Math.min(500, opts.limit ?? 200));
+    if (opts.status) {
+      return this.sql.all<Row>("SELECT * FROM contradictions WHERE status = ? ORDER BY created_at DESC LIMIT ?", opts.status, limit).map((r) => rowTo<Contradiction>(r));
+    }
+    return this.sql.all<Row>("SELECT * FROM contradictions ORDER BY created_at DESC LIMIT ?", limit).map((r) => rowTo<Contradiction>(r));
+  }
+  getContradiction(id: string): Contradiction | null {
+    const rows = this.sql.all<Row>("SELECT * FROM contradictions WHERE id = ?", id);
+    return rows.length ? rowTo<Contradiction>(rows[0]) : null;
+  }
+  countOpenContradictions(): number {
+    const rows = this.sql.all<Row>("SELECT COUNT(*) AS c FROM contradictions WHERE status = 'OPEN'");
+    return Number(rows[0]?.c ?? 0);
+  }
+  resolveContradiction(id: string, status: ContradictionStatus, resolution: string, by: string): void {
+    this.sql.run(
+      "UPDATE contradictions SET status = ?, resolution = ?, resolved_by = ?, resolved_at = ?, updated_at = ? WHERE id = ?",
+      status,
+      resolution,
+      by,
+      new Date().toISOString(),
+      new Date().toISOString(),
+      id,
+    );
+  }
+
+  // Productivity metrics --------------------------------------------------
+  getProductivityMetric(day: string): ProductivityMetric | null {
+    const rows = this.sql.all<Row>("SELECT * FROM productivity_metrics WHERE day = ?", day);
+    return rows.length ? rowTo<ProductivityMetric>(rows[0]) : null;
+  }
+  upsertProductivityMetric(day: string, m: { tasks_done: number; tokens_used: number; cost: number }): void {
+    const existing = this.getProductivityMetric(day);
+    const now = new Date().toISOString();
+    const tasksPerDollar = m.cost > 0 ? Math.round((m.tasks_done / m.cost) * 100) / 100 : 0;
+    const avgTokens = m.tasks_done > 0 ? Math.round(m.tokens_used / m.tasks_done) : 0;
+    if (existing) {
+      this.sql.run(
+        "UPDATE productivity_metrics SET tasks_done = ?, tokens_used = ?, cost = ?, tasks_per_dollar = ?, avg_tokens_per_task = ?, updated_at = ? WHERE day = ?",
+        m.tasks_done,
+        m.tokens_used,
+        m.cost,
+        tasksPerDollar,
+        avgTokens,
+        now,
+        day,
+      );
+    } else {
+      this.insert("productivity_metrics", {
+        id: newId("pm"),
+        day,
+        tasks_done: m.tasks_done,
+        tokens_used: m.tokens_used,
+        cost: m.cost,
+        tasks_per_dollar: tasksPerDollar,
+        avg_tokens_per_task: avgTokens,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+  }
+  listProductivityMetrics(limit = 14): ProductivityMetric[] {
+    return this.sql.all<Row>("SELECT * FROM productivity_metrics ORDER BY day DESC LIMIT ?", limit).map((r) => rowTo<ProductivityMetric>(r));
   }
 
   // -- System Doctor (migration v17) --------------------------------------

@@ -5,14 +5,17 @@ import {
   getToken,
   setToken,
   type Approval,
+  type Assignment,
   type BudgetOverrides,
+  type Contradiction,
   type DoctorLog,
   type DoctorReport,
   type Overview,
+  type ProductivityReport,
   type Task,
 } from "./api";
 
-type Tab = "overview" | "doctor" | "chat" | "tasks" | "approvals" | "settings";
+type Tab = "overview" | "doctor" | "chat" | "tasks" | "approvals" | "settings" | "productivity";
 
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "overview", label: "Overview" },
@@ -20,6 +23,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "chat", label: "Chat" },
   { id: "tasks", label: "Tasks" },
   { id: "approvals", label: "Approvals" },
+  { id: "productivity", label: "Productivity" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -56,6 +60,7 @@ export function App() {
       {tab === "chat" && <ChatView />}
       {tab === "tasks" && <TasksView />}
       {tab === "approvals" && <ApprovalsView />}
+      {tab === "productivity" && <ProductivityView />}
       {tab === "settings" && <SettingsView />}
     </div>
   );
@@ -549,6 +554,293 @@ function ApprovalsView() {
           </table>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---- productivity ------------------------------------------------------------
+
+function ProductivityView() {
+  const [report, setReport] = useState<ProductivityReport | null>(null);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [contradictions, setContradictions] = useState<Contradiction[]>([]);
+  const [openCount, setOpenCount] = useState(0);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [resolutionInputs, setResolutionInputs] = useState<Record<string, string>>({});
+
+  const load = useCallback(async () => {
+    setError("");
+    try {
+      const [r, a, c, t] = await Promise.all([
+        api.productivityReport(),
+        api.productivityAssignments(),
+        api.productivityContradictions(),
+        api.tasks(),
+      ]);
+      setReport(r);
+      setAssignments(a.assignments);
+      setContradictions(c.contradictions);
+      setOpenCount(c.open);
+      setTasks(t.tasks.filter((x) => x.status === "OPEN").slice(0, 100));
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2));
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const runOptimize = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await api.productivityOptimize();
+      setError(`Optimization complete: ${r.summary.applied} applied · ${r.summary.recommended} recommended`);
+      await load();
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const detect = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const r = await api.productivityDetect();
+      setError(`Contradiction scan complete: ${r.created} new finding(s)`);
+      await load();
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resolve = async (id: string, status: string) => {
+    const resolution = (resolutionInputs[id] ?? "").trim();
+    if (!resolution) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.productivityResolve(id, resolution, status);
+      setResolutionInputs((r) => ({ ...r, [id]: "" }));
+      await load();
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const assign = async (taskId: string, roleId: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      await api.productivityAssign(taskId, roleId);
+      await load();
+    } catch (e2) {
+      setError(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      {error && <div className="error-box">{error}</div>}
+
+      {report && (
+        <>
+          <div className="card">
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <h2>Productivity Manager</h2>
+              <div className="row">
+                <button className="action" onClick={runOptimize} disabled={busy}>
+                  {busy ? "Working…" : "Run optimization"}
+                </button>
+                <button className="ghost" onClick={detect} disabled={busy}>
+                  Scan for contradictions
+                </button>
+              </div>
+            </div>
+            <div className="grid">
+              <div className="metric">
+                <div className="value">{report.assignments.open}</div>
+                <div className="key">open assignments</div>
+              </div>
+              <div className="metric">
+                <div className="value">{openCount}</div>
+                <div className="key">open contradictions</div>
+              </div>
+              <div className="metric">
+                <div className="value">{report.optimizationEvents.applied}</div>
+                <div className="key">optimizations applied</div>
+              </div>
+              <div className="metric">
+                <div className="value">{report.today.tokens.toLocaleString()}</div>
+                <div className="key">tokens today</div>
+              </div>
+              <div className="metric">
+                <div className="value">${report.today.cost.toFixed(2)}</div>
+                <div className="key">est. cost today</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="card">
+            <h2>Token budgets</h2>
+            {report.budget.length === 0 ? (
+              <p className="muted">No budgets tracked yet — run optimization to seed the global budget.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr><th>Scope</th><th>Monthly budget</th><th>Used (month)</th><th>Used (today)</th><th>Usage</th><th>Tier</th></tr>
+                </thead>
+                <tbody>
+                  {report.budget.map((b) => (
+                    <tr key={`${b.scope}:${b.scopeId ?? ""}`}>
+                      <td className="mono">{b.scope}{b.scopeId ? `:${b.scopeId}` : ""}</td>
+                      <td className="mono">{b.monthlyBudget?.toLocaleString() ?? "—"}</td>
+                      <td className="mono">{b.tokensUsedMonth.toLocaleString()}</td>
+                      <td className="mono">{b.tokensUsedToday.toLocaleString()}</td>
+                      <td>
+                        <span className={`badge ${b.status === "OVER" ? "fail" : b.status === "WARN" ? "warn" : "ok"}`}>
+                          {b.usagePctMonth}%
+                        </span>
+                      </td>
+                      <td className="mono">{b.modelTier ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>Cost efficiency by role</h2>
+            {report.efficiency.length === 0 ? (
+              <p className="muted">No completed assignments yet — efficiency appears here as work finishes.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr><th>Role</th><th>Tasks done</th><th>Total cost</th><th>Cost / task</th></tr>
+                </thead>
+                <tbody>
+                  {report.efficiency.map((e) => (
+                    <tr key={e.roleId}>
+                      <td>{e.roleName}</td>
+                      <td>{e.done}</td>
+                      <td className="mono">${e.cost.toFixed(2)}</td>
+                      <td className="mono">${e.costPerTask.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>Contradictions & misconceptions</h2>
+            {contradictions.length === 0 ? (
+              <p className="muted">No contradiction records. Run "Scan for contradictions" to check the store.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr><th>Status</th><th>Kind</th><th>Conflict</th><th>Resolution</th></tr>
+                </thead>
+                <tbody>
+                  {contradictions.slice(0, 50).map((c) => (
+                    <tr key={c.id}>
+                      <td><span className={`badge ${c.status === "OPEN" ? "warn" : c.status === "RESOLVED" ? "ok" : "muted"}`}>{c.status}</span></td>
+                      <td className="mono">{c.kind}</td>
+                      <td>
+                        <div><b>{c.claim_a}</b></div>
+                        <div className="muted">{c.claim_b}</div>
+                      </td>
+                      <td>
+                        {c.status === "OPEN" ? (
+                          <div className="row">
+                            <input
+                              placeholder="Resolution…"
+                              value={resolutionInputs[c.id] ?? ""}
+                              onChange={(e2) => setResolutionInputs((r) => ({ ...r, [c.id]: e2.target.value }))}
+                            />
+                            <button className="ghost" disabled={busy || !(resolutionInputs[c.id] ?? "").trim()} onClick={() => resolve(c.id, "RESOLVED")}>
+                              Resolve
+                            </button>
+                            <button className="ghost" disabled={busy || !(resolutionInputs[c.id] ?? "").trim()} onClick={() => resolve(c.id, "DISMISSED")}>
+                              Dismiss
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="muted">{c.resolution ?? ""}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="card">
+            <h2>Assignments</h2>
+            {assignments.length === 0 ? (
+              <p className="muted">No assignments yet — assign an open task below.</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr><th>Task</th><th>Role</th><th>Status</th><th>Tokens</th><th>Cost</th></tr>
+                </thead>
+                <tbody>
+                  {assignments.slice(0, 40).map((a) => (
+                    <tr key={a.id}>
+                      <td className="mono">{a.task_id}</td>
+                      <td className="mono">{a.role_id ?? a.assignee ?? "—"}</td>
+                      <td><span className="badge">{a.status}</span></td>
+                      <td className="mono">{a.tokens_used}/{a.token_budget ?? "—"}</td>
+                      <td className="mono">${a.cost_actual.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <h3>Assign an open task</h3>
+            {tasks.length === 0 ? (
+              <p className="muted">No open tasks to assign.</p>
+            ) : (
+              <table>
+                <tbody>
+                  {tasks.slice(0, 10).map((t) => (
+                    <tr key={t.id}>
+                      <td>{t.title}</td>
+                      <td className="mono muted">{t.priority}</td>
+                      <td>
+                        <div className="row">
+                          <button className="ghost" disabled={busy} onClick={() => assign(t.id, "person_role_dsp_engineer")}>
+                            DSP
+                          </button>
+                          <button className="ghost" disabled={busy} onClick={() => assign(t.id, "person_role_qa_engineer")}>
+                            QA
+                          </button>
+                          <button className="ghost" disabled={busy} onClick={() => assign(t.id, "person_role_research_engineer")}>
+                            Research
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

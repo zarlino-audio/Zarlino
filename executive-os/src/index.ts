@@ -20,6 +20,15 @@ import { buildToolRegistry } from "./agent/tools";
 import type { ToolRegistry } from "./core/tools/registry";
 import { runDoctor } from "./core/doctor";
 import { createTask } from "./core/tasks/model";
+import {
+  assignTask,
+  budgetStatus,
+  dailyRollup,
+  detectContradictions,
+  optimize,
+  productivityReport,
+  recommendAssignment,
+} from "./core/productivity/manager";
 import { newId, nowIso } from "./ids";
 import type { AgentRun, DoctorLog } from "./types";
 import type { ModelCallRecord as _M } from "./core/model/types";
@@ -411,6 +420,8 @@ function buildOverview(store: ExecutiveStore, env: Env): Record<string, unknown>
       remindersOverdue: store.listReminders({ overdueOnly: true }).length,
       notes: store.listNotes(1000).length,
       events: store.listCalendarEvents(undefined, undefined, 1000).length,
+      assignmentsOpen: store.listAssignments({ limit: 200 }).filter((a) => a.status === "ASSIGNED" || a.status === "IN_PROGRESS").length,
+      contradictionsOpen: store.countOpenContradictions(),
     },
     finance: store.latestSnapshot(),
     products: store.listProducts().map((p) => ({ id: p.id, name: p.name, status: p.status, version: p.version })),
@@ -418,6 +429,7 @@ function buildOverview(store: ExecutiveStore, env: Env): Record<string, unknown>
     links: {
       health: "/api/health",
       doctor: "/api/doctor/run",
+      productivity: "/api/productivity/report",
       overview: "/api/executive/overview",
     },
   };
@@ -474,6 +486,14 @@ export class ExecutiveAgent {
       await runDoctor(this.doctorContext(), { autoFix, trigger });
     } catch {
       /* doctor must never break wake */
+    }
+    // Productivity maintenance (safe, local, no model calls): daily rollup +
+    // safe optimizations (stale assignments, budget recalibration/realloc).
+    try {
+      dailyRollup(this.store);
+      optimize(this.store, this.env as unknown as Record<string, string | undefined>);
+    } catch {
+      /* productivity maintenance must never break wake */
     }
     // Start auto-runnable tasks (bounded, "automate fixing").
     const maxJobs = Math.max(0, Math.min(3, Number(this.env.MAX_AUTO_JOBS) || 2));
@@ -726,6 +746,93 @@ export class ExecutiveAgent {
         aiPerRunBudget: numOrUndef(body.aiPerRunBudget),
       });
       return json({ ok: true, budgetOverrides: this.store.getBudgetOverrides() });
+    }
+
+    // Productivity Manager (budgets, assignments, optimization, contradictions)
+    if (path === "/api/productivity/report" && method === "GET") {
+      return json(productivityReport(this.store));
+    }
+    if (path === "/api/productivity/budget" && method === "GET") {
+      return json({ budgets: budgetStatus(this.store) });
+    }
+    if (path === "/api/productivity/assignments" && method === "GET") {
+      return json({ assignments: this.store.listAssignments({ limit: 200 }) });
+    }
+    if (path === "/api/productivity/assign" && method === "POST") {
+      const body = (await readBody<{ taskId?: string; roleId?: string; assignee?: string; modelTier?: string; tokenBudget?: number; note?: string }>(request).catch(() => ({}))) as { taskId?: string; roleId?: string; assignee?: string; modelTier?: string; tokenBudget?: number; note?: string };
+      if (!body.taskId) return json({ error: "taskId required" }, 400);
+      try {
+        const id = assignTask(this.store, body.taskId, {
+          roleId: body.roleId,
+          assignee: body.assignee,
+          modelTier: (body.modelTier as never) ?? undefined,
+          tokenBudget: body.tokenBudget,
+          note: body.note,
+        });
+        this.store.insertAudit({
+          id: newId("aud"),
+          actor: "founder",
+          action: "productivity.assign",
+          entity_type: "productivity_assignments",
+          entity_id: id,
+          detail_json: JSON.stringify({ taskId: body.taskId, roleId: body.roleId }),
+          source: "api",
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        });
+        return json({ ok: true, assignmentId: id });
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+      }
+    }
+    if (path === "/api/productivity/optimize" && method === "POST") {
+      const result = optimize(this.store, this.env as unknown as Record<string, string | undefined>);
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "productivity.optimize",
+        entity_type: "optimization_events",
+        entity_id: "productivity",
+        detail_json: JSON.stringify(result.summary),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, ...result });
+    }
+    if (path === "/api/productivity/contradictions" && method === "GET") {
+      const status = url.searchParams.get("status") ?? undefined;
+      return json({ contradictions: this.store.listContradictions({ status: status as never, limit: 200 }), open: this.store.countOpenContradictions() });
+    }
+    if (path === "/api/productivity/contradictions/detect" && method === "POST") {
+      const result = detectContradictions(this.store);
+      return json({ ok: true, ...result });
+    }
+    const contradictionMatch = /^\/api\/productivity\/contradictions\/([^/]+)\/resolve$/.exec(path);
+    if (contradictionMatch && method === "POST") {
+      const id = decodeURIComponent(contradictionMatch[1]!);
+      const body = (await readBody<{ status?: string; resolution?: string }>(request).catch(() => ({}))) as { status?: string; resolution?: string };
+      if (!body.resolution) return json({ error: "resolution required" }, 400);
+      const existing = this.store.getContradiction(id);
+      if (!existing) return json({ error: "Contradiction not found" }, 404);
+      const status = body.status === "DISMISSED" ? "DISMISSED" : "RESOLVED";
+      this.store.resolveContradiction(id, status, body.resolution, "founder");
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: `productivity.contradiction.${status.toLowerCase()}`,
+        entity_type: "contradictions",
+        entity_id: id,
+        detail_json: JSON.stringify({ resolution: body.resolution }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, id, status });
+    }
+    if (path === "/api/productivity/metrics" && method === "GET") {
+      dailyRollup(this.store);
+      return json({ metrics: this.store.listProductivityMetrics(14) });
     }
 
     // Local machine daemon bridge

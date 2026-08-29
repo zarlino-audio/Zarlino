@@ -19,6 +19,15 @@ import { doctorTools } from "../core/doctor";
 import { assessFinancials } from "../core/finance/calc";
 import { createTask } from "../core/tasks/model";
 import { createApprovalRequest } from "../core/approvals/queue";
+import {
+  assignTask,
+  budgetStatus,
+  detectContradictions,
+  inferTaskSkills,
+  optimize,
+  productivityReport,
+  recommendAssignment,
+} from "../core/productivity/manager";
 import { newId, nowIso } from "../ids";
 import type { Decision } from "../types";
 
@@ -1211,6 +1220,201 @@ function safeJsonArray(json: string | undefined | null): unknown[] {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Productivity Manager tools
+// ---------------------------------------------------------------------------
+
+const productivityTaskIdSchema = z.object({ taskId: z.string().min(1) });
+const productivityAssignSchema = z.object({
+  taskId: z.string().min(1),
+  roleId: z.string().optional(),
+  assignee: z.string().max(200).optional(),
+  modelTier: z.enum(["cheap", "medium", "strong"]).optional(),
+  tokenBudget: z.number().int().positive().optional(),
+  note: z.string().max(500).optional(),
+});
+const productivityResolveSchema = z.object({
+  contradictionId: z.string().min(1),
+  status: z.enum(["RESOLVED", "DISMISSED"]).optional(),
+  resolution: z.string().min(1).max(2000),
+});
+const productivityRecordTokensSchema = z.object({
+  scope: z.enum(["global", "role", "task"]),
+  scopeId: z.string().optional(),
+  tokens: z.number().int().nonnegative(),
+  cost: z.number().nonnegative().optional(),
+});
+
+/** Tools for the Productivity Manager (budgets, assignments, optimization, contradictions). */
+function productivityTools(): Tool[] {
+  return [
+    {
+      name: "productivity.report",
+      description:
+        "Get the Productivity Manager report: token budgets per scope with usage %, assignments by status, open contradictions, optimization events, daily metrics, and per-role cost efficiency (cost per completed task).",
+      inputSchema: z.object({}),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, _input: Record<string, never>) => {
+        return productivityReport(ctx.store!);
+      },
+    },
+    {
+      name: "productivity.budget",
+      description: "Get the current token-budget posture across all scopes (global/role/task), including usage percentages and OVER/WARN flags.",
+      inputSchema: z.object({}),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, _input: Record<string, never>) => {
+        return { budgets: budgetStatus(ctx.store!) };
+      },
+    },
+    {
+      name: "productivity.recommend_assignment",
+      description:
+        "Recommend the best role for a task based on skill coverage and historical cost efficiency. Use before assigning so work goes to the cheapest competent role.",
+      inputSchema: productivityTaskIdSchema,
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: z.infer<typeof productivityTaskIdSchema>) => {
+        const task = ctx.store!.getTask(input.taskId);
+        if (!task) return { error: `Task not found: ${input.taskId}` };
+        return recommendAssignment(ctx.store!, task);
+      },
+    },
+    {
+      name: "productivity.assign",
+      description:
+        "Assign a task to a role/assignee for tracked execution. Creates a productivity assignment with a token budget and cost estimate; also sets the task's assignee. Pass roleId to override the automatic best-role recommendation.",
+      inputSchema: productivityAssignSchema,
+      requiredPermission: "modify",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof productivityAssignSchema>) => {
+        const id = assignTask(ctx.store!, input.taskId, {
+          roleId: input.roleId,
+          assignee: input.assignee,
+          modelTier: input.modelTier,
+          tokenBudget: input.tokenBudget,
+          note: input.note,
+        });
+        ctx.audit?.("executive", "productivity.assign", "productivity_assignments", id, {
+          taskId: input.taskId,
+          roleId: input.roleId,
+        });
+        return { ok: true, assignmentId: id };
+      },
+    },
+    {
+      name: "productivity.optimize",
+      description:
+        "Run Productivity optimizations: auto-fix stale assignments, recalibrate global budget to env defaults, reallocate budget from under-utilized to over-utilized scopes, and produce recommendations (batching, skill gaps, model-tier downgrades). Safe fixes are applied and recorded.",
+      inputSchema: z.object({}),
+      requiredPermission: "modify",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, _input: Record<string, never>) => {
+        const result = optimize(ctx.store!, ctx.env ?? {});
+        ctx.audit?.("executive", "productivity.optimize", "optimization_events", "productivity", {
+          applied: result.summary.applied,
+          recommended: result.summary.recommended,
+        });
+        return result;
+      },
+    },
+    {
+      name: "productivity.detect_contradictions",
+      description:
+        "Scan the store for contradictions and misconceptions (stale approved decisions, done-but-running tasks, duplicate open tasks, shipped products with open gates, auto-run blocked tasks, misassignments, budget-override mismatches). Opens records for resolution; identical findings are not duplicated.",
+      inputSchema: z.object({}),
+      requiredPermission: "modify",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, _input: Record<string, never>) => {
+        return detectContradictions(ctx.store!);
+      },
+    },
+    {
+      name: "productivity.list_contradictions",
+      description: "List contradiction/misconception records, optionally filtered by status (OPEN/RESOLVED/DISMISSED).",
+      inputSchema: z.object({ status: z.enum(["OPEN", "RESOLVED", "DISMISSED"]).optional() }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { status?: string }) => {
+        return { contradictions: ctx.store!.listContradictions({ status: input.status, limit: 200 }) };
+      },
+    },
+    {
+      name: "productivity.resolve_contradiction",
+      description:
+        "Resolve a contradiction/misconception: record the resolution and mark it RESOLVED (or DISMISSED). The resolution text is audited so the correction is traceable.",
+      inputSchema: productivityResolveSchema,
+      requiredPermission: "modify",
+      riskLevel: "LOW",
+      reversible: false,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof productivityResolveSchema>) => {
+        const existing = ctx.store!.getContradiction(input.contradictionId);
+        if (!existing) return { error: `Contradiction not found: ${input.contradictionId}` };
+        const status = input.status ?? "RESOLVED";
+        ctx.store!.resolveContradiction(input.contradictionId, status, input.resolution, "executive");
+        ctx.audit?.("executive", `productivity.contradiction.${status.toLowerCase()}`, "contradictions", input.contradictionId, {
+          resolution: input.resolution,
+        });
+        return { ok: true, id: input.contradictionId, status };
+      },
+    },
+    {
+      name: "productivity.record_token_usage",
+      description:
+        "Record token/cost usage against a scope budget (global/role/task). Keeps budget tracking accurate so optimization can reallocate. Task scope also updates the linked assignment's actuals.",
+      inputSchema: productivityRecordTokensSchema,
+      requiredPermission: "modify",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: z.infer<typeof productivityRecordTokensSchema>) => {
+        ctx.store!.addTokenUse(input.scope, input.scopeId, input.tokens, input.cost ?? input.tokens * 0.0000008);
+        return { ok: true };
+      },
+    },
+    {
+      name: "productivity.skills",
+      description: "Inspect the roles & skills inventory and infer required skills for a task. Useful for spotting skill gaps before assigning.",
+      inputSchema: z.object({ taskId: z.string().optional() }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { taskId?: string }) => {
+        const roleSkills = ctx.store!.listRoleSkills();
+        const byRole = new Map<string, Array<{ skill: string; proficiency: number }>>();
+        for (const rs of roleSkills) {
+          if (!byRole.has(rs.role_id)) byRole.set(rs.role_id, []);
+          byRole.get(rs.role_id)!.push({ skill: rs.skill, proficiency: rs.proficiency });
+        }
+        let inferred: Array<{ skill: string; weight: number }> | null = null;
+        if (input.taskId) {
+          const task = ctx.store!.getTask(input.taskId);
+          if (task) inferred = inferTaskSkills(task);
+        }
+        return { roles: [...byRole.entries()].map(([roleId, skills]) => ({ roleId, skills })), inferred };
+      },
+    },
+  ];
+}
+
 export function buildToolRegistry(deps: {
   env: Record<string, string | undefined>;
   sink: { recordExecution(record: unknown): void };
@@ -1227,6 +1431,7 @@ export function buildToolRegistry(deps: {
     ...visionTools(env),
     ...paystackTools({ env }),
     ...doctorTools(),
+    ...productivityTools(),
     ...internalTools(),
   ]) {
     registry.register(tool);

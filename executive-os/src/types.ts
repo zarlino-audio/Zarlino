@@ -548,3 +548,121 @@ export interface DoctorLog {
   created_at: string;
   updated_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// Productivity Manager (migration v18) — token budgets, assignments, roles &
+// skills, optimization events, contradiction resolution, daily metrics.
+// ---------------------------------------------------------------------------
+
+export type AssignmentStatus =
+  | "ASSIGNED"
+  | "IN_PROGRESS"
+  | "STALLED"
+  | "DONE"
+  | "FAILED"
+  | "REASSIGNED"
+  | "CANCELLED";
+
+export interface ProductivityAssignment {
+  id: string;
+  task_id: string;
+  role_id?: string;
+  assignee?: string;
+  status: AssignmentStatus | string;
+  priority?: string;
+  skill_matched: number;
+  model_tier?: string;
+  token_budget?: number;
+  tokens_used: number;
+  cost_estimate: number;
+  cost_actual: number;
+  started_at?: string;
+  completed_at?: string;
+  note?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RoleSkill {
+  id: string;
+  role_id: string;
+  skill: string;
+  proficiency: number;
+  source: string;
+  updated_at: string;
+}
+
+export interface TaskSkill {
+  id: string;
+  task_id: string;
+  skill: string;
+  weight: number;
+  updated_at: string;
+}
+
+export interface TokenBudget {
+  id: string;
+  scope: string;
+  scope_id?: string;
+  daily_budget?: number;
+  monthly_budget?: number;
+  tokens_used_today: number;
+  tokens_used_month: number;
+  cost_used_today: number;
+  cost_used_month: number;
+  model_tier?: string;
+  updated_at: string;
+}
+
+export type OptimizationKind =
+  | "budget_reallocated"
+  | "budget_release"
+  | "model_tier_suggested"
+  | "batch_suggested"
+  | "skill_gap"
+  | "stale_assignment_fixed"
+  | "reassign_suggested"
+  | "budget_recalibrated";
+
+export interface OptimizationEvent {
+  id: string;
+  kind: OptimizationKind | string;
+  scope: string;
+  scope_id?: string;
+  reason: string;
+  impact_json?: string;
+  applied: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ContradictionStatus = "OPEN" | "RESOLVED" | "DISMISSED";
+
+export interface Contradiction {
+  id: string;
+  kind: string;
+  subject_a?: string;
+  subject_b?: string;
+  claim_a?: string;
+  claim_b?: string;
+  status: ContradictionStatus | string;
+  resolution?: string;
+  resolved_by?: string;
+  resolved_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductivityMetric {
+  id: string;
+  day: string;
+  tasks_done: number;
+  tokens_used: number;
+  cost: number;
+  tasks_per_dollar: number;
+  avg_tokens_per_task: number;
+  created_at: string;
+  updated_at: string;
+}
+

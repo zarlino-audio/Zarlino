@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -32,6 +32,166 @@ CREATE TABLE IF NOT EXISTS doctor_logs (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_doctor_logs_run ON doctor_logs(run_at);
+`;
+
+/**
+ * Productivity Manager (migration v18): the Executive's "do more with less"
+ * layer. Tracks token budgets per scope, task→role/skill assignments with
+ * cost efficiency, optimization events (every applied/recommended change),
+ * and contradiction/misconception records with resolutions.
+ *
+ * Tables:
+ *  - productivity_assignments: who is doing which task, with token/cost actuals
+ *  - role_skills: skill inventory per role (proficiency 1-5)
+ *  - task_skills: skills a task needs (weighted) for smart assignment
+ *  - token_budgets: per-scope token/cost budgets + usage (global/role/task)
+ *  - optimization_events: audit of every optimization applied/recommended
+ *  - contradictions: detected contradictions/misconceptions + resolutions
+ *  - productivity_metrics: daily rollups (tasks done, tokens, cost, efficiency)
+ */
+export const PRODUCTIVITY_SQL = `
+CREATE TABLE IF NOT EXISTS productivity_assignments (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  role_id TEXT,
+  assignee TEXT,
+  status TEXT NOT NULL DEFAULT 'ASSIGNED',
+  priority TEXT,
+  skill_matched INTEGER NOT NULL DEFAULT 0,
+  model_tier TEXT,
+  token_budget INTEGER,
+  tokens_used INTEGER NOT NULL DEFAULT 0,
+  cost_estimate REAL NOT NULL DEFAULT 0,
+  cost_actual REAL NOT NULL DEFAULT 0,
+  started_at TEXT,
+  completed_at TEXT,
+  note TEXT,
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pa_task ON productivity_assignments(task_id);
+CREATE INDEX IF NOT EXISTS idx_pa_status ON productivity_assignments(status);
+
+CREATE TABLE IF NOT EXISTS role_skills (
+  id TEXT PRIMARY KEY,
+  role_id TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  proficiency INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'seed',
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rs_role ON role_skills(role_id);
+CREATE INDEX IF NOT EXISTS idx_rs_skill ON role_skills(skill);
+
+CREATE TABLE IF NOT EXISTS task_skills (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  skill TEXT NOT NULL,
+  weight REAL NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ts_task ON task_skills(task_id);
+
+CREATE TABLE IF NOT EXISTS token_budgets (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL DEFAULT 'global',
+  scope_id TEXT,
+  daily_budget INTEGER,
+  monthly_budget INTEGER,
+  tokens_used_today INTEGER NOT NULL DEFAULT 0,
+  tokens_used_month INTEGER NOT NULL DEFAULT 0,
+  cost_used_today REAL NOT NULL DEFAULT 0,
+  cost_used_month REAL NOT NULL DEFAULT 0,
+  model_tier TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tb_scope ON token_budgets(scope, scope_id);
+
+CREATE TABLE IF NOT EXISTS optimization_events (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  scope_id TEXT,
+  reason TEXT,
+  impact_json TEXT,
+  applied INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oe_kind ON optimization_events(kind);
+
+CREATE TABLE IF NOT EXISTS contradictions (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  subject_a TEXT,
+  subject_b TEXT,
+  claim_a TEXT,
+  claim_b TEXT,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  resolution TEXT,
+  resolved_by TEXT,
+  resolved_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cont_status ON contradictions(status);
+
+CREATE TABLE IF NOT EXISTS productivity_metrics (
+  id TEXT PRIMARY KEY,
+  day TEXT NOT NULL,
+  tasks_done INTEGER NOT NULL DEFAULT 0,
+  tokens_used INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0,
+  tasks_per_dollar REAL NOT NULL DEFAULT 0,
+  avg_tokens_per_task REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pm_day ON productivity_metrics(day);
+
+-- Seed the role skill inventory from the seeded technical roles (v4).
+-- INSERT OR IGNORE keeps Founder edits intact across redeploys.
+INSERT OR IGNORE INTO role_skills (id, role_id, skill, proficiency, source, updated_at) VALUES
+ ('sk_pm_market', 'person_role_product_manager', 'market_analysis', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_pm_spec', 'person_role_product_manager', 'spec_authoring', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_pm_research', 'person_role_product_manager', 'competitive_research', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_arch_dsp', 'person_role_architect', 'dsp_design', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_arch_chain', 'person_role_architect', 'signal_chain', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_arch_alg', 'person_role_architect', 'algorithm_selection', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_dsp_cpp', 'person_role_dsp_engineer', 'cpp', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_dsp_juce', 'person_role_dsp_engineer', 'juce', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_dsp_impl', 'person_role_dsp_engineer', 'dsp_implementation', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_ui_cpp', 'person_role_ui_engineer', 'cpp', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_ui_laf', 'person_role_ui_engineer', 'look_and_feel', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_ui_gfx', 'person_role_ui_engineer', 'graphics', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_param_apvts', 'person_role_parameter_engineer', 'apvts', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_param_presets', 'person_role_parameter_engineer', 'presets', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_param_state', 'person_role_parameter_engineer', 'state_management', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_review_code', 'person_role_code_reviewer', 'code_review', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_review_thread', 'person_role_code_reviewer', 'thread_safety', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_review_mem', 'person_role_code_reviewer', 'memory_safety', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_qa_test', 'person_role_qa_engineer', 'testing', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_qa_fuzz', 'person_role_qa_engineer', 'fuzzing', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_qa_golden', 'person_role_qa_engineer', 'golden_references', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_perf_profile', 'person_role_performance_engineer', 'profiling', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_perf_cpu', 'person_role_performance_engineer', 'cpu_optimization', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_perf_latency', 'person_role_performance_engineer', 'latency', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_sec_lic', 'person_role_security_licensing_engineer', 'licensing', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_sec_sign', 'person_role_security_licensing_engineer', 'signing', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_sec_sec', 'person_role_security_licensing_engineer', 'security', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_doc_doc', 'person_role_documentation_writer', 'documentation', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_doc_manual', 'person_role_documentation_writer', 'manuals', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_rel_cmake', 'person_role_release_engineer', 'cmake', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_rel_ci', 'person_role_release_engineer', 'ci', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_rel_pack', 'person_role_release_engineer', 'packaging', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_res_web', 'person_role_research_engineer', 'web_research', 5, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('sk_res_comp', 'person_role_research_engineer', 'competitive_analysis', 4, 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- Baseline global token budget: derived from the AI budgets in wrangler vars
+-- (seeded conservatively; the Productivity Manager recalibrates it daily).
+INSERT OR IGNORE INTO token_budgets (id, scope, scope_id, daily_budget, monthly_budget, updated_at)
+VALUES ('tb_global', 'global', NULL, 30000000, 900000000, strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;
 
 /**

@@ -92,6 +92,33 @@ export const api = {
       body: JSON.stringify(overrides),
     }),
 
+  productivityReport: () => request<ProductivityReport>("/api/productivity/report"),
+  productivityBudget: () => request<{ budgets: BudgetStatusEntry[] }>("/api/productivity/budget"),
+  productivityAssignments: () => request<{ assignments: Assignment[] }>("/api/productivity/assignments"),
+  productivityAssign: (taskId: string, roleId?: string) =>
+    request<{ ok: boolean; assignmentId: string }>("/api/productivity/assign", {
+      method: "POST",
+      body: JSON.stringify({ taskId, roleId }),
+    }),
+  productivityOptimize: () =>
+    request<{ ok: boolean; events: OptimizationEvent[]; summary: { applied: number; recommended: number } }>("/api/productivity/optimize", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  productivityContradictions: () =>
+    request<{ contradictions: Contradiction[]; open: number }>("/api/productivity/contradictions"),
+  productivityDetect: () =>
+    request<{ ok: boolean; found: ContradictionDetection[]; created: number }>("/api/productivity/contradictions/detect", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  productivityResolve: (id: string, resolution: string, status: string) =>
+    request<{ ok: boolean; id: string; status: string }>(`/api/productivity/contradictions/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      body: JSON.stringify({ resolution, status }),
+    }),
+  productivityMetrics: () => request<{ metrics: ProductivityMetric[] }>("/api/productivity/metrics"),
+
   exportSnapshot: () => request<{ ok: boolean; snapshot: unknown }>("/api/export"),
 };
 
@@ -179,4 +206,92 @@ export interface BudgetOverrides {
 export interface Settings {
   budgetOverrides: BudgetOverrides;
   budget: BudgetOverrides;
+}
+
+export interface BudgetStatusEntry {
+  scope: string;
+  scopeId?: string;
+  dailyBudget?: number;
+  monthlyBudget?: number;
+  tokensUsedToday: number;
+  tokensUsedMonth: number;
+  costToday: number;
+  costMonth: number;
+  usagePctMonth: number;
+  status: "OK" | "WARN" | "OVER";
+  modelTier?: string;
+}
+
+export interface Assignment {
+  id: string;
+  task_id: string;
+  role_id?: string;
+  assignee?: string;
+  status: string;
+  priority?: string;
+  skill_matched: number;
+  model_tier?: string;
+  token_budget?: number;
+  tokens_used: number;
+  cost_estimate: number;
+  cost_actual: number;
+  created_at: string;
+}
+
+export interface OptimizationEvent {
+  id: string;
+  kind: string;
+  scope: string;
+  scope_id?: string;
+  reason: string;
+  impact_json?: string;
+  applied: number;
+  created_at: string;
+}
+
+export interface Contradiction {
+  id: string;
+  kind: string;
+  subject_a?: string;
+  subject_b?: string;
+  claim_a?: string;
+  claim_b?: string;
+  status: string;
+  resolution?: string;
+  resolved_by?: string;
+  resolved_at?: string;
+  created_at: string;
+}
+
+export interface ContradictionDetection {
+  kind: string;
+  subjectA: string;
+  subjectB: string;
+  claimA: string;
+  claimB: string;
+}
+
+export interface ProductivityMetric {
+  id: string;
+  day: string;
+  tasks_done: number;
+  tokens_used: number;
+  cost: number;
+  tasks_per_dollar: number;
+  avg_tokens_per_task: number;
+}
+
+export interface ProductivityReport {
+  generatedAt: string;
+  budget: BudgetStatusEntry[];
+  assignments: {
+    total: number;
+    byStatus: Record<string, number>;
+    open: number;
+  };
+  contradictions: { open: number; resolved: number };
+  optimizationEvents: { total: number; applied: number; recent: number };
+  metrics: Array<{ day: string; tasksDone: number; tokensUsed: number; cost: number; tasksPerDollar: number; avgTokensPerTask: number }>;
+  efficiency: Array<{ roleId: string; roleName: string; done: number; cost: number; costPerTask: number }>;
+  today: { tokens: number; cost: number };
 }
