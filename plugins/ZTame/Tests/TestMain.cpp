@@ -38,6 +38,10 @@ int main (int, char**)
             {
                 std::cout << "  *** " << r->failures << " FAILURES ***";
                 totalFailures += r->failures;
+                for (const auto& m : r->messages)
+                {
+                    std::cout << "\n      " << m << std::endl;
+                }
             }
             std::cout << std::endl;
         }

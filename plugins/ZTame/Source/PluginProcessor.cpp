@@ -5,13 +5,16 @@
 namespace
 {
     //--------------------------------------------------------------------------
-    // Hann window — non-causal, symmetric
+    // Periodic Hann window (denominator N, not N-1) — required for EXACT COLA
+    // at 50% overlap: w[n] + w[n+N/2] = 1. The symmetric variant (denominator
+    // N-1) only approximates this, which causes ~6 dB amplitude ripple when the
+    // window is applied in both analysis and synthesis.
     static void fillHannWindow (std::vector<float>& window)
     {
         const auto N = static_cast<int> (window.size());
         for (int i = 0; i < N; ++i)
             window[static_cast<size_t> (i)] = 0.5f * (1.0f - std::cos (
-                juce::MathConstants<float>::twoPi * i / (N - 1)));
+                juce::MathConstants<float>::twoPi * i / N));
     }
 
     //--------------------------------------------------------------------------
@@ -147,8 +150,10 @@ void ZTameAudioProcessor::initChannelState (ChannelState& state,
     state.outputAccum.assign (bufSize, 0.0f);
     state.outputWritePos = 0;
 
-    // FFT work buffer
-    state.fftBuffer.assign (static_cast<size_t> (fftSize), 0.0f);
+    // FFT work buffer — JUCE's real FFT requires 2 * fftSize (first half = real
+    // input, second half = packed spectrum + scratch). A fftSize-sized buffer
+    // overflows and corrupts the heap.
+    state.fftBuffer.assign (static_cast<size_t> (fftSize * 2), 0.0f);
 
     // Hann window
     state.window.resize (static_cast<size_t> (fftSize));
@@ -200,8 +205,10 @@ void ZTameAudioProcessor::computeMagnitude (
     const std::vector<float>& spectrum,
     std::vector<float>& magnitude) const
 {
-    // The real FFT packs N real samples into N/2+1 bins in the format:
-    // [DC, bin1_real, bin1_imag, bin2_real, bin2_imag, ..., Nyquist]
+    // The real FFT packs bin k at floats [2k, 2k+1] (re, im) for k in 0..N/2:
+    //   bin 0 (DC)          -> spectrum[0]
+    //   bin k (1..N/2-1)    -> spectrum[2k], spectrum[2k+1]
+    //   bin N/2 (Nyquist)   -> spectrum[N], spectrum[N+1]
     // Magnitude = sqrt(re^2 + im^2) for each bin.
     for (int i = 0; i < numBins; ++i)
     {
@@ -213,14 +220,16 @@ void ZTameAudioProcessor::computeMagnitude (
         }
         else if (i < fftHalf)
         {
-            const auto re = spectrum[idx * 2u - 1u];
-            const auto im = spectrum[idx * 2u];
+            const auto re = spectrum[idx * 2u];
+            const auto im = spectrum[idx * 2u + 1u];
             magnitude[idx] = std::sqrt (re * re + im * im);
         }
         else
         {
-            // Nyquist bin is stored as a single real value.
-            magnitude[idx] = std::abs (spectrum[fftHalf]);
+            // Nyquist bin
+            const auto re = spectrum[static_cast<size_t> (fftSize)];
+            const auto im = spectrum[static_cast<size_t> (fftSize) + 1u];
+            magnitude[idx] = std::sqrt (re * re + im * im);
         }
     }
 }
@@ -331,8 +340,8 @@ void ZTameAudioProcessor::applyGainsAndSynthesise (
     const std::vector<float>& gains,
     std::vector<float>& spectrum) const
 {
-    // Apply per-bin gain to the complex FFT data.
-    // Spectrum layout: [DC, re1, im1, re2, im2, ..., Nyquist]
+    // Apply per-bin gain to the complex FFT data (JUCE half-complex packing:
+    // bin k re@2k, im@2k+1; Nyquist re@N, im@N+1).
     for (int i = 0; i < numBins; ++i)
     {
         const auto idx = static_cast<size_t> (i);
@@ -344,12 +353,13 @@ void ZTameAudioProcessor::applyGainsAndSynthesise (
         }
         else if (i < fftHalf)
         {
-            spectrum[idx * 2u - 1u] *= g;
             spectrum[idx * 2u]      *= g;
+            spectrum[idx * 2u + 1u] *= g;
         }
         else
         {
-            spectrum[fftHalf] *= g;
+            spectrum[static_cast<size_t> (fftSize)]      *= g;
+            spectrum[static_cast<size_t> (fftSize) + 1u] *= g;
         }
     }
 
@@ -365,7 +375,7 @@ void ZTameAudioProcessor::processFrame (ChannelState& state, int /*channelIndex*
     if (! state.prepared
         || state.inputBuffer.size() < static_cast<size_t> (fftSize * 2)
         || state.outputAccum.size() < static_cast<size_t> (fftSize * 2)
-        || state.fftBuffer.size() < static_cast<size_t> (fftSize)
+        || state.fftBuffer.size() < static_cast<size_t> (fftSize * 2)
         || state.window.size() < static_cast<size_t> (fftSize))
     {
         return;
@@ -381,8 +391,8 @@ void ZTameAudioProcessor::processFrame (ChannelState& state, int /*channelIndex*
             state.inputBuffer[bufIdx] * state.window[static_cast<size_t> (i)];
     }
 
-    // ---- forward FFT ----
-    fft->performRealOnlyForwardTransform (state.fftBuffer.data());
+    // ---- forward FFT (only non-negative half needed; buffer is 2*fftSize) ----
+    fft->performRealOnlyForwardTransform (state.fftBuffer.data(), true);
 
     // ---- magnitude spectrum ----
     computeMagnitude (state.fftBuffer, state.magnitude);
@@ -473,12 +483,13 @@ void ZTameAudioProcessor::processFrame (ChannelState& state, int /*channelIndex*
             }
             else if (i < fftHalf)
             {
-                state.fftBuffer[idx * 2u - 1u] *= suppression;
                 state.fftBuffer[idx * 2u]      *= suppression;
+                state.fftBuffer[idx * 2u + 1u] *= suppression;
             }
             else
             {
-                state.fftBuffer[fftHalf] *= suppression;
+                state.fftBuffer[static_cast<size_t> (fftSize)]      *= suppression;
+                state.fftBuffer[static_cast<size_t> (fftSize) + 1u] *= suppression;
             }
         }
     }
@@ -491,13 +502,17 @@ void ZTameAudioProcessor::processFrame (ChannelState& state, int /*channelIndex*
     fft->performRealOnlyInverseTransform (state.fftBuffer.data());
 
     // ---- overlap-add to output accumulator ----
+    // Window is applied in ANALYSIS only (synthesis just overlaps the inverse
+    // frames). The FFT engine is NORMALISED (forward+inverse = identity), and
+    // the periodic Hann satisfies w[n] + w[n+N/2] = 1 exactly at 50% overlap,
+    // so the two overlapping frames sum to unity — no gain needed.
     const auto outSize = static_cast<size_t> (fftSize * 2);
+    const auto wolaGain = 1.0f;
     for (int i = 0; i < fftSize; ++i)
     {
         const auto idx = static_cast<size_t> (i);
         const auto accPos = (state.outputWritePos + i) % outSize;
-        state.outputAccum[accPos] += state.fftBuffer[idx] * state.window[idx]
-                                   / static_cast<float> (hopSize);  // correct gain
+        state.outputAccum[accPos] += state.fftBuffer[idx] * wolaGain;
     }
 
     state.outputWritePos = (state.outputWritePos + hopSize) % (fftSize * 2);
@@ -548,7 +563,7 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if (! state.prepared
             || state.inputBuffer.size() < static_cast<size_t> (fftSize * 2)
             || state.outputAccum.size() < static_cast<size_t> (fftSize * 2)
-            || state.fftBuffer.size() < static_cast<size_t> (fftSize)
+            || state.fftBuffer.size() < static_cast<size_t> (fftSize * 2)
             || state.window.size() < static_cast<size_t> (fftSize))
         {
             continue;
@@ -565,9 +580,15 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             state.inputBuffer[static_cast<size_t> (state.inputWritePos)] = inputData[idx];
             state.inputWritePos = (state.inputWritePos + 1) % (fftSize * 2);
 
-            // 2. Read output sample from overlap-add accumulator
+            // 2. Read output sample from overlap-add accumulator.
+            // The read cursor runs one hop BEHIND the write cursor: during the
+            // cycle where the write pointer is W, positions [W-H, W-1] are
+            // covered by exactly the two frames written at W-2H and W-H — both
+            // fully written, not yet overwritten. Reading W+samplesSinceFFT
+            // (the old code) sampled positions the NEXT frame is about to
+            // overwrite, which zeroed the overlap-add and killed the signal.
             const auto outReadPos = static_cast<size_t> (
-                (state.outputWritePos + state.samplesSinceFFT) % (fftSize * 2));
+                (state.outputWritePos - hopSize + state.samplesSinceFFT + fftSize * 2) % (fftSize * 2));
             outputData[idx] = state.outputAccum[outReadPos];
             state.outputAccum[outReadPos] = 0.0f; // clear consumed sample
 

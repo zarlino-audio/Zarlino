@@ -424,6 +424,11 @@ public:
 
         juce::Random rng;
         constexpr int blocks = 5000;
+        // The FFT chain has an inherent latency of fftSize (2048) samples plus
+        // ring/overlap-add settle — the first handful of blocks output ~0.
+        // Skip the warmup before comparing RMS so the latency isn't mistaken
+        // for an instability.
+        constexpr int warmupBlocks = 32;   // 16 384 samples >> latency + settle
 
         float lastRms = -1.0f;
 
@@ -442,7 +447,7 @@ public:
                     "Bad output at soak block " + juce::String (b));
 
             // Check output hasn't gone completely silent or exploded
-            if (b % 500 == 0)
+            if (b % 500 == 0 && b >= warmupBlocks)
             {
                 double sumSq = 0.0;
                 for (int i = 0; i < 512; ++i)
