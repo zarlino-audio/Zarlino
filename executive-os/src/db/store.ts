@@ -851,13 +851,58 @@ export class ExecutiveStore implements CostStorage {
   }
   /** Reopen a stopped/timed-out/failed run: back to RUNNING, history kept. */
   resetAgentRun(id: string): void {
+    // Refresh last_heartbeat too — a resumed run with a NULL/stale heartbeat
+    // would be instantly reaped again as a "restart orphan" by maintenance.
+    const now = new Date().toISOString();
     this.sql.run(
-      "UPDATE agent_jobs SET status = 'RUNNING', result = NULL, error = NULL, finished_at = NULL, updated_at = ? WHERE id = ?",
-      new Date().toISOString(), id,
+      "UPDATE agent_jobs SET status = 'RUNNING', result = NULL, error = NULL, finished_at = NULL, last_heartbeat = ?, updated_at = ? WHERE id = ?",
+      now, now, id,
     );
   }
   listAgentRuns(limit = 20): AgentRun[] {
     return this.sql.all<Row>("SELECT * FROM agent_jobs ORDER BY created_at DESC LIMIT ?", limit).map((r) => rowTo<AgentRun>(r));
+  }
+  /**
+   * Long-horizon runs that were interrupted by a restart before doing any work
+   * (0 iterations) — the "Interrupted by a restart" orphans. These are safe to
+   * auto-resume because no tool side-effects could have happened yet.
+   */
+  listInterruptedRuns(limit = 50): AgentRun[] {
+    return this.sql
+      .all<Row>(
+        "SELECT * FROM agent_jobs WHERE status = 'FAILED' AND iterations = 0 AND error LIKE '%Interrupted by a restart%' ORDER BY updated_at ASC LIMIT ?",
+        limit,
+      )
+      .map((r) => rowTo<AgentRun>(r));
+  }
+  countInterruptedRuns(): number {
+    const rows = this.sql.all<Row>("SELECT COUNT(*) AS c FROM agent_jobs WHERE status = 'FAILED' AND iterations = 0 AND error LIKE '%Interrupted by a restart%'");
+    return Number(rows[0]?.c ?? 0);
+  }
+  /** Reopen a batch of interrupted (0-iteration) runs back to RUNNING. Returns the reopened ids. */
+  resetInterruptedRuns(limit = 10): string[] {
+    const rows = this.sql.all<Row>(
+      "SELECT id FROM agent_jobs WHERE status = 'FAILED' AND iterations = 0 AND error LIKE '%Interrupted by a restart%' ORDER BY updated_at ASC LIMIT ?",
+      limit,
+    );
+    const ids: string[] = [];
+    for (const r of rows) {
+      const id = String(r.id);
+      // Must go through resetAgentRun (refreshes last_heartbeat) — otherwise a
+      // resumed run with a NULL heartbeat is instantly reaped again as stale.
+      this.resetAgentRun(id);
+      ids.push(id);
+    }
+    return ids;
+  }
+  /** True if the task had a run end in a terminal failure within `withinMs` (re-creation backoff). */
+  hasRecentFailedRunForTask(taskId: string, withinMs = 10 * 60_000): boolean {
+    const cutoff = new Date(Date.now() - withinMs).toISOString();
+    const rows = this.sql.all<Row>(
+      "SELECT id FROM agent_jobs WHERE task_id = ? AND status IN ('FAILED','STOPPED','TIMEOUT') AND updated_at >= ? LIMIT 1",
+      taskId, cutoff,
+    );
+    return rows.length > 0;
   }
   /**
    * Reap long-horizon runs that were left RUNNING with no heartbeat for the

@@ -57,6 +57,7 @@ export interface Env {
   AI_PER_RUN_BUDGET?: string;
   DOCTOR_AUTOFIX?: string;
   MAX_AUTO_JOBS?: string;
+  MAX_RUN_ITERATIONS?: string;
 }
 
 const INTERNAL_HEADER = "x-exec-internal";
@@ -224,6 +225,10 @@ async function agentLoop(opts: {
 
   for (let i = 0; i < maxIter; i++) {
     iterations++;
+    // Keep the long-horizon run row alive + report live progress. Without
+    // this, any run executing >15min was reaped as a "restart orphan" by the
+    // Doctor's maintenance sweep even though it was actively working.
+    if (opts.runId) store.heartbeatAgentRun(opts.runId, iterations, toolsCalled);
     const reply = await callDeepSeek(apiKey, messages, opts.registry, recordCost);
     messages.push(reply);
     const toolCalls = reply.tool_calls;
@@ -290,11 +295,15 @@ function startAutoRunnable(store: ExecutiveStore, maxJobs: number): { started: s
   const running = store.countRunningAgentRuns();
   const budget = Math.max(0, maxJobs - running);
   if (budget <= 0) return { started: [] };
-  const tasks = store.listAutoRunnableTasks(budget);
+  const tasks = store.listAutoRunnableTasks(budget * 3);
   const started: string[] = [];
   for (const t of tasks) {
+    if (started.length >= budget) break;
     if (store.pendingApprovalForTask(t.id)) continue;
     if (store.hasRunningRunForTask(t.id)) continue;
+    // Backoff: don't immediately re-spawn a run for a task whose last run just
+    // failed (e.g. DeepSeek 402) — that would churn a run every wake.
+    if (store.hasRecentFailedRunForTask(t.id)) continue;
     const now = nowIso();
     store.createAgentRun({
       id: newId("run"),
@@ -315,8 +324,38 @@ function startAutoRunnable(store: ExecutiveStore, maxJobs: number): { started: s
   return { started };
 }
 
+/**
+ * Resume interrupted long-horizon runs (restart orphans, 0 iterations — no
+ * tool side-effects happened, so re-running is lossless). Bounded by the same
+ * concurrency budget as startAutoRunnable; skips tasks that are blocked, done,
+ * already running, or awaiting founder approval. Returns the resumed run ids.
+ */
+function resumeInterruptedRuns(store: ExecutiveStore, maxJobs: number): { resumed: string[] } {
+  const running = store.countRunningAgentRuns();
+  const budget = Math.max(0, maxJobs - running);
+  if (budget <= 0) return { resumed: [] };
+  const candidates = store.listInterruptedRuns(50);
+  const resumed: string[] = [];
+  for (const run of candidates) {
+    if (resumed.length >= budget) break;
+    if (run.task_id) {
+      if (store.hasRunningRunForTask(run.task_id)) continue;
+      if (store.pendingApprovalForTask(run.task_id)) continue;
+      const task = store.getTask(run.task_id);
+      if (task && !["OPEN", "IN_PROGRESS"].includes(task.status)) continue;
+      store.updateTask(run.task_id, { status: "IN_PROGRESS" } as never);
+    }
+    store.resetAgentRun(run.id);
+    resumed.push(run.id);
+  }
+  return { resumed };
+}
+
 async function executeAgentRun(store: ExecutiveStore, registry: ToolRegistry, env: Env, run: AgentRun): Promise<void> {
-  const maxIter = Math.max(1, Math.min(8, Number(env.AI_PER_RUN_BUDGET) || 8));
+  // Long-horizon runs need a real iteration budget (the old min(8, AI_PER_RUN_BUDGET)
+  // cap made auto-runs constantly hit "Reached the tool-call limit"). Cost is still
+  // bounded by the AI budget tracker. Override with MAX_RUN_ITERATIONS.
+  const maxIter = Math.max(1, Math.min(60, Number(env.MAX_RUN_ITERATIONS) || 40));
   try {
     const result = await agentLoop({
       store,
@@ -332,6 +371,27 @@ async function executeAgentRun(store: ExecutiveStore, registry: ToolRegistry, en
   } catch (err) {
     store.finishAgentRun(run.id, "FAILED", undefined, err instanceof Error ? err.message : String(err));
   }
+}
+
+/** The RUNNING runs for the given auto-started task ids + resumed run ids. */
+function collectRunsToExecute(store: ExecutiveStore, taskIds: string[], runIds: string[]): AgentRun[] {
+  const runs: AgentRun[] = [];
+  const seen = new Set<string>();
+  for (const taskId of taskIds) {
+    const run = store.listAgentRuns(50).find((r) => r.task_id === taskId && r.status === "RUNNING");
+    if (run && !seen.has(run.id)) {
+      seen.add(run.id);
+      runs.push(run);
+    }
+  }
+  for (const runId of runIds) {
+    const run = store.getAgentRun(runId);
+    if (run && run.status === "RUNNING" && !seen.has(run.id)) {
+      seen.add(run.id);
+      runs.push(run);
+    }
+  }
+  return runs;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,9 +485,9 @@ export class ExecutiveAgent {
     this.store = new ExecutiveStore(this.sql);
     this.state.blockConcurrencyWhile(async () => {
       this.store.migrate();
-      // Fast, local maintenance on wake (no model calls): doctor + start
-      // auto-runnable jobs + schedule the next alarm. Auto-job *execution*
-      // happens on alarm/cron so the constructor never blocks on the network.
+      // Fast local maintenance on wake: doctor + productivity + start/resume
+      // auto-runnable jobs (executed non-blocking via state.waitUntil) +
+      // schedule the next alarm.
       await this.runWakeMaintenance("wake", { runAutoJobs: false });
     });
   }
@@ -459,25 +519,32 @@ export class ExecutiveAgent {
     } catch {
       /* productivity maintenance must never break wake */
     }
-    // Start auto-runnable tasks (bounded, "automate fixing").
+    // Start + resume long-horizon runs (bounded, "automate fixing"). Runs are
+    // executed on EVERY maintenance sweep — on wake via state.waitUntil (keeps
+    // the DO alive without blocking the request) so a run can never sit as a
+    // 0-iteration orphan again, and on alarm/cron awaited in order.
     const maxJobs = Math.max(0, Math.min(3, Number(this.env.MAX_AUTO_JOBS) || 2));
     try {
       const { started } = startAutoRunnable(this.store, maxJobs);
+      const { resumed } = resumeInterruptedRuns(this.store, maxJobs);
+      const runs = collectRunsToExecute(this.store, started, resumed);
       if (opts.runAutoJobs) {
-        for (const taskId of started) {
-          const run = this.store.listAgentRuns(50).find((r) => r.task_id === taskId && r.status === "RUNNING");
-          if (run) {
-            await executeAgentRun(this.store, this.buildRegistry(), this.env, run);
-          }
-        }
+        for (const run of runs) await executeAgentRun(this.store, this.buildRegistry(), this.env, run);
+      } else {
+        for (const run of runs) this.state.waitUntil(executeAgentRun(this.store, this.buildRegistry(), this.env, run));
       }
     } catch {
       /* auto-run must never break wake */
     }
-    // Reschedule: first alarm sooner so fresh deploys start work quickly.
+    // Arm the alarm WITHOUT deferring an already-pending one. Frequent cold
+    // starts (console polls) used to re-arm it to +5min every wake, starving
+    // the alarm path — the very reason auto-runs piled up un-executed.
     try {
+      const current = await this.state.storage.getAlarm();
       const next = Date.now() + (trigger === "wake" ? 5 * 60 * 1000 : ALARM_INTERVAL_MS);
-      await this.state.storage.setAlarm(next);
+      if (current === null || current > next) {
+        await this.state.storage.setAlarm(next);
+      }
     } catch {
       /* alarm reschedule is best-effort */
     }
@@ -1107,6 +1174,9 @@ export class ExecutiveAgent {
       const run = this.store.listAgentRuns(100).find((r) => r.id === id);
       if (!run) return json({ error: "Run not found" }, 404);
       this.store.resetAgentRun(id);
+      // Actually re-execute the reopened run instead of leaving it RUNNING
+      // forever (the old behaviour just let it get reaped again).
+      this.state.waitUntil(executeAgentRun(this.store, this.buildRegistry(), this.env, { ...run, status: "RUNNING" }));
       return json({ ok: true, id });
     }
 

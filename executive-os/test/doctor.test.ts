@@ -43,7 +43,29 @@ describe("System Doctor", () => {
     );
     const check = report.checks.find((c) => c.id === "jobs.stale_runs")!;
     expect(check.fixed).toBeTruthy();
-    expect(store.getAgentRun("run_bad")?.status).toBe("FAILED");
+    // The interrupted-runs check then auto-resumes what stale_runs reaped —
+    // that is the full healing chain (reap -> resume -> re-execute), so the
+    // run ends up RUNNING with a fresh heartbeat, not a zombie FAILED row.
+    const run = store.getAgentRun("run_bad")!;
+    expect(run.status).toBe("RUNNING");
+    expect(run.last_heartbeat).toBeTruthy();
+  });
+
+  it("auto-resumes interrupted 0-iteration runs (restart orphans)", async () => {
+    const now = new Date().toISOString();
+    // Reaped by reapStaleAgentRuns — the exact orphan the doctor must heal.
+    store.createAgentRun({
+      id: "run_interrupted", prompt: "y", status: "FAILED", iterations: 0, tools_called: 0,
+      started_at: now, source: "test", created_at: now, updated_at: now,
+      error: "Interrupted by a restart — use Continue to resume from the checkpoint.",
+    });
+    const report = await runDoctor(
+      { store, env: {}, now: () => new Date().toISOString() },
+      { autoFix: true, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "jobs.interrupted_runs")!;
+    expect(check.fixed).toBeTruthy();
+    expect(store.getAgentRun("run_interrupted")?.status).toBe("RUNNING");
   });
 
   it("auto-fixes an expired local-task lease", async () => {

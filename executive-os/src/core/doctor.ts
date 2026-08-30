@@ -112,6 +112,29 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "jobs.interrupted_runs",
+    label: "No orphaned interrupted long-horizon runs",
+    severity: "HIGH",
+    run: (ctx, autoFix) => {
+      const n = ctx.store.countInterruptedRuns();
+      if (n > 0) {
+        if (autoFix) {
+          const resumed = ctx.store.resetInterruptedRuns(10).length;
+          return failResult(
+            "jobs.interrupted_runs",
+            "No orphaned interrupted long-horizon runs",
+            "HIGH",
+            `Found ${n} interrupted long-horizon run(s) (restart orphans, 0 iterations — no work done).`,
+            "Auto-resumed — the maintenance sweep re-executes them.",
+            `resumed ${resumed}`,
+          );
+        }
+        return warnResult("jobs.interrupted_runs", "No orphaned interrupted long-horizon runs", "HIGH", `Found ${n} interrupted long-horizon run(s) (restart orphans).`, "Run doctor with autoFix, or Continue from the durable checkpoint.");
+      }
+      return okResult("jobs.interrupted_runs", "No orphaned interrupted long-horizon runs", "HIGH", "No interrupted long-horizon runs.");
+    },
+  },
+  {
     id: "tasks.expired_leases",
     label: "No expired local-task leases",
     severity: "MEDIUM",
