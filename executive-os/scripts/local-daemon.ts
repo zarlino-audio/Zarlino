@@ -65,7 +65,9 @@ function requireHost(): string {
 async function runTask(task: { id: string; prompt: string }): Promise<void> {
   log("claimed task", task.id, "—", task.prompt.slice(0, 80));
   const hb = setInterval(() => {
+    // Keep both the task lease AND the health beacon fresh while working.
     void post("/api/local-tasks/heartbeat", { id: task.id, status: "RUNNING" }).catch(() => {});
+    void beacon(false).catch(() => {});
   }, LEASE_HB_MS);
   try {
     const result = await runTurn(task.prompt, 16);
