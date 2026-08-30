@@ -1,8 +1,24 @@
 # Build output
 build/
+build_*/
+build-*/
+artifacts/
 
 # SDKs (too large, license-restricted — document how to get them in README.md)
 sdk/
+
+# Temp / logs
+_release_build.log
+
+# Stray / abandoned
+WEBSITE/
+undefined
+package-lock.json
+
+# Python noise
+__pycache__/
+*.pyc
+_probe.txt
 
 # macOS
 .DS_Store
