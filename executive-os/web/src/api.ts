@@ -61,6 +61,18 @@ export const api = {
     }),
 
   overview: () => request<Overview>("/api/executive/overview"),
+  controlExecutive: (patch: {
+    paused?: boolean;
+    spendingDisabled?: boolean;
+    deploymentsDisabled?: boolean;
+    delegateMode?: boolean;
+    fullAccess?: boolean;
+    autonomyMode?: string;
+  }) =>
+    request<{ ok: boolean; state: Record<string, unknown> }>("/api/executive/control", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    }),
 
   doctorRun: (autoFix: boolean) =>
     request<DoctorReport>("/api/doctor/run", {
@@ -174,7 +186,15 @@ export const api = {
 
 export interface DataBundle {
   generatedAt: string;
-  state: { status: string; autonomy_mode: string } | null;
+  state: {
+    status: string;
+    autonomy_mode: string;
+    paused: number;
+    spending_disabled: number;
+    deployments_disabled: number;
+    delegate_mode: number;
+    full_access: number;
+  } | null;
   counters: Record<string, number>;
   products: Array<{ id: string; name: string; category?: string; status: string; version?: string; price?: number }>;
   productStatus: Array<Record<string, unknown>>;

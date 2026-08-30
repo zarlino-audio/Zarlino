@@ -756,3 +756,53 @@ footer {
   opacity: 1;
 }
 
+/* Executive control toggles */
+.control-toggle {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.control-toggle:hover {
+  border-color: var(--accent);
+}
+.control-toggle .control-state {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.control-toggle.on {
+  border-color: var(--accent);
+  background: rgba(240, 180, 41, 0.08);
+}
+.control-toggle.on .control-state {
+  color: var(--accent);
+}
+.control-toggle.danger.on {
+  border-color: var(--fail);
+  background: rgba(248, 81, 73, 0.1);
+}
+.control-toggle.danger.on .control-state {
+  color: var(--fail);
+}
+.control-autonomy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  justify-content: flex-end;
+}
+.control-autonomy .sel {
+  width: 100%;
+}
+

@@ -27,6 +27,10 @@ export interface DoctorContext {
     list(opts: { limit: number }): Promise<{ keys: unknown[] }>;
     get(key: string): Promise<string | null>;
   };
+  /** Optional tool registry — used by feature checks to verify the agent/chat layer. */
+  registry?: {
+    functionSchemas(): Array<{ function: { name: string } }>;
+  };
   now(): string;
 }
 
@@ -223,6 +227,48 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
         );
       }
       return okResult("secrets.required", "Required secrets configured (presence only)", "HIGH", "All required secrets present (presence checked, values never read).");
+    },
+  },
+  {
+    id: "features.agent_ready",
+    label: "Chat / agent feature layer is ready",
+    severity: "HIGH",
+    run: (ctx, _autoFix) => {
+      const issues: string[] = [];
+      // 1. Model provider key present (chat + agent runs need it).
+      if (!ctx.env.DEEPSEEK_API_KEY) {
+        issues.push("DEEPSEEK_API_KEY is missing — chat and agent runs will fail to authenticate.");
+      }
+      // 2. Tool names must be provider-safe: DeepSeek requires ^[a-zA-Z0-9_-]+$ (no dots).
+      //    A dotted name like finance.get_snapshot makes every chat call 400.
+      if (ctx.registry) {
+        const invalid = ctx.registry
+          .functionSchemas()
+          .map((s) => s.function.name)
+          .filter((n) => !/^[a-zA-Z0-9_-]+$/.test(n));
+        if (invalid.length > 0) {
+          issues.push(`Invalid tool name(s) sent to the model: ${invalid.slice(0, 5).join(", ")} — chat will fail with DeepSeek HTTP 400. Sanitize names in the registry.`);
+        }
+      } else {
+        issues.push("Registry not attached — tool-name safety not verified.");
+      }
+      // 3. Spend gate: if the budget is exhausted the model calls stop.
+      const daily = Number(ctx.env.AI_DAILY_BUDGET) || 0;
+      const monthly = Number(ctx.env.AI_MONTHLY_BUDGET) || 0;
+      const spentToday = ctx.store.spentToday();
+      const spentMonth = ctx.store.spentThisMonth();
+      if (daily > 0 && spentToday >= daily) issues.push(`Daily AI budget exhausted ($${spentToday.toFixed(2)}/$${daily}) — model calls are gated until it resets.`);
+      if (monthly > 0 && spentMonth >= monthly) issues.push(`Monthly AI budget exhausted ($${spentMonth.toFixed(2)}/$${monthly}) — model calls are gated.`);
+      if (issues.length > 0) {
+        return failResult(
+          "features.agent_ready",
+          "Chat / agent feature layer is ready",
+          "HIGH",
+          issues.join(" "),
+          "Fix the flagged configuration, then verify /api/chat returns a reply.",
+        );
+      }
+      return okResult("features.agent_ready", "Chat / agent feature layer is ready", "HIGH", "Model key present, tool names provider-safe, budget headroom available.");
     },
   },
   {

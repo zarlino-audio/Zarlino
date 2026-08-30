@@ -66,7 +66,7 @@ const VIEW_MAP = new Map(VIEWS.map((v) => [v.id, v]));
 /** Safe empty bundle so views render before the first fetch completes. */
 const EMPTY_BUNDLE: DataBundle = {
   generatedAt: "",
-  state: null,
+  state: { status: "GREEN", autonomy_mode: "CONTROLLED", paused: 0, spending_disabled: 0, deployments_disabled: 0, delegate_mode: 0, full_access: 0 },
   counters: {},
   products: [],
   productStatus: [],

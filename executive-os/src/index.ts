@@ -13,7 +13,6 @@
  * PAYSTACK_SECRET_KEY, GITHUB_TOKEN, CF_API_TOKEN, ZARLINO_LICENSE_PRIVATE_KEY.
  */
 
-import { z } from "zod";
 import { ExecutiveStore } from "./db/store";
 import { createDoSql, type Sql } from "./db/sql";
 import { buildToolRegistry } from "./agent/tools";
@@ -140,10 +139,8 @@ async function callDeepSeek(
   recordCost: (c: ModelCall) => void,
   model = "deepseek-chat",
 ): Promise<ChatMsg> {
-  const tools = registry.listTools().map((t) => ({
-    type: "function" as const,
-    function: { name: t.name, description: t.description, parameters: z.toJSONSchema(t.inputSchema) },
-  }));
+  // Tool names are sanitized for the wire (DeepSeek forbids dots in names).
+  const tools = registry.functionSchemas();
   const started = Date.now();
   const res = await fetch(DEEPSEEK_URL, {
     method: "POST",
@@ -233,7 +230,9 @@ async function agentLoop(opts: {
     if (toolCalls && toolCalls.length > 0) {
       for (const call of toolCalls) {
         toolsCalled++;
-        const result = await opts.registry.run(call.function.name, safeParseArgs(call.function.arguments), {
+        // Map the provider-sanitized name back to the real tool before running.
+        const realName = opts.registry.resolveName(call.function.name);
+        const result = await opts.registry.run(realName, safeParseArgs(call.function.arguments), {
           env: opts.env as unknown as Record<string, string | undefined>,
           store,
           audit: (actor, action, entityType, entityId, detail) => {
@@ -440,6 +439,7 @@ export class ExecutiveAgent {
       store: this.store,
       env: this.env as unknown as Record<string, string | undefined>,
       kv: this.env.ZARLINO_KV,
+      registry: this.buildRegistry(),
       now: () => new Date().toISOString(),
     };
   }
@@ -614,6 +614,59 @@ export class ExecutiveAgent {
     // Overview
     if (path === "/api/executive/overview" && method === "GET") {
       return json(buildOverview(this.store, this.env));
+    }
+
+    // Executive control — the Founder's kill-switches + autonomy dials.
+    if (path === "/api/executive/control" && method === "POST") {
+      const body = (await readBody<{
+        paused?: boolean;
+        spendingDisabled?: boolean;
+        deploymentsDisabled?: boolean;
+        delegateMode?: boolean;
+        fullAccess?: boolean;
+        autonomyMode?: string;
+      }>(request).catch(() => ({}))) as {
+        paused?: boolean;
+        spendingDisabled?: boolean;
+        deploymentsDisabled?: boolean;
+        delegateMode?: boolean;
+        fullAccess?: boolean;
+        autonomyMode?: string;
+      };
+      const patch: Record<string, unknown> = {};
+      const boolKeys: Array<[string, boolean | undefined]> = [
+        ["paused", body.paused],
+        ["spending_disabled", body.spendingDisabled],
+        ["deployments_disabled", body.deploymentsDisabled],
+        ["delegate_mode", body.delegateMode],
+        ["full_access", body.fullAccess],
+      ];
+      for (const [col, val] of boolKeys) {
+        if (typeof val === "boolean") patch[col] = val ? 1 : 0;
+      }
+      if (body.autonomyMode) {
+        const mode = String(body.autonomyMode).toUpperCase();
+        if (!["CONTROLLED", "DELEGATED", "FULL"].includes(mode)) return json({ error: "autonomyMode must be CONTROLLED | DELEGATED | FULL" }, 400);
+        patch.autonomy_mode = mode;
+        // Enabling delegation/full access implies a more permissive autonomy mode.
+        if (mode === "DELEGATED" && patch.delegate_mode === undefined) patch.delegate_mode = 1;
+        if (mode === "FULL" && patch.full_access === undefined) patch.full_access = 1;
+      }
+      if (Object.keys(patch).length === 0) return json({ error: "no control fields provided" }, 400);
+      this.store.ensureExecutiveState();
+      this.store.updateExecutiveState(patch);
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "executive.control",
+        entity_type: "executive_state",
+        entity_id: "zarlino",
+        detail_json: JSON.stringify(patch),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, state: this.store.getExecutiveState() });
     }
 
     // System Doctor

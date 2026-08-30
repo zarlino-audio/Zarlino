@@ -120,4 +120,40 @@ export class ToolRegistry {
       return { ok: false, error: err instanceof z.ZodError ? err.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") : String(err) };
     }
   }
+
+  /**
+   * Provider-safe function schemas for OpenAI-compatible model APIs.
+   *
+   * DeepSeek (and several other providers) require tool names to match
+   * `^[a-zA-Z0-9_-]+$` — dots are FORBIDDEN. Internal tool names use dotted
+   * paths (e.g. `finance.get_snapshot`), so each is sanitized here
+   * (dots → underscores) for the wire, and `resolveName()` maps a sanitized
+   * name the model returns back to the real tool before execution.
+   */
+  functionSchemas(): Array<{
+    type: "function";
+    function: { name: string; description: string; parameters: Record<string, unknown> };
+  }> {
+    return this.listTools().map((t) => ({
+      type: "function" as const,
+      function: {
+        name: sanitizeToolName(t.name),
+        description: t.description,
+        parameters: z.toJSONSchema(t.inputSchema) as Record<string, unknown>,
+      },
+    }));
+  }
+
+  /** Resolve a provider-sanitized tool name back to the real registered name. */
+  resolveName(sanitized: string): string {
+    for (const t of this.tools.values()) {
+      if (sanitizeToolName(t.name) === sanitized) return t.name;
+    }
+    return sanitized;
+  }
+}
+
+/** Sanitize a tool name for providers that forbid dots (DeepSeek). */
+export function sanitizeToolName(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_-]/g, "_");
 }

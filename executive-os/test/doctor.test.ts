@@ -20,11 +20,11 @@ describe("System Doctor", () => {
 
   it("runs every check and logs the run", async () => {
     const report = await runDoctor(
-      { store, env: {}, now: () => new Date().toISOString() },
+      { store, env: { DEEPSEEK_API_KEY: "x" }, registry: { functionSchemas: () => [{ function: { name: "ok_tool" } }] } as never, now: () => new Date().toISOString() },
       { autoFix: true, trigger: "test" },
     );
     expect(report.summary.total).toBe(DOCTOR_CHECKS.length);
-    expect(report.healthy).toBe(true); // missing secrets are WARN, not FAIL
+    expect(report.healthy).toBe(true); // missing non-required secrets are WARN, not FAIL
     const logs = store.listDoctorLogs();
     expect(logs.length).toBe(1);
     expect(logs[0]!.trigger).toBe("test");
@@ -70,6 +70,45 @@ describe("System Doctor", () => {
     const check = report.checks.find((c) => c.id === "secrets.required")!;
     expect(check.status).toBe("WARN");
     expect(check.detail).not.toContain("x"); // never echo values
+  });
+
+  it("features.agent_ready flags invalid tool names (chat would 400)", async () => {
+    // A registry that still sends dotted names — the exact bug that broke chat.
+    const badRegistry = {
+      functionSchemas: () => [
+        { function: { name: "finance.get_snapshot" } },
+        { function: { name: "ok_tool" } },
+      ],
+    };
+    const report = await runDoctor(
+      { store, env: { DEEPSEEK_API_KEY: "k" }, registry: badRegistry as never, now: () => new Date().toISOString() },
+      { autoFix: false, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "features.agent_ready")!;
+    expect(check.status).toBe("FAIL");
+    expect(check.detail).toContain("finance.get_snapshot");
+  });
+
+  it("features.agent_ready passes when names are provider-safe and key present", async () => {
+    const goodRegistry = {
+      functionSchemas: () => [{ function: { name: "finance_get_snapshot" } }],
+    };
+    const report = await runDoctor(
+      { store, env: { DEEPSEEK_API_KEY: "k" }, registry: goodRegistry as never, now: () => new Date().toISOString() },
+      { autoFix: false, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "features.agent_ready")!;
+    expect(check.status).toBe("OK");
+  });
+
+  it("features.agent_ready fails when the DeepSeek key is missing", async () => {
+    const report = await runDoctor(
+      { store, env: {}, registry: { functionSchemas: () => [] } as never, now: () => new Date().toISOString() },
+      { autoFix: false, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "features.agent_ready")!;
+    expect(check.status).toBe("FAIL");
+    expect(check.detail).toContain("DEEPSEEK_API_KEY");
   });
 
   it("exposes system.doctor / system.self_test / system.maintenance tools", () => {

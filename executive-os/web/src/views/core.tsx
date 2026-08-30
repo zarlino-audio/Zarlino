@@ -11,12 +11,79 @@ interface ViewProps {
 
 // ---- Overview ---------------------------------------------------------------
 
-export function Overview({ data, mutate: _mutate }: ViewProps) {
+export function Overview({ data, mutate, notify }: ViewProps) {
   const c = data.counters;
   const budget = data.budget;
+  const st = data.state;
   const fuelPct = budget.monthly > 0 ? Math.round((budget.spentThisMonth / budget.monthly) * 100) : 0;
+
+  const setControl = async (patch: Parameters<typeof api.controlExecutive>[0], label: string) => {
+    try {
+      await api.controlExecutive(patch);
+      await mutate();
+      notify(`${label} ${patch.paused ? "ON (executive paused)" : patch.fullAccess ? "ENABLED (full autonomy)" : "updated"}`);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), false);
+    }
+  };
+
+  const controlToggles: Array<{
+    key: "paused" | "spendingDisabled" | "deploymentsDisabled" | "delegateMode" | "fullAccess";
+    on: boolean;
+    label: string;
+    danger?: boolean;
+    hint: string;
+  }> = [
+    { key: "paused", on: st?.paused === 1, label: "⏸ Pause executive", danger: true, hint: "Stop all autonomous work" },
+    { key: "spendingDisabled", on: st?.spending_disabled === 1, label: "🚫 Disable spending", danger: true, hint: "Kill-switch: no money moves" },
+    { key: "deploymentsDisabled", on: st?.deployments_disabled === 1, label: "🚫 Disable deploys", danger: true, hint: "Kill-switch: no production deploys" },
+    { key: "delegateMode", on: st?.delegate_mode === 1, label: "🤝 Delegate mode", hint: "Allow MEDIUM-risk reversible actions" },
+    { key: "fullAccess", on: st?.full_access === 1, label: "🔓 Full access", danger: true, hint: "Autonomous deploy + HIGH reversible + spend" },
+  ];
+
   return (
     <div>
+      <div className="card">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h2>Executive control</h2>
+          <div className="row">
+            <Badge tone={(st?.status ?? "GREEN") === "GREEN" ? "ok" : "warn"}>{st?.status ?? "—"}</Badge>
+            <Badge>{st?.autonomy_mode ?? "—"}</Badge>
+            {st?.paused === 1 && <Badge tone="fail">PAUSED</Badge>}
+            {st?.full_access === 1 && <Badge tone="fail">FULL ACCESS</Badge>}
+          </div>
+        </div>
+        {st ? (
+          <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
+            {controlToggles.map((t) => (
+              <button
+                key={t.key}
+                className={`control-toggle ${t.on ? "on" : ""} ${t.danger ? "danger" : ""}`}
+                title={t.hint}
+                onClick={() => setControl({ [t.key]: !t.on } as Parameters<typeof api.controlExecutive>[0], t.label)}
+              >
+                <span>{t.label}</span>
+                <span className="control-state">{t.on ? "ON" : "off"}</span>
+              </button>
+            ))}
+            <label className="control-autonomy">
+              <span>Autonomy mode</span>
+              <select
+                className="sel"
+                value={st.autonomy_mode ?? "CONTROLLED"}
+                onChange={(e) => setControl({ autonomyMode: e.target.value }, `autonomy → ${e.target.value}`)}
+              >
+                <option value="CONTROLLED">CONTROLLED</option>
+                <option value="DELEGATED">DELEGATED</option>
+                <option value="FULL">FULL</option>
+              </select>
+            </label>
+          </div>
+        ) : (
+          <p className="muted">No executive state loaded.</p>
+        )}
+      </div>
+
       <div className="card">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h2>Executive state</h2>
