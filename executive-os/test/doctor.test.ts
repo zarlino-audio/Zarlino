@@ -43,17 +43,14 @@ describe("System Doctor", () => {
     );
     const check = report.checks.find((c) => c.id === "jobs.stale_runs")!;
     expect(check.fixed).toBeTruthy();
-    // The interrupted-runs check then auto-resumes what stale_runs reaped —
-    // that is the full healing chain (reap -> resume -> re-execute), so the
-    // run ends up RUNNING with a fresh heartbeat, not a zombie FAILED row.
-    const run = store.getAgentRun("run_bad")!;
-    expect(run.status).toBe("RUNNING");
-    expect(run.last_heartbeat).toBeTruthy();
+    // Reaped to FAILED; the maintenance sweep (not the doctor) then resumes it
+    // in lockstep with execution.
+    expect(store.getAgentRun("run_bad")?.status).toBe("FAILED");
   });
 
-  it("auto-resumes interrupted 0-iteration runs (restart orphans)", async () => {
+  it("flags interrupted 0-iteration runs and the sweep primitive resumes them", async () => {
     const now = new Date().toISOString();
-    // Reaped by reapStaleAgentRuns — the exact orphan the doctor must heal.
+    // Reaped by reapStaleAgentRuns — the exact orphan the doctor must surface.
     store.createAgentRun({
       id: "run_interrupted", prompt: "y", status: "FAILED", iterations: 0, tools_called: 0,
       started_at: now, source: "test", created_at: now, updated_at: now,
@@ -64,8 +61,16 @@ describe("System Doctor", () => {
       { autoFix: true, trigger: "test" },
     );
     const check = report.checks.find((c) => c.id === "jobs.interrupted_runs")!;
-    expect(check.fixed).toBeTruthy();
-    expect(store.getAgentRun("run_interrupted")?.status).toBe("RUNNING");
+    expect(check.status).toBe("FAIL"); // the doctor surfaces the pile…
+    expect(check.detail).toMatch(/\d+/);
+    // …and the maintenance sweep's primitive resumes it with a fresh heartbeat
+    // (so it is not immediately reaped as stale again).
+    const resumed = store.resetInterruptedRuns(10);
+    expect(resumed).toContain("run_interrupted");
+    const run = store.getAgentRun("run_interrupted")!;
+    expect(run.status).toBe("RUNNING");
+    expect(run.last_heartbeat).toBeTruthy();
+    expect(run.error).toBeNull();
   });
 
   it("auto-fixes an expired local-task lease", async () => {
