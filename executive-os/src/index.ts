@@ -553,7 +553,7 @@ export class ExecutiveAgent {
         assignments: s.listAssignments({ limit: 100 }),
         optimizationEvents: s.listOptimizationEvents(20),
         contradictions: s.listContradictions({ limit: 100 }),
-        budgets: s.listTokenBudgets(),
+        budgets: budgetStatus(s),
       },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
