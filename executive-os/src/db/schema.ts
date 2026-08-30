@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -413,6 +413,28 @@ VALUES
  ('founder', 'Khritical',
   'a1b2c3d4e5f60718293a4b5c6d7e8f90:426c60969956df34000c635e89e6cf312bc87cd6247ac0c35a8b73a065caca32',
   0, NULL, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+/**
+ * Local agent health beacon (migration v20): the local daemon
+ * (scripts/local-daemon.ts) pings POST /api/local-agent/heartbeat every ~30s
+ * and records last_seen/host/version here, so the System Doctor can tell when
+ * the on-machine agent is offline (previously a blind spot: expired-lease
+ * checks only saw tasks that HAD been claimed, never PENDING tasks with no
+ * daemon to claim them).
+ */
+export const LOCAL_AGENT_STATUS_SQL = `
+CREATE TABLE IF NOT EXISTS local_agent_status (
+  id TEXT PRIMARY KEY,
+  host TEXT,
+  version TEXT,
+  pid TEXT,
+  last_seen TEXT,
+  last_claim_at TEXT,
+  started_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /**

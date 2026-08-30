@@ -272,6 +272,53 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "local_agent.health",
+    label: "Local agent (daemon) is online and processing",
+    severity: "HIGH",
+    run: (ctx, _autoFix) => {
+      const agoMs = ctx.store.localAgentSeenAgoMs();
+      const agingPending = ctx.store.countAgingPendingLocalTasks(30 * 60 * 1000);
+      if (agoMs === null) {
+        if (agingPending > 0) {
+          return failResult(
+            "local_agent.health",
+            "Local agent (daemon) is online and processing",
+            "HIGH",
+            `Local agent has never reported in, and ${agingPending} local task(s) have been PENDING for 30+ minutes with no daemon to claim them.`,
+            "Start the daemon: `npm run agent:daemon:loop` from executive-os/. It claims tasks, heartbeats, and reports results back here.",
+          );
+        }
+        return warnResult(
+          "local_agent.health",
+          "Local agent (daemon) is online and processing",
+          "HIGH",
+          "No local-agent heartbeat yet — the on-machine daemon is not connected.",
+          "Start it with `npm run agent:daemon:loop`.",
+        );
+      }
+      if (agoMs > 5 * 60 * 1000) {
+        return failResult(
+          "local_agent.health",
+          "Local agent (daemon) is online and processing",
+          "HIGH",
+          `Local agent offline — last heartbeat ${Math.round(agoMs / 60_000)} minutes ago. ${agingPending} task(s) are waiting for it.`,
+          "Restart the daemon: `npm run agent:daemon:loop`.",
+        );
+      }
+      const pending = ctx.store.listLocalTasks(100).filter((t) => t.status === "PENDING").length;
+      if (pending > 0) {
+        return warnResult(
+          "local_agent.health",
+          "Local agent (daemon) is online and processing",
+          "HIGH",
+          `Local agent is online (last seen ${Math.round(agoMs / 1000)}s ago) but ${pending} task(s) are still PENDING — the daemon may be idle or stuck.`,
+          "Check the daemon logs; it claims the oldest PENDING task every ~30s.",
+        );
+      }
+      return okResult("local_agent.health", "Local agent (daemon) is online and processing", "HIGH", "Local agent online and processing tasks.");
+    },
+  },
+  {
     id: "kv.health",
     label: "KV namespace reachable",
     severity: "LOW",

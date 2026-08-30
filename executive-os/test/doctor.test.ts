@@ -111,6 +111,51 @@ describe("System Doctor", () => {
     expect(check.detail).toContain("DEEPSEEK_API_KEY");
   });
 
+  it("local_agent.health flags an offline daemon with aging pending tasks", async () => {
+    // Seed an aging PENDING task and no heartbeat record.
+    const now = new Date().toISOString();
+    store.createLocalTask({
+      id: "lt_stale_pending", prompt: "do something", status: "PENDING", source: "test",
+      created_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+      updated_at: now,
+    });
+    const report = await runDoctor(
+      { store, env: {}, now: () => new Date().toISOString() },
+      { autoFix: false, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "local_agent.health")!;
+    expect(check.status).toBe("FAIL");
+    expect(check.detail).toContain("no daemon");
+    // Cleanup so other tests are unaffected.
+    db.exec("DELETE FROM local_tasks WHERE id = 'lt_stale_pending'");
+  });
+
+  it("local_agent.health passes when the daemon heartbeat is fresh", async () => {
+    store.upsertLocalAgentHeartbeat({ host: "test-host", version: "test", pid: "1", claimed: false });
+    const report = await runDoctor(
+      { store, env: {}, now: () => new Date().toISOString() },
+      { autoFix: false, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "local_agent.health")!;
+    // There may be other pending tasks (from prior tests), so it can be WARN;
+    // it must NOT be FAIL (daemon is online).
+    expect(["OK", "WARN"]).toContain(check.status);
+  });
+
+  it("local_agent.health fails when the heartbeat is stale", async () => {
+    // Backdate the heartbeat to 10 minutes ago (older than the 5-min window).
+    db.prepare("UPDATE local_agent_status SET last_seen = ? WHERE id = 'local'").run(new Date(Date.now() - 10 * 60 * 1000).toISOString());
+    const report = await runDoctor(
+      { store, env: {}, now: () => new Date().toISOString() },
+      { autoFix: false, trigger: "test" },
+    );
+    const check = report.checks.find((c) => c.id === "local_agent.health")!;
+    expect(check.status).toBe("FAIL");
+    expect(check.detail).toContain("offline");
+    // Restore a fresh heartbeat.
+    store.upsertLocalAgentHeartbeat({ host: "test-host", version: "test", pid: "1" });
+  });
+
   it("exposes system.doctor / system.self_test / system.maintenance tools", () => {
     const names = doctorTools().map((t) => t.name);
     expect(names).toContain("system.doctor");

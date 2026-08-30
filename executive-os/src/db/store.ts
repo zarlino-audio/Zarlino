@@ -981,6 +981,63 @@ export class ExecutiveStore implements CostStorage {
     this.update("pipeline_gates", id, patch as Row);
   }
 
+  // -- local agent health beacon (migration v20) --------------------------
+  getLocalAgentStatus(): { id: string; host?: string; version?: string; pid?: string; last_seen?: string; last_claim_at?: string; started_at?: string } | null {
+    const rows = this.sql.all<Row>("SELECT * FROM local_agent_status WHERE id = 'local'");
+    if (rows.length === 0) return null;
+    const r = rows[0]!;
+    return {
+      id: String(r.id),
+      host: r.host ? String(r.host) : undefined,
+      version: r.version ? String(r.version) : undefined,
+      pid: r.pid ? String(r.pid) : undefined,
+      last_seen: r.last_seen ? String(r.last_seen) : undefined,
+      last_claim_at: r.last_claim_at ? String(r.last_claim_at) : undefined,
+      started_at: r.started_at ? String(r.started_at) : undefined,
+    };
+  }
+  /** Record a heartbeat from the local daemon (idempotent single row). */
+  upsertLocalAgentHeartbeat(input: { host?: string; version?: string; pid?: string; claimed?: boolean }): void {
+    const now = new Date().toISOString();
+    const existing = this.sql.all<Row>("SELECT id FROM local_agent_status WHERE id = 'local'");
+    if (existing.length === 0) {
+      this.insert("local_agent_status", {
+        id: "local",
+        host: input.host ?? null,
+        version: input.version ?? null,
+        pid: input.pid ?? null,
+        last_seen: now,
+        last_claim_at: input.claimed ? now : null,
+        started_at: now,
+        created_at: now,
+        updated_at: now,
+      });
+      return;
+    }
+    const sets = ["last_seen = ?", "updated_at = ?"];
+    const params: SqlParam[] = [now, now];
+    if (input.host) { sets.push("host = ?"); params.push(input.host); }
+    if (input.version) { sets.push("version = ?"); params.push(input.version); }
+    if (input.pid) { sets.push("pid = ?"); params.push(input.pid); }
+    if (input.claimed) { sets.push("last_claim_at = ?"); params.push(now); }
+    params.push("local");
+    this.sql.run(`UPDATE local_agent_status SET ${sets.join(", ")} WHERE id = ?`, ...params);
+  }
+  /** Age (ms) since the daemon's last heartbeat, or null if never seen. */
+  localAgentSeenAgoMs(): number | null {
+    const s = this.getLocalAgentStatus();
+    if (!s?.last_seen) return null;
+    const t = Date.parse(s.last_seen);
+    if (Number.isNaN(t)) return null;
+    return Date.now() - t;
+  }
+  /** Count PENDING local tasks older than the given age (ms). */
+  countAgingPendingLocalTasks(olderThanMs: number): number {
+    const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+    const rows = this.sql.all<Row>("SELECT COUNT(*) AS c FROM local_tasks WHERE status = 'PENDING' AND created_at < ?", cutoff);
+    return Number(rows[0]?.c ?? 0);
+  }
+
   // -- founder credentials & sessions --------------------------------------
   getFounderCredentials(): { id: string; username: string; password_hash: string; failed_attempts: number; locked_until?: string } | null {
     const rows = this.sql.all<Row>("SELECT * FROM founder_credentials WHERE id = ?", "founder");

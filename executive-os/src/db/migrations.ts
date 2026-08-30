@@ -32,6 +32,7 @@ import {
   DOCTOR_LOG_SQL,
   PRODUCTIVITY_SQL,
   FOUNDER_CREDENTIALS_SEED_SQL,
+  LOCAL_AGENT_STATUS_SQL,
 } from "./schema";
 import type { Sql } from "./sql";
 
@@ -130,6 +131,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 17, name: "system_doctor", sql: [DOCTOR_LOG_SQL] },
   { version: 18, name: "productivity_manager", sql: [PRODUCTIVITY_SQL] },
   { version: 19, name: "founder_credentials_seed", sql: [FOUNDER_CREDENTIALS_SEED_SQL] },
+  { version: 20, name: "local_agent_status", sql: [LOCAL_AGENT_STATUS_SQL] },
 ];
 
 /** Latest schema version this code knows how to migrate to. */

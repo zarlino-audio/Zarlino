@@ -559,6 +559,22 @@ export class ExecutiveAgent {
         const d = s.latestDoctorLog();
         return d ? { runAt: d.run_at, trigger: d.trigger, summary: safeJson(d.summary_json, null) } : null;
       })(),
+      localAgent: (() => {
+        const st = s.getLocalAgentStatus();
+        const ago = s.localAgentSeenAgoMs();
+        return st
+          ? {
+              host: st.host ?? null,
+              version: st.version ?? null,
+              pid: st.pid ?? null,
+              lastSeen: st.last_seen ?? null,
+              seenAgoMs: ago,
+              online: ago !== null && ago < 5 * 60 * 1000,
+              lastClaimAt: st.last_claim_at ?? null,
+              pending: s.listLocalTasks(100).filter((t) => t.status === "PENDING").length,
+            }
+          : { host: null, online: false, seenAgoMs: null, pending: s.listLocalTasks(100).filter((t) => t.status === "PENDING").length };
+      })(),
       links: {
         overview: "/api/executive/overview",
         doctor: "/api/doctor/run",
@@ -1085,6 +1101,13 @@ export class ExecutiveAgent {
       if (!run) return json({ error: "Run not found" }, 404);
       this.store.resetAgentRun(id);
       return json({ ok: true, id });
+    }
+
+    // Local agent health beacon (daemon pings every ~30s).
+    if (path === "/api/local-agent/heartbeat" && method === "POST") {
+      const body = (await readBody<{ host?: string; version?: string; pid?: string; claimed?: boolean }>(request).catch(() => ({}))) as { host?: string; version?: string; pid?: string; claimed?: boolean };
+      this.store.upsertLocalAgentHeartbeat({ host: body.host, version: body.version, pid: body.pid, claimed: body.claimed });
+      return json({ ok: true, lastSeen: nowIso() });
     }
 
     // Local machine daemon bridge
