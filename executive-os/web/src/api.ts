@@ -239,6 +239,15 @@ export interface DataBundle {
     budgets: BudgetStatusEntry[];
   };
   doctorLastRun: { runAt: string; trigger: string; summary: unknown } | null;
+  localAgent: {
+    host: string | null;
+    version?: string | null;
+    pid?: string | null;
+    lastSeen?: string | null;
+    seenAgoMs: number | null;
+    online: boolean;
+    pending: number;
+  };
   links: Record<string, string>;
 }
 

@@ -98,6 +98,7 @@ const EMPTY_BUNDLE: DataBundle = {
   budget: { daily: 0, monthly: 0, spentToday: 0, spentThisMonth: 0, tokensToday: 0, tokensThisMonth: 0, overrides: {} },
   productivity: { assignments: [], optimizationEvents: [], contradictions: [], budgets: [] },
   doctorLastRun: null,
+  localAgent: { host: null, seenAgoMs: null, online: false, pending: 0 },
   links: {},
 };
 

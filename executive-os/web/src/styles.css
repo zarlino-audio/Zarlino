@@ -806,3 +806,8 @@ footer {
   width: 100%;
 }
 
+.agent-offline-card {
+  border-color: var(--fail);
+  background: rgba(248, 81, 73, 0.06);
+}
+

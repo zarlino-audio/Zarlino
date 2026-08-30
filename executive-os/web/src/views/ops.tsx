@@ -49,6 +49,7 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
   const localTasks = data.localTasks ?? [];
   const runs = data.runs ?? [];
   const busy = useState(false);
+  const la = data.localAgent as { host?: string | null; online?: boolean; seenAgoMs?: number | null; pending?: number; lastSeen?: string | null } | undefined;
 
   const resume = async (id: string) => {
     try {
@@ -62,6 +63,26 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
 
   return (
     <div>
+      <div className={`card ${la?.online ? "" : "agent-offline-card"}`}>
+        <h2>Local agent (daemon)</h2>
+        {la?.online ? (
+          <p>
+            <Badge tone="ok">ONLINE</Badge>{" "}
+            <span className="mono">host {la.host ?? "—"}</span> · last seen{" "}
+            {la.seenAgoMs != null ? `${Math.max(1, Math.round(la.seenAgoMs / 1000))}s ago` : "—"} ·{" "}
+            <span className="muted">{la.pending ?? 0} pending task(s)</span>
+          </p>
+        ) : (
+          <p>
+            <Badge tone="fail">OFFLINE</Badge>{" "}
+            <span className="muted">
+              The on-machine daemon is not reporting. Start it from executive-os/ with{" "}
+              <code>npm run agent:daemon:loop</code> so it claims tasks, heartbeats, and reports results.
+            </span>
+          </p>
+        )}
+      </div>
+
       <div className="card">
         <h2>Local machine tasks</h2>
         {localTasks.length === 0 ? (
