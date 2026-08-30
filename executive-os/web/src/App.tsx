@@ -63,6 +63,44 @@ const VIEWS: ViewDef[] = [
 
 const VIEW_MAP = new Map(VIEWS.map((v) => [v.id, v]));
 
+/** Safe empty bundle so views render before the first fetch completes. */
+const EMPTY_BUNDLE: DataBundle = {
+  generatedAt: "",
+  state: null,
+  counters: {},
+  products: [],
+  productStatus: [],
+  projects: [],
+  objectives: [],
+  tasks: [],
+  decisions: [],
+  risks: [],
+  engineering: [],
+  marketing: [],
+  doctrine: [],
+  policies: [],
+  memories: [],
+  pipeline: [],
+  persons: [],
+  finance: null,
+  financialSnapshots: [],
+  calendar: [],
+  notes: [],
+  reminders: [],
+  contacts: [],
+  audit: [],
+  files: [],
+  localTasks: [],
+  runs: [],
+  toolExecutions: [],
+  metrics: [],
+  workstreams: [],
+  budget: { daily: 0, monthly: 0, spentToday: 0, spentThisMonth: 0, tokensToday: 0, tokensThisMonth: 0, overrides: {} },
+  productivity: { assignments: [], optimizationEvents: [], contradictions: [], budgets: [] },
+  doctorLastRun: null,
+  links: {},
+};
+
 export function App() {
   const [token, setTokenState] = useState(getToken());
   const [view, setView] = useState("overview");
@@ -150,7 +188,7 @@ export function App() {
   }
 
   const current = VIEW_MAP.get(view) ?? VIEWS[0]!;
-  const props: ViewProps = { data: data ?? ({} as DataBundle), mutate: async () => { await load(); }, notify };
+  const props: ViewProps = { data: data ?? EMPTY_BUNDLE, mutate: async () => { await load(); }, notify };
   const C = current.comp;
 
   return (
