@@ -257,6 +257,17 @@ static void applyPreset (SpectralSuppressor& dsp, const String& preset)
         dsp.attackMs = 5.0f;
         dsp.releaseMs = 250.0f;
     }
+    else if (preset == "master-polish")
+    {
+        // Full-mix polish: catches more, broader peaks, gentle depth and a
+        // slow release so the mix stays stable while resonances are tamed.
+        dsp.sensitivity = 0.5f;
+        dsp.rangeDb = 6.0f;
+        dsp.selectivity = 0.35f;
+        dsp.dryWet = 0.55f;
+        dsp.attackMs = 6.0f;
+        dsp.releaseMs = 400.0f;
+    }
     else
     {
         dsp.sensitivity = 0.4f;

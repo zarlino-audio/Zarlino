@@ -218,6 +218,13 @@ static void applyPreset (SaturationEngine& eng, const String& preset)
         eng.xOver[0] = 120.0f; eng.xOver[1] = 900.0f; eng.xOver[2] = 4000.0f;
         eng.ceiling = 0.89f; eng.dryWet = 1.0f;
     }
+    else if (preset == "aggressive-crunch")
+    {
+        // Transistor push-pull edge with higher drive — classic aggressive crunch.
+        for (int b = 0; b < 4; ++b) { eng.bands[b].topo = Transistor; eng.bands[b].drive = 0.6f; eng.bands[b].mix = 0.85f; }
+        eng.xOver[0] = 120.0f; eng.xOver[1] = 700.0f; eng.xOver[2] = 3200.0f;
+        eng.ceiling = 0.92f; eng.dryWet = 1.0f;
+    }
     else
     {
         for (int b = 0; b < 4; ++b) { eng.bands[b].topo = Tape; eng.bands[b].drive = 0.25f; eng.bands[b].mix = 0.80f; }
