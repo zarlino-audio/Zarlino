@@ -1,6 +1,5 @@
-// Typed client for the Executive OS API. The token is the Founder auth token
-// (from .dev.vars / wrangler secret); login exchanges it for a cookie-less
-// session. We keep it simple: store the token in localStorage and send it as
+// Typed client for the Executive OS API. Login exchanges the founder
+// username/password for a session token, stored in localStorage and sent as
 // Authorization: Bearer on every request.
 
 export const TOKEN_KEY = "exec_os_token";
@@ -95,6 +94,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title, description, priority }),
     }),
+  updateTask: (id: string, patch: { status?: string; priority?: string }) =>
+    request<{ ok: boolean }>(`/api/tasks/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
 
   approvals: () => request<{ approvals: Approval[] }>("/api/approvals"),
   decideApproval: (id: string, decision: string, note?: string) =>
@@ -137,8 +141,86 @@ export const api = {
     }),
   productivityMetrics: () => request<{ metrics: ProductivityMetric[] }>("/api/productivity/metrics"),
 
+  // Deep data bundle (one bounded request powers every console view).
+  dataAll: () => request<DataBundle>("/api/data/all"),
+
+  // Domain mutations.
+  updateGate: (id: string, status: string) =>
+    request<{ ok: boolean }>(`/api/pipeline/gates/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+  addCalendarEvent: (title: string, startAt: string, endAt?: string, allDay?: boolean) =>
+    request<{ ok: boolean }>("/api/calendar", {
+      method: "POST",
+      body: JSON.stringify({ title, startAt, endAt, allDay }),
+    }),
+  deleteCalendarEvent: (id: string) => request<{ deleted: boolean }>(`/api/calendar/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  addNote: (title: string, body: string) =>
+    request<{ ok: boolean }>("/api/notes", { method: "POST", body: JSON.stringify({ title, body }) }),
+  deleteNote: (id: string) => request<{ deleted: boolean }>(`/api/notes/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  addReminder: (title: string, dueAt: string) =>
+    request<{ ok: boolean }>("/api/reminders", { method: "POST", body: JSON.stringify({ title, dueAt }) }),
+  markReminderDone: (id: string) => request<{ ok: boolean }>(`/api/reminders/${encodeURIComponent(id)}/done`, { method: "POST", body: JSON.stringify({}) }),
+  deleteReminder: (id: string) => request<{ deleted: boolean }>(`/api/reminders/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  addContact: (name: string, role: string, company: string, email: string) =>
+    request<{ ok: boolean }>("/api/contacts", { method: "POST", body: JSON.stringify({ name, role, company, email }) }),
+  continueRun: (id: string) => request<{ ok: boolean; id: string }>(`/api/agents/runs/${encodeURIComponent(id)}/continue`, { method: "POST", body: JSON.stringify({}) }),
+
   exportSnapshot: () => request<{ ok: boolean; snapshot: unknown }>("/api/export"),
 };
+
+// ---- Deep data bundle types -----------------------------------------------
+
+export interface DataBundle {
+  generatedAt: string;
+  state: { status: string; autonomy_mode: string } | null;
+  counters: Record<string, number>;
+  products: Array<{ id: string; name: string; category?: string; status: string; version?: string; price?: number }>;
+  productStatus: Array<Record<string, unknown>>;
+  projects: Array<Record<string, unknown>>;
+  objectives: Array<Record<string, unknown>>;
+  tasks: Task[];
+  decisions: Array<Record<string, unknown>>;
+  risks: Array<Record<string, unknown>>;
+  engineering: Array<Record<string, unknown>>;
+  marketing: Array<Record<string, unknown>>;
+  doctrine: Array<Record<string, unknown>>;
+  policies: Array<Record<string, unknown>>;
+  memories: Array<Record<string, unknown>>;
+  pipeline: Array<Record<string, unknown>>;
+  persons: Array<Record<string, unknown>>;
+  finance: Record<string, unknown> | null;
+  financialSnapshots: Array<Record<string, unknown>>;
+  calendar: Array<Record<string, unknown>>;
+  notes: Array<Record<string, unknown>>;
+  reminders: Array<Record<string, unknown>>;
+  contacts: Array<Record<string, unknown>>;
+  audit: Array<Record<string, unknown>>;
+  files: Array<{ id: string; name: string; kind?: string; mime?: string; sizeBytes?: number; created_at: string }>;
+  localTasks: Array<Record<string, unknown>>;
+  runs: Array<Record<string, unknown>>;
+  toolExecutions: Array<Record<string, unknown>>;
+  metrics: Array<Record<string, unknown>>;
+  workstreams: Array<Record<string, unknown>>;
+  budget: {
+    daily: number;
+    monthly: number;
+    spentToday: number;
+    spentThisMonth: number;
+    tokensToday: number;
+    tokensThisMonth: number;
+    overrides: BudgetOverrides;
+  };
+  productivity: {
+    assignments: Assignment[];
+    optimizationEvents: OptimizationEvent[];
+    contradictions: Contradiction[];
+    budgets: BudgetStatusEntry[];
+  };
+  doctorLastRun: { runAt: string; trigger: string; summary: unknown } | null;
+  links: Record<string, string>;
+}
 
 // ---- types ----------------------------------------------------------------
 

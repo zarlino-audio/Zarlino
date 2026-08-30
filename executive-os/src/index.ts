@@ -31,7 +31,7 @@ import {
   recommendAssignment,
 } from "./core/productivity/manager";
 import { newId, nowIso } from "./ids";
-import type { AgentRun, DoctorLog } from "./types";
+import type { AgentRun, DoctorLog, Task } from "./types";
 import type { ModelCallRecord as _M } from "./core/model/types";
 type ModelCall = _M;
 
@@ -493,6 +493,80 @@ export class ExecutiveAgent {
     return this.registryCache;
   }
 
+  /** One bounded bundle of all console-facing data (cheap: every list is capped). */
+  private buildDataBundle(): Record<string, unknown> {
+    const s = this.store;
+    return {
+      generatedAt: nowIso(),
+      state: s.getExecutiveState(),
+      counters: {
+        openTasks: s.countOpenTasks(),
+        pendingApprovals: s.listApprovals({ status: "PENDING" }).length,
+        openRisks: s.openRisks().length,
+        products: s.listProducts().length,
+        gates: s.listPipelineGates().length,
+        localPending: s.listLocalTasks(100).filter((t) => t.status === "PENDING").length,
+        runsRunning: s.listAgentRuns(100).filter((r) => r.status === "RUNNING").length,
+        overdueReminders: s.listReminders({ overdueOnly: true }).length,
+        notes: s.listNotes(1000).length,
+        events: s.listCalendarEvents(undefined, undefined, 1000).length,
+        assignmentsOpen: s.listAssignments({ limit: 200 }).filter((a) => a.status === "ASSIGNED" || a.status === "IN_PROGRESS").length,
+        contradictionsOpen: s.countOpenContradictions(),
+      },
+      products: s.listProducts().map((p) => ({ id: p.id, name: p.name, category: p.category, status: p.status, version: p.version, price: p.price })),
+      productStatus: s.listProducts().flatMap((p) => s.listProductStatus(p.id).slice(0, 5).map((st) => ({ product: p.name, ...st }))),
+      projects: s.listProjects(),
+      objectives: s.listObjectives(),
+      tasks: s.listTasks({ limit: 200 }),
+      decisions: s.listDecisions({ limit: 100 }),
+      risks: s.openRisks(),
+      engineering: s.listEngineeringIssues(),
+      marketing: s.listCampaigns().slice(0, 50),
+      doctrine: s.listActiveDoctrine(),
+      policies: s.listPolicies(),
+      memories: s.listMemories().slice(0, 50),
+      pipeline: s.listPipelineGates(),
+      persons: s.listPersons(),
+      finance: s.latestSnapshot(),
+      financialSnapshots: s.listSnapshots(6),
+      calendar: s.listCalendarEvents(undefined, undefined, 200),
+      notes: s.listNotes(200),
+      reminders: s.listReminders({ limit: 100 }),
+      contacts: s.listContacts(),
+      audit: s.listAudit(40),
+      files: s.listUploadedFiles(50).map((f) => ({ id: f.id, name: f.name, kind: f.kind, mime: f.mime, sizeBytes: f.size_bytes, created_at: f.created_at })),
+      localTasks: s.listLocalTasks(50),
+      runs: s.listAgentRuns(50),
+      toolExecutions: s.listToolExecutions(40),
+      metrics: s.listMetrics(10),
+      workstreams: s.listWorkstreams(),
+      budget: {
+        daily: Number(this.env.AI_DAILY_BUDGET) || 0,
+        monthly: Number(this.env.AI_MONTHLY_BUDGET) || 0,
+        spentToday: s.spentToday(),
+        spentThisMonth: s.spentThisMonth(),
+        tokensToday: s.tokensToday(),
+        tokensThisMonth: s.tokensThisMonth(),
+        overrides: s.getBudgetOverrides(),
+      },
+      productivity: {
+        assignments: s.listAssignments({ limit: 100 }),
+        optimizationEvents: s.listOptimizationEvents(20),
+        contradictions: s.listContradictions({ limit: 100 }),
+        budgets: s.listTokenBudgets(),
+      },
+      doctorLastRun: (() => {
+        const d = s.latestDoctorLog();
+        return d ? { runAt: d.run_at, trigger: d.trigger, summary: safeJson(d.summary_json, null) } : null;
+      })(),
+      links: {
+        overview: "/api/executive/overview",
+        doctor: "/api/doctor/run",
+        productivity: "/api/productivity/report",
+      },
+    };
+  }
+
   // -- alarm ----------------------------------------------------------------
 
   async alarm(): Promise<void> {
@@ -623,6 +697,22 @@ export class ExecutiveAgent {
       const task = createTask({ title: body.title, description: body.description, priority: body.priority as never, source: "founder" });
       this.store.insertTask(task);
       return json({ ok: true, id: task.id });
+    }
+    const taskPatch = /^\/api\/tasks\/([^/]+)$/.exec(path);
+    if (taskPatch && method === "PATCH") {
+      const id = decodeURIComponent(taskPatch[1]!);
+      const task = this.store.getTask(id);
+      if (!task) return json({ error: "Task not found" }, 404);
+      const body = (await readBody<{ status?: string; priority?: string }>(request).catch(() => ({}))) as { status?: string; priority?: string };
+      const patch: Partial<Task> = {};
+      if (body.status) {
+        if (!["OPEN", "IN_PROGRESS", "BLOCKED", "DONE", "CANCELLED"].includes(body.status)) return json({ error: "Invalid status" }, 400);
+        patch.status = body.status as never;
+        if (body.status === "DONE") patch.completed_at = nowIso();
+      }
+      if (body.priority && ["P0", "P1", "P2", "P3"].includes(body.priority)) patch.priority = body.priority as never;
+      this.store.updateTask(id, patch);
+      return json({ ok: true });
     }
 
     // Approvals
@@ -798,6 +888,150 @@ export class ExecutiveAgent {
     if (path === "/api/productivity/metrics" && method === "GET") {
       dailyRollup(this.store);
       return json({ metrics: this.store.listProductivityMetrics(14) });
+    }
+
+    // ---------------------------------------------------------------------
+    // Full data bundle + domain mutations (powers the console's deep views).
+    // One bounded request so the console can render all views without
+    // hammering the DO (keeps the SQLite row budget happy).
+    // ---------------------------------------------------------------------
+    if (path === "/api/data/all" && method === "GET") {
+      return json(this.buildDataBundle());
+    }
+
+    // Pipeline gates (PATCH) — founder/agent updates a single gate.
+    const gateMatch = /^\/api\/pipeline\/gates\/([^/]+)$/.exec(path);
+    if (gateMatch && method === "PATCH") {
+      const body = (await readBody<{ status?: string; note?: string }>(request).catch(() => ({}))) as { status?: string; note?: string };
+      const id = decodeURIComponent(gateMatch[1]!);
+      const gate = this.store.listPipelineGates().find((g) => g.id === id);
+      if (!gate) return json({ error: "Gate not found" }, 404);
+      if (body.status && !["NOT_STARTED", "IN_PROGRESS", "PASSED", "FAILED", "BLOCKED", "SHIPPED"].includes(body.status)) {
+        return json({ error: `Invalid gate status: ${body.status}` }, 400);
+      }
+      this.store.updatePipelineGate(id, { status: (body.status as never) ?? gate.status });
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "pipeline.gate_update",
+        entity_type: "pipeline_gates",
+        entity_id: id,
+        detail_json: JSON.stringify({ status: body.status, note: body.note }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, gate: this.store.listPipelineGates().find((g) => g.id === id) });
+    }
+
+    // Calendar
+    if (path === "/api/calendar" && method === "GET") {
+      return json({ events: this.store.listCalendarEvents(undefined, undefined, 200) });
+    }
+    if (path === "/api/calendar" && method === "POST") {
+      const body = (await readBody<{ title?: string; startAt?: string; endAt?: string; allDay?: boolean; location?: string }>(request).catch(() => ({}))) as { title?: string; startAt?: string; endAt?: string; allDay?: boolean; location?: string };
+      if (!body.title || !body.startAt) return json({ error: "title and startAt required" }, 400);
+      const now = nowIso();
+      this.store.createCalendarEvent({
+        id: newId("cal"),
+        title: body.title,
+        start_at: body.startAt,
+        end_at: body.endAt ?? body.startAt,
+        all_day: body.allDay ? 1 : 0,
+        location: body.location,
+        attendees_json: "[]",
+        status: "SCHEDULED",
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true });
+    }
+    const calDelete = /^\/api\/calendar\/([^/]+)$/.exec(path);
+    if (calDelete && method === "DELETE") {
+      return json({ deleted: this.store.deleteCalendarEvent(decodeURIComponent(calDelete[1]!)) });
+    }
+
+    // Notes
+    if (path === "/api/notes" && method === "GET") return json({ notes: this.store.listNotes(200) });
+    if (path === "/api/notes" && method === "POST") {
+      const body = (await readBody<{ title?: string; body?: string; pinned?: boolean }>(request).catch(() => ({}))) as { title?: string; body?: string; pinned?: boolean };
+      if (!body.title) return json({ error: "title required" }, 400);
+      const now = nowIso();
+      this.store.createNote({
+        id: newId("note"),
+        title: body.title,
+        body: body.body ?? "",
+        tags_json: "[]",
+        pinned: body.pinned ? 1 : 0,
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true });
+    }
+    if (path === "/api/notes/:id" && method === "DELETE") {
+      return json({ deleted: this.store.deleteNote(path.split("/")[3]!) });
+    }
+
+    // Reminders
+    if (path === "/api/reminders" && method === "GET") return json({ reminders: this.store.listReminders({ limit: 100 }) });
+    if (path === "/api/reminders" && method === "POST") {
+      const body = (await readBody<{ title?: string; dueAt?: string }>(request).catch(() => ({}))) as { title?: string; dueAt?: string };
+      if (!body.title || !body.dueAt) return json({ error: "title and dueAt required" }, 400);
+      const now = nowIso();
+      this.store.createReminder({
+        id: newId("rem"),
+        title: body.title,
+        due_at: body.dueAt,
+        done: 0,
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true });
+    }
+    if (path === "/api/reminders/:id/done" && method === "POST") {
+      this.store.updateReminder(decodeURIComponent(path.split("/")[3]!), { done: 1, done_at: nowIso() });
+      return json({ ok: true });
+    }
+    if (path === "/api/reminders/:id" && method === "DELETE") {
+      return json({ deleted: this.store.deleteReminder(path.split("/")[3]!) });
+    }
+
+    // Contacts
+    if (path === "/api/contacts" && method === "GET") return json({ contacts: this.store.listContacts() });
+    if (path === "/api/contacts" && method === "POST") {
+      const body = (await readBody<{ name?: string; role?: string; company?: string; email?: string; phone?: string }>(request).catch(() => ({}))) as { name?: string; role?: string; company?: string; email?: string; phone?: string };
+      if (!body.name) return json({ error: "name required" }, 400);
+      const now = nowIso();
+      this.store.createContact({
+        id: newId("ctc"),
+        name: body.name,
+        role: body.role ?? "",
+        company: body.company ?? "",
+        email: body.email ?? "",
+        phone: body.phone ?? "",
+        tags_json: "[]",
+        notes: "",
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true });
+    }
+
+    // Agent runs (long-horizon)
+    if (path === "/api/agents/runs" && method === "GET") {
+      return json({ runs: this.store.listAgentRuns(50) });
+    }
+    const runContinue = /^\/api\/agents\/runs\/([^/]+)\/continue$/.exec(path);
+    if (runContinue && method === "POST") {
+      const id = decodeURIComponent(runContinue[1]!);
+      const run = this.store.listAgentRuns(100).find((r) => r.id === id);
+      if (!run) return json({ error: "Run not found" }, 404);
+      this.store.resetAgentRun(id);
+      return json({ ok: true, id });
     }
 
     // Local machine daemon bridge

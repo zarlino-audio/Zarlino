@@ -1,83 +1,208 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  api,
-  clearToken,
-  getToken,
-  setToken,
-  type Approval,
-  type Assignment,
-  type BudgetOverrides,
-  type Contradiction,
-  type DoctorLog,
-  type DoctorReport,
-  type Overview,
-  type ProductivityReport,
-  type Task,
-} from "./api";
+/** Executive OS console shell — lazy-loaded views, command palette, keyboard
+ * nav, boot splash, live ticker, and a single throttled data fetch (polls
+ * pause while the tab is hidden to save API + CPU). */
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { api, clearToken, getToken, setToken, type DataBundle } from "./api";
+import { BootSplash, CommandPalette, Confetti, Ticker, usePolling } from "./lib/entertain";
 
-type Tab = "overview" | "doctor" | "chat" | "tasks" | "approvals" | "settings" | "productivity";
+// ---- Lazy views (code-split per module for fast initial load) --------------
 
-const TABS: Array<{ id: Tab; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "doctor", label: "System Doctor" },
-  { id: "chat", label: "Chat" },
-  { id: "tasks", label: "Tasks" },
-  { id: "approvals", label: "Approvals" },
-  { id: "productivity", label: "Productivity" },
-  { id: "settings", label: "Settings" },
+const Overview = lazy(() => import("./views/core").then((m) => ({ default: m.Overview })));
+const Activity = lazy(() => import("./views/core").then((m) => ({ default: m.Activity })));
+const Tasks = lazy(() => import("./views/core").then((m) => ({ default: m.Tasks })));
+const Approvals = lazy(() => import("./views/core").then((m) => ({ default: m.Approvals })));
+const Pipeline = lazy(() => import("./views/business").then((m) => ({ default: m.Pipeline })));
+const Finance = lazy(() => import("./views/business").then((m) => ({ default: m.Finance })));
+const Decisions = lazy(() => import("./views/business").then((m) => ({ default: m.Decisions })));
+const Catalog = lazy(() => import("./views/business").then((m) => ({ default: m.Catalog })));
+const Doctrine = lazy(() => import("./views/knowledge").then((m) => ({ default: m.Doctrine })));
+const MemoryView = lazy(() => import("./views/knowledge").then((m) => ({ default: m.MemoryView })));
+const CalendarView = lazy(() => import("./views/knowledge").then((m) => ({ default: m.CalendarView })));
+const NotesView = lazy(() => import("./views/knowledge").then((m) => ({ default: m.NotesView })));
+const FilesView = lazy(() => import("./views/ops").then((m) => ({ default: m.FilesView })));
+const LocalRunsView = lazy(() => import("./views/ops").then((m) => ({ default: m.LocalRunsView })));
+const DoctorView = lazy(() => import("./views/ops").then((m) => ({ default: m.DoctorView })));
+const ProductivityView = lazy(() => import("./views/ops").then((m) => ({ default: m.ProductivityView })));
+const ChatView = lazy(() => import("./views/chat").then((m) => ({ default: m.ChatView })));
+const SettingsView = lazy(() => import("./views/settings").then((m) => ({ default: m.SettingsView })));
+
+interface ViewProps {
+  data: DataBundle;
+  mutate: () => Promise<void>;
+  notify: (msg: string, ok?: boolean) => void;
+}
+
+interface ViewDef {
+  id: string;
+  label: string;
+  group: string;
+  emoji: string;
+  comp: React.LazyExoticComponent<(p: ViewProps) => React.ReactElement | null>;
+}
+
+const VIEWS: ViewDef[] = [
+  { id: "overview", label: "Overview", group: "Operate", emoji: "🏠", comp: Overview },
+  { id: "activity", label: "Activity", group: "Operate", emoji: "🕘", comp: Activity },
+  { id: "tasks", label: "Tasks", group: "Operate", emoji: "✅", comp: Tasks },
+  { id: "approvals", label: "Approvals", group: "Operate", emoji: "✋", comp: Approvals },
+  { id: "pipeline", label: "Pipeline", group: "Operate", emoji: "🚀", comp: Pipeline },
+  { id: "finance", label: "Finance", group: "Operate", emoji: "💰", comp: Finance },
+  { id: "decisions", label: "Decisions & Risks", group: "Knowledge", emoji: "🧭", comp: Decisions },
+  { id: "doctrine", label: "Doctrine", group: "Knowledge", emoji: "📜", comp: Doctrine },
+  { id: "memory", label: "Memory", group: "Knowledge", emoji: "🧠", comp: MemoryView },
+  { id: "calendar", label: "Calendar", group: "Knowledge", emoji: "📅", comp: CalendarView },
+  { id: "notes", label: "Notes & Contacts", group: "Knowledge", emoji: "📝", comp: NotesView },
+  { id: "catalog", label: "Catalog", group: "Knowledge", emoji: "🗂️", comp: Catalog },
+  { id: "doctor", label: "System Doctor", group: "System", emoji: "🩺", comp: DoctorView },
+  { id: "productivity", label: "Productivity", group: "System", emoji: "⚡", comp: ProductivityView },
+  { id: "files", label: "Files", group: "System", emoji: "📁", comp: FilesView },
+  { id: "local", label: "Local & Runs", group: "System", emoji: "🖥️", comp: LocalRunsView },
+  { id: "chat", label: "Chat", group: "System", emoji: "💬", comp: ChatView },
+  { id: "settings", label: "Settings", group: "Account", emoji: "⚙️", comp: SettingsView },
 ];
+
+const VIEW_MAP = new Map(VIEWS.map((v) => [v.id, v]));
 
 export function App() {
   const [token, setTokenState] = useState(getToken());
-  const [tab, setTab] = useState<Tab>("overview");
+  const [view, setView] = useState("overview");
+  const [data, setData] = useState<DataBundle | null>(null);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState<{ id: number; text: string; ok: boolean } | null>(null);
+  const [palette, setPalette] = useState(false);
+  const [booted, setBooted] = useState(() => sessionStorage.getItem("exec_os_booted") === "1");
+  const [confetti, setConfetti] = useState(false);
+  const confettiTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const notify = useCallback((text: string, ok = true) => {
+    const id = Date.now();
+    setToast({ id, text, ok });
+    setTimeout(() => setToast((t) => (t && t.id === id ? null : t)), 4000);
+  }, []);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await api.dataAll();
+      setData(d);
+      setError("");
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      return false;
+    }
+  }, []);
+
+  // Initial load + 60s poll (pauses when hidden — handled inside usePolling).
+  useEffect(() => {
+    void load();
+  }, [load]);
+  usePolling(() => void load(), 60_000, []);
+
+  // Keyboard: Ctrl/Cmd+K or "?" opens palette, Alt+←/→ cycles views.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPalette((p) => !p);
+      } else if (e.key === "?") {
+        setPalette((p) => !p);
+      } else if (e.altKey && e.key === "ArrowRight") {
+        const i = VIEWS.findIndex((v) => v.id === view);
+        setView(VIEWS[(i + 1) % VIEWS.length]!.id);
+      } else if (e.altKey && e.key === "ArrowLeft") {
+        const i = VIEWS.findIndex((v) => v.id === view);
+        setView(VIEWS[(i - 1 + VIEWS.length) % VIEWS.length]!.id);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view]);
 
   const signOut = async () => {
     try {
-      await api.logout(); // invalidate the session server-side (best-effort)
-    } catch {
-      /* session may already be gone */
-    }
+      await api.logout();
+    } catch { /* session may be gone */ }
     clearToken();
     setTokenState("");
-    setTab("overview");
+    setView("overview");
   };
 
-  if (!token) {
-    return <Login onLogin={(t) => { setToken(t); setTokenState(t); }} />;
+  const celebrate = () => {
+    setConfetti(true);
+    if (confettiTimer.current) clearTimeout(confettiTimer.current);
+    confettiTimer.current = setTimeout(() => setConfetti(false), 3200);
+  };
+
+  if (!booted && token) {
+    return (
+      <BootSplash
+        onDone={() => {
+          sessionStorage.setItem("exec_os_booted", "1");
+          setBooted(true);
+          celebrate();
+        }}
+      />
+    );
   }
+
+  if (!token) {
+    return <Login onLogin={(t) => { setToken(t); setTokenState(t); void load(); celebrate(); }} />;
+  }
+
+  const current = VIEW_MAP.get(view) ?? VIEWS[0]!;
+  const props: ViewProps = { data: data ?? ({} as DataBundle), mutate: async () => { await load(); }, notify };
+  const C = current.comp;
 
   return (
     <div>
+      {confetti && <Confetti />}
       <header>
-        <h1>Zarlino <span>Executive OS</span></h1>
+        <div>
+          <h1>Zarlino <span>Executive OS</span></h1>
+          <Ticker />
+        </div>
         <nav>
-          {TABS.map((t) => (
-            <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
-              {t.label}
+          {VIEWS.map((v) => (
+            <button key={v.id} className={view === v.id ? "active" : ""} onClick={() => setView(v.id)} title={v.label}>
+              {v.emoji}
+              <span className="nav-label">{v.label}</span>
             </button>
           ))}
-          <button
-            className="ghost"
-            onClick={() => void signOut()}
-            title="Sign out (ends this session)"
-          >
-            Sign out
+          <button className="ghost" onClick={() => void signOut()} title="Sign out (Ctrl+K to jump)">
+            ⏻
           </button>
         </nav>
       </header>
 
-      {tab === "overview" && <OverviewView />}
-      {tab === "doctor" && <DoctorView />}
-      {tab === "chat" && <ChatView />}
-      {tab === "tasks" && <TasksView />}
-      {tab === "approvals" && <ApprovalsView />}
-      {tab === "productivity" && <ProductivityView />}
-      {tab === "settings" && <SettingsView />}
+      {error && !data && <div className="error-box">{error}</div>}
+
+      {toast && <div className={`toast ${toast.ok ? "ok" : "fail"}`} key={toast.id}>{toast.text}</div>}
+
+      <Suspense
+        fallback={
+          <div className="loading">
+            <span className="dot" /><span className="dot" /><span className="dot" /> loading {current.label}…
+          </div>
+        }
+      >
+        <C {...props} />
+      </Suspense>
+
+      <CommandPalette
+        open={palette}
+        onClose={() => setPalette(false)}
+        onPick={(id) => setView(id)}
+        items={VIEWS.map((v) => ({ id: v.id, label: `${v.emoji} ${v.label}`, hint: v.group }))}
+      />
+
+      <footer className="muted">
+        <span>Ctrl/⌘+K jump · Alt+←/→ views · {VIEWS.length} views · data refreshes every 60s</span>
+      </footer>
     </div>
   );
 }
 
-// ---- login -----------------------------------------------------------------
+// ---- Login ------------------------------------------------------------------
 
 function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [username, setUsername] = useState("");
@@ -86,13 +211,11 @@ function Login({ onLogin }: { onLogin: (token: string) => void }) {
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    const u = username.trim();
-    if (!u || !password || busy) return;
+    if (!username.trim() || !password || busy) return;
     setBusy(true);
     setError("");
     try {
-      const res = await api.login(u, password);
-      // The returned session token becomes the bearer token for the session.
+      const res = await api.login(username.trim(), password);
       onLogin(res.token);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -102,912 +225,18 @@ function Login({ onLogin }: { onLogin: (token: string) => void }) {
   };
 
   return (
-    <div>
-      <header>
+    <div className="login-wrap">
+      <div className="card login-card">
         <h1>Zarlino <span>Executive OS</span></h1>
-      </header>
-      <div className="card" style={{ maxWidth: 460 }}>
-        <h2>Founder sign in</h2>
-        <p className="muted">
-          Sign in with your Founder username and password. Sessions last 30 days; you can rotate
-          the password any time from Settings.
-        </p>
+        <p className="muted">Sign in with your Founder username and password. Sessions last 30 days.</p>
         {error && <div className="error-box">{error}</div>}
         <label>Username</label>
-        <input
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="Khritical"
-          autoFocus
-          autoComplete="username"
-        />
+        <input value={username} onChange={(e) => setUsername(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="Khritical" autoFocus autoComplete="username" />
         <label>Password</label>
-        <input
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="••••"
-          autoComplete="current-password"
-        />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="••••" autoComplete="current-password" />
         <div className="row" style={{ marginTop: 14 }}>
           <button className="action" onClick={submit} disabled={busy || !username.trim() || !password}>
             {busy ? "Signing in…" : "Sign in"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---- overview ---------------------------------------------------------------
-
-function OverviewView() {
-  const [data, setData] = useState<Overview | null>(null);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      setData(await api.overview());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  if (error) return <div className="error-box">{error}</div>;
-  if (!data) return <p className="muted">Loading overview…</p>;
-
-  return (
-    <div>
-      <div className="card">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h2>Executive state</h2>
-          <span className={`badge ${data.state.status === "GREEN" ? "ok" : "warn"}`}>{data.state.status}</span>
-        </div>
-        <p className="muted">
-          Mode: <span className="mono">{data.state.mode}</span> · Products:{" "}
-          {data.products.map((p) => `${p.name} (${p.status})`).join(", ") || "none"}
-        </p>
-      </div>
-
-      <div className="grid">
-        {Object.entries(data.counters).map(([k, v]) => (
-          <div className="metric" key={k}>
-            <div className="value">{v}</div>
-            <div className="key">{k}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="card section-gap">
-        <h2>Recent audit trail</h2>
-        {data.recentAudit.length === 0 ? (
-          <p className="muted">No audit entries yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>Time</th><th>Actor</th><th>Action</th></tr>
-            </thead>
-            <tbody>
-              {data.recentAudit.map((a) => (
-                <tr key={a.id}>
-                  <td className="mono muted">{new Date(a.created_at).toLocaleString()}</td>
-                  <td>{a.actor}</td>
-                  <td className="mono">{a.action}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---- doctor -----------------------------------------------------------------
-
-function DoctorView() {
-  const [report, setReport] = useState<DoctorReport | null>(null);
-  const [logs, setLogs] = useState<DoctorLog[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [autoFix, setAutoFix] = useState(true);
-
-  const loadLogs = useCallback(async () => {
-    try {
-      setLogs((await api.doctorLogs()).logs);
-    } catch {
-      /* non-fatal */
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadLogs();
-  }, [loadLogs]);
-
-  const run = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      setReport(await api.doctorRun(autoFix));
-      await loadLogs();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const runMaintenance = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const out = await api.maintenance();
-      setError(`Maintenance complete: ${JSON.stringify(out)}`);
-      await loadLogs();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <div className="card">
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <h2>System Doctor</h2>
-          <div className="row">
-            <label style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-              <input type="checkbox" checked={autoFix} onChange={(e) => setAutoFix(e.target.checked)} style={{ width: "auto" }} />
-              auto-fix
-            </label>
-            <button className="action" onClick={run} disabled={busy}>
-              {busy ? "Running…" : "Run Doctor"}
-            </button>
-            <button className="ghost" onClick={runMaintenance} disabled={busy}>
-              Maintenance sweep
-            </button>
-          </div>
-        </div>
-        <p className="muted">
-          Runs every 6h automatically on the worker (cron + alarm) and on every wake. Checks schema
-          migrations, DB tables, stale runs, expired leases/sessions, budget overrides, metrics, secrets
-          and KV health — and auto-fixes what it can.
-        </p>
-      </div>
-
-      {error && <div className="error-box">{error}</div>}
-
-      {report && (
-        <div className="card">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <h2>
-              Report —{" "}
-              <span className={report.healthy ? "badge ok" : "badge warn"}>
-                {report.healthy ? "HEALTHY" : "ISSUES FOUND"}
-              </span>
-            </h2>
-            <span className="muted mono">
-              {new Date(report.generatedAt).toLocaleString()} · trigger={report.trigger} · autoFix={String(report.autoFix)}
-            </span>
-          </div>
-          <table>
-            <thead>
-              <tr><th>Status</th><th>Check</th><th>Detail</th></tr>
-            </thead>
-            <tbody>
-              {report.checks.map((c) => (
-                <tr key={c.id}>
-                  <td><span className={`badge ${c.status === "OK" ? "ok" : c.status === "WARN" ? "warn" : "fail"}`}>{c.status}</span></td>
-                  <td className="mono">{c.id}</td>
-                  <td>
-                    {c.detail}
-                    {c.fixed && <div className="muted">↳ FIXED: {c.fixed}</div>}
-                    {c.action && <div className="muted">↳ ACTION: {c.action}</div>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="muted mono">
-            Summary: {report.summary.ok}/{report.summary.total} ok · {report.summary.warn} warn ·{" "}
-            {report.summary.fail} fail · {report.summary.fixed} fixed
-          </p>
-        </div>
-      )}
-
-      <div className="card">
-        <h2>Doctor run history</h2>
-        {logs.length === 0 ? (
-          <p className="muted">No runs recorded yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>Time</th><th>Trigger</th><th>Auto-fix</th><th>Summary</th></tr>
-            </thead>
-            <tbody>
-              {logs.map((l) => {
-                let summary = l.summary_json;
-                try {
-                  summary = JSON.stringify(JSON.parse(l.summary_json));
-                } catch { /* keep raw */ }
-                return (
-                  <tr key={l.id}>
-                    <td className="mono muted">{new Date(l.run_at).toLocaleString()}</td>
-                    <td className="mono">{l.trigger}</td>
-                    <td>{l.auto_fix ? "yes" : "no"}</td>
-                    <td className="mono">{summary}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---- chat -------------------------------------------------------------------
-
-function ChatView() {
-  const [sessionId, setSessionId] = useState("default");
-  const [input, setInput] = useState("");
-  const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; content: string }>>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const send = async () => {
-    const text = input.trim();
-    if (!text || busy) return;
-    setInput("");
-    setError("");
-    setMessages((m) => [...m, { role: "user", content: text }]);
-    setBusy(true);
-    try {
-      const reply = await api.chat(text, sessionId);
-      setMessages((m) => [...m, { role: "assistant", content: reply.reply }]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <div className="card">
-        <h2>Chat with the Executive</h2>
-        <label>Session id</label>
-        <input value={sessionId} onChange={(e) => setSessionId(e.target.value)} className="mono" />
-        <div className="chat-log" style={{ marginTop: 12 }}>
-          {messages.length === 0 && <p className="muted">No messages yet. Ask the Executive anything.</p>}
-          {messages.map((m, i) => (
-            <div key={i} className={`msg ${m.role}`}>
-              {m.content}
-            </div>
-          ))}
-          {busy && <div className="msg assistant muted">Thinking…</div>}
-        </div>
-        {error && <div className="error-box">{error}</div>}
-        <div className="row">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            placeholder="Message the Executive… (Enter to send, Shift+Enter for newline)"
-            disabled={busy}
-          />
-          <button className="action" onClick={send} disabled={busy || !input.trim()}>
-            Send
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---- tasks ------------------------------------------------------------------
-
-function TasksView() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [title, setTitle] = useState("");
-  const [priority, setPriority] = useState("P2");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      setTasks((await api.tasks()).tasks);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const create = async () => {
-    if (!title.trim() || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api.createTask(title.trim(), undefined, priority);
-      setTitle("");
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <div className="card">
-        <h2>Create task</h2>
-        {error && <div className="error-box">{error}</div>}
-        <label>Title</label>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Investigate the noisy threshold in ZScorch" />
-        <div className="row" style={{ marginTop: 10 }}>
-          <label style={{ margin: 0 }}>Priority</label>
-          <select
-            value={priority}
-            onChange={(e) => setPriority(e.target.value)}
-            style={{ background: "var(--bg)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px" }}
-          >
-            <option value="P0">P0 — critical</option>
-            <option value="P1">P1 — high</option>
-            <option value="P2">P2 — medium</option>
-            <option value="P3">P3 — low</option>
-          </select>
-          <button className="action" onClick={create} disabled={busy || !title.trim()}>
-            Create
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>Open tasks</h2>
-        {tasks.length === 0 ? (
-          <p className="muted">No tasks yet.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>Title</th><th>Status</th><th>Priority</th><th>Created</th></tr>
-            </thead>
-            <tbody>
-              {tasks.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.title}</td>
-                  <td><span className={`badge ${t.status === "DONE" ? "ok" : "warn"}`}>{t.status}</span></td>
-                  <td><span className="badge">{t.priority}</span></td>
-                  <td className="mono muted">{new Date(t.created_at).toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---- approvals ---------------------------------------------------------------
-
-function ApprovalsView() {
-  const [approvals, setApprovals] = useState<Approval[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  const load = useCallback(async () => {
-    try {
-      setApprovals((await api.approvals()).approvals);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const decide = async (id: string, decision: string) => {
-    setBusy(true);
-    setError("");
-    try {
-      await api.decideApproval(id, decision);
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <div className="card">
-        <h2>Approval requests</h2>
-        {error && <div className="error-box">{error}</div>}
-        {approvals.length === 0 ? (
-          <p className="muted">No approval requests.</p>
-        ) : (
-          <table>
-            <thead>
-              <tr><th>Title</th><th>Status</th><th>Priority</th><th>Detail</th><th>Action</th></tr>
-            </thead>
-            <tbody>
-              {approvals.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.title || a.action_label}</td>
-                  <td><span className={`badge ${a.status === "APPROVED" ? "ok" : a.status === "REJECTED" ? "fail" : "warn"}`}>{a.status}</span></td>
-                  <td><span className="badge">{a.priority}</span></td>
-                  <td className="muted">{a.detail}</td>
-                  <td>
-                    {a.status === "PENDING" ? (
-                      <div className="row">
-                        <button className="ghost" disabled={busy} onClick={() => decide(a.id, "APPROVED")}>Approve</button>
-                        <button className="ghost" disabled={busy} onClick={() => decide(a.id, "REJECTED")}>Reject</button>
-                      </div>
-                    ) : (
-                      <span className="muted">{a.decided_by ?? ""}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ---- productivity ------------------------------------------------------------
-
-function ProductivityView() {
-  const [report, setReport] = useState<ProductivityReport | null>(null);
-  const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [contradictions, setContradictions] = useState<Contradiction[]>([]);
-  const [openCount, setOpenCount] = useState(0);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [resolutionInputs, setResolutionInputs] = useState<Record<string, string>>({});
-
-  const load = useCallback(async () => {
-    setError("");
-    try {
-      const [r, a, c, t] = await Promise.all([
-        api.productivityReport(),
-        api.productivityAssignments(),
-        api.productivityContradictions(),
-        api.tasks(),
-      ]);
-      setReport(r);
-      setAssignments(a.assignments);
-      setContradictions(c.contradictions);
-      setOpenCount(c.open);
-      setTasks(t.tasks.filter((x) => x.status === "OPEN").slice(0, 100));
-    } catch (e2) {
-      setError(e2 instanceof Error ? e2.message : String(e2));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const runOptimize = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const r = await api.productivityOptimize();
-      setError(`Optimization complete: ${r.summary.applied} applied · ${r.summary.recommended} recommended`);
-      await load();
-    } catch (e2) {
-      setError(e2 instanceof Error ? e2.message : String(e2));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const detect = async () => {
-    setBusy(true);
-    setError("");
-    try {
-      const r = await api.productivityDetect();
-      setError(`Contradiction scan complete: ${r.created} new finding(s)`);
-      await load();
-    } catch (e2) {
-      setError(e2 instanceof Error ? e2.message : String(e2));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const resolve = async (id: string, status: string) => {
-    const resolution = (resolutionInputs[id] ?? "").trim();
-    if (!resolution) return;
-    setBusy(true);
-    setError("");
-    try {
-      await api.productivityResolve(id, resolution, status);
-      setResolutionInputs((r) => ({ ...r, [id]: "" }));
-      await load();
-    } catch (e2) {
-      setError(e2 instanceof Error ? e2.message : String(e2));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const assign = async (taskId: string, roleId: string) => {
-    setBusy(true);
-    setError("");
-    try {
-      await api.productivityAssign(taskId, roleId);
-      await load();
-    } catch (e2) {
-      setError(e2 instanceof Error ? e2.message : String(e2));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      {error && <div className="error-box">{error}</div>}
-
-      {report && (
-        <>
-          <div className="card">
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <h2>Productivity Manager</h2>
-              <div className="row">
-                <button className="action" onClick={runOptimize} disabled={busy}>
-                  {busy ? "Working…" : "Run optimization"}
-                </button>
-                <button className="ghost" onClick={detect} disabled={busy}>
-                  Scan for contradictions
-                </button>
-              </div>
-            </div>
-            <div className="grid">
-              <div className="metric">
-                <div className="value">{report.assignments.open}</div>
-                <div className="key">open assignments</div>
-              </div>
-              <div className="metric">
-                <div className="value">{openCount}</div>
-                <div className="key">open contradictions</div>
-              </div>
-              <div className="metric">
-                <div className="value">{report.optimizationEvents.applied}</div>
-                <div className="key">optimizations applied</div>
-              </div>
-              <div className="metric">
-                <div className="value">{report.today.tokens.toLocaleString()}</div>
-                <div className="key">tokens today</div>
-              </div>
-              <div className="metric">
-                <div className="value">${report.today.cost.toFixed(2)}</div>
-                <div className="key">est. cost today</div>
-              </div>
-            </div>
-          </div>
-
-          <div className="card">
-            <h2>Token budgets</h2>
-            {report.budget.length === 0 ? (
-              <p className="muted">No budgets tracked yet — run optimization to seed the global budget.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr><th>Scope</th><th>Monthly budget</th><th>Used (month)</th><th>Used (today)</th><th>Usage</th><th>Tier</th></tr>
-                </thead>
-                <tbody>
-                  {report.budget.map((b) => (
-                    <tr key={`${b.scope}:${b.scopeId ?? ""}`}>
-                      <td className="mono">{b.scope}{b.scopeId ? `:${b.scopeId}` : ""}</td>
-                      <td className="mono">{b.monthlyBudget?.toLocaleString() ?? "—"}</td>
-                      <td className="mono">{b.tokensUsedMonth.toLocaleString()}</td>
-                      <td className="mono">{b.tokensUsedToday.toLocaleString()}</td>
-                      <td>
-                        <span className={`badge ${b.status === "OVER" ? "fail" : b.status === "WARN" ? "warn" : "ok"}`}>
-                          {b.usagePctMonth}%
-                        </span>
-                      </td>
-                      <td className="mono">{b.modelTier ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          <div className="card">
-            <h2>Cost efficiency by role</h2>
-            {report.efficiency.length === 0 ? (
-              <p className="muted">No completed assignments yet — efficiency appears here as work finishes.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr><th>Role</th><th>Tasks done</th><th>Total cost</th><th>Cost / task</th></tr>
-                </thead>
-                <tbody>
-                  {report.efficiency.map((e) => (
-                    <tr key={e.roleId}>
-                      <td>{e.roleName}</td>
-                      <td>{e.done}</td>
-                      <td className="mono">${e.cost.toFixed(2)}</td>
-                      <td className="mono">${e.costPerTask.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          <div className="card">
-            <h2>Contradictions & misconceptions</h2>
-            {contradictions.length === 0 ? (
-              <p className="muted">No contradiction records. Run "Scan for contradictions" to check the store.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr><th>Status</th><th>Kind</th><th>Conflict</th><th>Resolution</th></tr>
-                </thead>
-                <tbody>
-                  {contradictions.slice(0, 50).map((c) => (
-                    <tr key={c.id}>
-                      <td><span className={`badge ${c.status === "OPEN" ? "warn" : c.status === "RESOLVED" ? "ok" : "muted"}`}>{c.status}</span></td>
-                      <td className="mono">{c.kind}</td>
-                      <td>
-                        <div><b>{c.claim_a}</b></div>
-                        <div className="muted">{c.claim_b}</div>
-                      </td>
-                      <td>
-                        {c.status === "OPEN" ? (
-                          <div className="row">
-                            <input
-                              placeholder="Resolution…"
-                              value={resolutionInputs[c.id] ?? ""}
-                              onChange={(e2) => setResolutionInputs((r) => ({ ...r, [c.id]: e2.target.value }))}
-                            />
-                            <button className="ghost" disabled={busy || !(resolutionInputs[c.id] ?? "").trim()} onClick={() => resolve(c.id, "RESOLVED")}>
-                              Resolve
-                            </button>
-                            <button className="ghost" disabled={busy || !(resolutionInputs[c.id] ?? "").trim()} onClick={() => resolve(c.id, "DISMISSED")}>
-                              Dismiss
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="muted">{c.resolution ?? ""}</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          <div className="card">
-            <h2>Assignments</h2>
-            {assignments.length === 0 ? (
-              <p className="muted">No assignments yet — assign an open task below.</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr><th>Task</th><th>Role</th><th>Status</th><th>Tokens</th><th>Cost</th></tr>
-                </thead>
-                <tbody>
-                  {assignments.slice(0, 40).map((a) => (
-                    <tr key={a.id}>
-                      <td className="mono">{a.task_id}</td>
-                      <td className="mono">{a.role_id ?? a.assignee ?? "—"}</td>
-                      <td><span className="badge">{a.status}</span></td>
-                      <td className="mono">{a.tokens_used}/{a.token_budget ?? "—"}</td>
-                      <td className="mono">${a.cost_actual.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <h3>Assign an open task</h3>
-            {tasks.length === 0 ? (
-              <p className="muted">No open tasks to assign.</p>
-            ) : (
-              <table>
-                <tbody>
-                  {tasks.slice(0, 10).map((t) => (
-                    <tr key={t.id}>
-                      <td>{t.title}</td>
-                      <td className="mono muted">{t.priority}</td>
-                      <td>
-                        <div className="row">
-                          <button className="ghost" disabled={busy} onClick={() => assign(t.id, "person_role_dsp_engineer")}>
-                            DSP
-                          </button>
-                          <button className="ghost" disabled={busy} onClick={() => assign(t.id, "person_role_qa_engineer")}>
-                            QA
-                          </button>
-                          <button className="ghost" disabled={busy} onClick={() => assign(t.id, "person_role_research_engineer")}>
-                            Research
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---- settings ---------------------------------------------------------------
-
-function SettingsView() {
-  const [overrides, setOverrides] = useState<BudgetOverrides>({});
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState(false);
-
-  // Change-password state.
-  const [curPassword, setCurPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [pwBusy, setPwBusy] = useState(false);
-
-  const load = useCallback(async () => {
-    try {
-      const s = await api.settings();
-      setOverrides(s.budgetOverrides);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const set = (key: keyof BudgetOverrides, value: string) => {
-    setOverrides((o) => ({ ...o, [key]: value === "" ? undefined : Number(value) }));
-    setSaved(false);
-  };
-
-  const save = async () => {
-    setBusy(true);
-    setError("");
-    setSaved(false);
-    try {
-      await api.saveSettings(overrides);
-      setSaved(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const fields: Array<{ key: keyof BudgetOverrides; label: string; hint: string }> = [
-    { key: "aiDailyBudget", label: "AI daily budget ($)", hint: "Hard cap on model spend per day" },
-    { key: "aiMonthlyBudget", label: "AI monthly budget ($)", hint: "Hard cap on model spend per month" },
-    { key: "aiPerTaskBudget", label: "AI per-task budget ($)", hint: "Cap on a single task's spend" },
-    { key: "aiPerRunBudget", label: "AI per-run budget ($)", hint: "Cap on a single agent run's spend" },
-  ];
-
-  const changePassword = async () => {
-    if (newPassword.length < 4) {
-      setPwMsg({ ok: false, text: "New password must be at least 4 characters." });
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setPwMsg({ ok: false, text: "New password and confirmation do not match." });
-      return;
-    }
-    setPwBusy(true);
-    setPwMsg(null);
-    try {
-      await api.changePassword(curPassword, newPassword);
-      setPwMsg({ ok: true, text: "Password changed. Other sessions were signed out." });
-      setCurPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    } catch (e) {
-      setPwMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setPwBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <div className="card" style={{ maxWidth: 520 }}>
-        <h2>Budget overrides</h2>
-        <p className="muted">Leave a field empty to use the worker defaults (set in wrangler.toml).</p>
-        {error && <div className="error-box">{error}</div>}
-        {saved && <div className="error-box" style={{ borderColor: "var(--ok)", color: "var(--ok)" }}>Saved.</div>}
-        {fields.map((f) => (
-          <div key={f.key}>
-            <label>{f.label} <span className="muted">— {f.hint}</span></label>
-            <input
-              type="number"
-              value={overrides[f.key] ?? ""}
-              onChange={(e) => set(f.key, e.target.value)}
-              placeholder="default"
-            />
-          </div>
-        ))}
-        <div className="row" style={{ marginTop: 16 }}>
-          <button className="action" onClick={save} disabled={busy}>
-            {busy ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
-
-      <div className="card" style={{ maxWidth: 520 }}>
-        <h2>Change password</h2>
-        <p className="muted">
-          Rotate your Founder password. Other signed-in sessions are ended immediately.
-        </p>
-        {pwMsg && (
-          <div
-            className="error-box"
-            style={pwMsg.ok ? { borderColor: "var(--ok)", color: "var(--ok)" } : undefined}
-          >
-            {pwMsg.text}
-          </div>
-        )}
-        <label>Current password</label>
-        <input
-          type="password"
-          value={curPassword}
-          onChange={(e) => setCurPassword(e.target.value)}
-          autoComplete="current-password"
-        />
-        <label>New password</label>
-        <input
-          type="password"
-          value={newPassword}
-          onChange={(e) => setNewPassword(e.target.value)}
-          autoComplete="new-password"
-        />
-        <label>Confirm new password</label>
-        <input
-          type="password"
-          value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
-          autoComplete="new-password"
-        />
-        <div className="row" style={{ marginTop: 16 }}>
-          <button
-            className="action"
-            onClick={changePassword}
-            disabled={pwBusy || !curPassword || !newPassword || !confirmPassword}
-          >
-            {pwBusy ? "Changing…" : "Change password"}
           </button>
         </div>
       </div>
