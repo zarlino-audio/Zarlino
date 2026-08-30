@@ -16,6 +16,7 @@
  * Requires DEEPSEEK_API_KEY + FOUNDER_AUTH_TOKEN (from .dev.vars).
  */
 
+import { hostname as osHostname } from "node:os";
 import { API_KEY, EXEC_URL, TOKEN, ensureApiKey, runTurn } from "./local-agent.js";
 
 const POLL_MS = 30_000; // claim + heartbeat cadence
@@ -55,9 +56,7 @@ async function beacon(claimed: boolean): Promise<void> {
 
 function requireHost(): string {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const os = require("node:os") as { hostname(): string };
-    return os.hostname();
+    return osHostname();
   } catch {
     return "unknown-host";
   }

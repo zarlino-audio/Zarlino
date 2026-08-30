@@ -15,8 +15,8 @@
     "maintenance": "tsx scripts/doctor.ts --maintenance",
     "agent:local": "tsx scripts/local-agent.ts",
     "agent:local:yes": "tsx scripts/local-agent.ts --yes",
-    "agent:daemon": "tsx scripts/local-daemon.ts",
-    "agent:daemon:loop": "tsx scripts/local-daemon.ts --loop",
+    "agent:daemon": "tsx scripts/local-daemon.ts --yes",
+    "agent:daemon:loop": "tsx scripts/local-daemon.ts --loop --yes",
     "build:console": "npm --prefix web run build",
     "console:dev": "npm --prefix web run dev"
   },
