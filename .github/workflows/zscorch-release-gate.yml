@@ -1,0 +1,97 @@
+name: ZScorch Release Gate
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/ZScorch/**'
+      - 'shared/**'
+      - 'cmake/ZarlinoTest.cmake'
+      - '.github/workflows/zscorch-release-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/ZScorch/**'
+      - 'shared/**'
+      - 'cmake/ZarlinoTest.cmake'
+  workflow_dispatch:
+
+jobs:
+  windows-build-package:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      # Production RSA public key for license verification (embedded at configure time).
+      # Set this secret to ship a production build; unset = placeholder (trial-only).
+      ZARLINO_LICENSE_PUBLIC_KEY: ${{ secrets.ZARLINO_LICENSE_PUBLIC_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=OFF
+
+      - name: Build ZScorch (VST3 + Standalone)
+        run: cmake --build build --config Release --target ZScorch --parallel
+
+      # --- Sign plugin binaries IN-PLACE before packaging (inert until enabled) ---
+      # Master switch: ZARLINO_SIGNING_ENABLED must be 'true' at repo/org level.
+      # Signs the VST3 module DLL and the standalone exe so the distributed builds
+      # are Authenticode-signed. File-digest SHA-256 with an RFC3161 trust timestamp
+      # (the action defaults to a Microsoft timestamp service).
+      # This resolves risk_zscorch_signing (MEDIUM) once the certificate + secrets exist.
+      - name: Sign VST3 + Standalone binaries (Azure Artifact Signing)
+        if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
+        uses: Azure/artifact-signing-action@v2
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
+          files: |
+            build/plugins/ZScorch/ZScorch_artefacts/Release/VST3/ZScorch.vst3/Contents/x86_64-win/ZScorch.vst3
+            build/plugins/ZScorch/ZScorch_artefacts/Release/Standalone/ZScorch.exe
+          file-digest: SHA256
+
+      # --- Verify signature (inert until enabled) ---
+      - name: Verify Authenticode signatures
+        if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
+        shell: pwsh
+        run: |
+          Get-AuthenticodeSignature "build/plugins/ZScorch/ZScorch_artefacts/Release/VST3/ZScorch.vst3/Contents/x86_64-win/ZScorch.vst3" |
+            ForEach-Object { if ($_.Status -ne 'Valid') { throw "VST3 signature invalid: $($_.Status)" } }
+          Get-AuthenticodeSignature "build/plugins/ZScorch/ZScorch_artefacts/Release/Standalone/ZScorch.exe" |
+            ForEach-Object { if ($_.Status -ne 'Valid') { throw "Standalone signature invalid: $($_.Status)" } }
+
+      # --- Package raw format artifacts ---
+      - name: Package VST3 artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/vst3
+          Copy-Item -Recurse -Path "build/plugins/ZScorch/ZScorch_artefacts/Release/VST3/ZScorch.vst3/*" -Destination artifacts/vst3/ -Force
+          Compress-Archive -Path artifacts/vst3/* -DestinationPath "artifacts/ZScorch-v1.0.0-Windows-VST3.zip"
+
+      - name: Package Standalone artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/standalone
+          Copy-Item -Path "build/plugins/ZScorch/ZScorch_artefacts/Release/Standalone/ZScorch.exe" -Destination artifacts/standalone/ -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "plugins/ZScorch/README.md" -Destination artifacts/standalone/ -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path artifacts/standalone/* -DestinationPath "artifacts/ZScorch-v1.0.0-Windows-Standalone.zip"
+
+      # --- Upload all artifacts ---
+      - name: Upload VST3 zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZScorch-v1.0.0-Windows-VST3
+          path: artifacts/ZScorch-v1.0.0-Windows-VST3.zip
+          if-no-files-found: error
+
+      - name: Upload Standalone zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZScorch-v1.0.0-Windows-Standalone
+          path: artifacts/ZScorch-v1.0.0-Windows-Standalone.zip
+          if-no-files-found: warn
