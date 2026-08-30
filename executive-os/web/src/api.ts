@@ -43,6 +43,24 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   health: () => request<Health>("/api/health"),
 
+  // Username/password login returns a session token, which is then sent as
+  // Authorization: Bearer for every subsequent request.
+  login: (username: string, password: string) =>
+    request<{ ok: boolean; token: string; expiresAt: string }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () =>
+    request<{ ok: boolean }>("/api/auth/logout", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean; note: string }>("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
   overview: () => request<Overview>("/api/executive/overview"),
 
   doctorRun: (autoFix: boolean) =>

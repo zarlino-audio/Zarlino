@@ -125,6 +125,19 @@ npm run console:dev       # http://127.0.0.1:5173
 npm run build:console     # rebuild web/dist
 ```
 
+### Auth
+
+**Founder sign-in is username/password** (seeded by migration v19: username
+`Khritical`, a temporary password the Founder MUST rotate from the console →
+Settings → Change password). Passwords are PBKDF2-SHA256 (100k iterations,
+`src/core/auth/passwords.ts`), sessions last 30 days, 5 failed attempts lock
+the account for 15 minutes, and changing the password signs out every other
+device. `POST /api/auth/login` returns a session token used as
+`Authorization: Bearer …`; `POST /api/auth/change-password` rotates it.
+
+`FOUNDER_AUTH_TOKEN` remains as a **machine/API key** for the CLI and local
+agent (`npm run doctor`, `npm run agent:local` read it from `.dev.vars`).
+
 ### Secrets
 
 Local: `executive-os/.dev.vars` (git-ignored). Production: `wrangler secret put <NAME>`.
@@ -132,7 +145,7 @@ Local: `executive-os/.dev.vars` (git-ignored). Production: `wrangler secret put 
 | Secret | Purpose |
 | --- | --- |
 | `DEEPSEEK_API_KEY` | model calls (DeepSeek OpenAI-compatible) |
-| `FOUNDER_AUTH_TOKEN` | console/API auth (send as `Authorization: Bearer …`) |
+| `FOUNDER_AUTH_TOKEN` | machine/API auth for the CLI + local agent (Bearer) |
 | `GITHUB_TOKEN` | GitHub integration tools |
 | `CF_API_TOKEN` | Cloudflare pages deploy tool |
 | `PAYSTACK_SECRET_KEY` | revenue + transfer tools |

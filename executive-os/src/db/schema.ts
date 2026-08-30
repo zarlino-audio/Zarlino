@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -395,6 +395,24 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON auth_sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON auth_sessions(expires_at);
+`;
+
+/**
+ * Founder credentials seed (migration v19): switches the Founder to
+ * username/password auth (username: Khritical, temporary password). The
+ * hash below is PBKDF2-SHA256(100k) of the temporary password with a fixed
+ * salt, in the same `salt:hex` format hashPassword produces. The Founder
+ * MUST change this temporary password via POST /api/auth/change-password
+ * (console → Settings → Change password). INSERT OR IGNORE keeps any
+ * later credential change intact across redeploys.
+ */
+export const FOUNDER_CREDENTIALS_SEED_SQL = `
+INSERT OR REPLACE INTO founder_credentials
+ (id, username, password_hash, failed_attempts, locked_until, created_at, updated_at)
+VALUES
+ ('founder', 'Khritical',
+  'a1b2c3d4e5f60718293a4b5c6d7e8f90:426c60969956df34000c635e89e6cf312bc87cd6247ac0c35a8b73a065caca32',
+  0, NULL, strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;
 
 /**

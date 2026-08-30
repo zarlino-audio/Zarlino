@@ -31,6 +31,17 @@ export function App() {
   const [token, setTokenState] = useState(getToken());
   const [tab, setTab] = useState<Tab>("overview");
 
+  const signOut = async () => {
+    try {
+      await api.logout(); // invalidate the session server-side (best-effort)
+    } catch {
+      /* session may already be gone */
+    }
+    clearToken();
+    setTokenState("");
+    setTab("overview");
+  };
+
   if (!token) {
     return <Login onLogin={(t) => { setToken(t); setTokenState(t); }} />;
   }
@@ -47,8 +58,8 @@ export function App() {
           ))}
           <button
             className="ghost"
-            onClick={() => { clearToken(); setTokenState(""); }}
-            title="Sign out (removes the stored founder token from this browser)"
+            onClick={() => void signOut()}
+            title="Sign out (ends this session)"
           >
             Sign out
           </button>
@@ -69,21 +80,20 @@ export function App() {
 // ---- login -----------------------------------------------------------------
 
 function Login({ onLogin }: { onLogin: (token: string) => void }) {
-  const [value, setValue] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    const t = value.trim();
-    if (!t) return;
+    const u = username.trim();
+    if (!u || !password || busy) return;
     setBusy(true);
     setError("");
     try {
-      // Validate the token against the live worker before storing it.
-      const health = await fetch("/api/health").then((r) => r.json());
-      if (!health?.ok) throw new Error("Worker unreachable");
-      // Token is validated by the first authorized request; store optimistically.
-      onLogin(t);
+      const res = await api.login(u, password);
+      // The returned session token becomes the bearer token for the session.
+      onLogin(res.token);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -99,22 +109,31 @@ function Login({ onLogin }: { onLogin: (token: string) => void }) {
       <div className="card" style={{ maxWidth: 460 }}>
         <h2>Founder sign in</h2>
         <p className="muted">
-          Paste your founder auth token (the value of <span className="mono">FOUNDER_AUTH_TOKEN</span>).
-          It is stored only in this browser and sent as a bearer token to the Executive OS worker.
+          Sign in with your Founder username and password. Sessions last 30 days; you can rotate
+          the password any time from Settings.
         </p>
         {error && <div className="error-box">{error}</div>}
-        <label>Auth token</label>
+        <label>Username</label>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          placeholder="Khritical"
+          autoFocus
+          autoComplete="username"
+        />
+        <label>Password</label>
         <input
           type="password"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="founder_…"
-          autoFocus
+          placeholder="••••"
+          autoComplete="current-password"
         />
         <div className="row" style={{ marginTop: 14 }}>
-          <button className="action" onClick={submit} disabled={busy || !value.trim()}>
-            {busy ? "Connecting…" : "Sign in"}
+          <button className="action" onClick={submit} disabled={busy || !username.trim() || !password}>
+            {busy ? "Signing in…" : "Sign in"}
           </button>
         </div>
       </div>
@@ -853,6 +872,13 @@ function SettingsView() {
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
 
+  // Change-password state.
+  const [curPassword, setCurPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pwBusy, setPwBusy] = useState(false);
+
   const load = useCallback(async () => {
     try {
       const s = await api.settings();
@@ -892,6 +918,30 @@ function SettingsView() {
     { key: "aiPerRunBudget", label: "AI per-run budget ($)", hint: "Cap on a single agent run's spend" },
   ];
 
+  const changePassword = async () => {
+    if (newPassword.length < 4) {
+      setPwMsg({ ok: false, text: "New password must be at least 4 characters." });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwMsg({ ok: false, text: "New password and confirmation do not match." });
+      return;
+    }
+    setPwBusy(true);
+    setPwMsg(null);
+    try {
+      await api.changePassword(curPassword, newPassword);
+      setPwMsg({ ok: true, text: "Password changed. Other sessions were signed out." });
+      setCurPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (e) {
+      setPwMsg({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setPwBusy(false);
+    }
+  };
+
   return (
     <div>
       <div className="card" style={{ maxWidth: 520 }}>
@@ -913,6 +963,51 @@ function SettingsView() {
         <div className="row" style={{ marginTop: 16 }}>
           <button className="action" onClick={save} disabled={busy}>
             {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      <div className="card" style={{ maxWidth: 520 }}>
+        <h2>Change password</h2>
+        <p className="muted">
+          Rotate your Founder password. Other signed-in sessions are ended immediately.
+        </p>
+        {pwMsg && (
+          <div
+            className="error-box"
+            style={pwMsg.ok ? { borderColor: "var(--ok)", color: "var(--ok)" } : undefined}
+          >
+            {pwMsg.text}
+          </div>
+        )}
+        <label>Current password</label>
+        <input
+          type="password"
+          value={curPassword}
+          onChange={(e) => setCurPassword(e.target.value)}
+          autoComplete="current-password"
+        />
+        <label>New password</label>
+        <input
+          type="password"
+          value={newPassword}
+          onChange={(e) => setNewPassword(e.target.value)}
+          autoComplete="new-password"
+        />
+        <label>Confirm new password</label>
+        <input
+          type="password"
+          value={confirmPassword}
+          onChange={(e) => setConfirmPassword(e.target.value)}
+          autoComplete="new-password"
+        />
+        <div className="row" style={{ marginTop: 16 }}>
+          <button
+            className="action"
+            onClick={changePassword}
+            disabled={pwBusy || !curPassword || !newPassword || !confirmPassword}
+          >
+            {pwBusy ? "Changing…" : "Change password"}
           </button>
         </div>
       </div>

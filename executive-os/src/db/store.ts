@@ -1051,6 +1051,15 @@ export class ExecutiveStore implements CostStorage {
     this.sql.run("DELETE FROM auth_sessions WHERE token = ?", token);
   }
 
+  /** Delete every session except the caller's (used after a password change). Pass null to delete all. */
+  deleteSessionsExcept(keepToken: string | null): void {
+    if (keepToken) {
+      this.sql.run("DELETE FROM auth_sessions WHERE token <> ?", keepToken);
+    } else {
+      this.sql.run("DELETE FROM auth_sessions");
+    }
+  }
+
   deleteExpiredSessions(): void {
     this.sql.run("DELETE FROM auth_sessions WHERE expires_at < ?", new Date().toISOString());
   }

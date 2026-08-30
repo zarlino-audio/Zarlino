@@ -20,6 +20,7 @@ import { buildToolRegistry } from "./agent/tools";
 import type { ToolRegistry } from "./core/tools/registry";
 import { runDoctor } from "./core/doctor";
 import { createTask } from "./core/tasks/model";
+import { hashPassword, timingSafeEqual, verifyPassword } from "./core/auth/passwords";
 import {
   assignTask,
   budgetStatus,
@@ -79,13 +80,6 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
 function readBody<T>(request: Request): Promise<T> {
   return request.json() as Promise<T>;
 }
@@ -125,36 +119,6 @@ function authorized(request: Request, env: Env, store: ExecutiveStore): boolean 
 
 function internal(request: Request): boolean {
   return request.headers.get(INTERNAL_HEADER) === INTERNAL_SECRET;
-}
-
-// ---------------------------------------------------------------------------
-// Password hashing (PBKDF2-SHA256, salt:hex format) — works in Workers + Node.
-// ---------------------------------------------------------------------------
-
-function toHex(bytes: ArrayBuffer | Uint8Array): string {
-  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  return [...arr].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function hashPassword(password: string, salt?: string): Promise<string> {
-  const s = salt ?? toHex(crypto.getRandomValues(new Uint8Array(16)));
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt: enc.encode(s), iterations: 100_000, hash: "SHA-256" },
-    keyMaterial,
-    256,
-  );
-  return `${s}:${toHex(bits)}`;
-}
-
-async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  const idx = stored.lastIndexOf(":");
-  if (idx <= 0) return false;
-  const salt = stored.slice(0, idx);
-  const expected = stored.slice(idx + 1);
-  const actual = (await hashPassword(password, salt)).slice(idx + 1);
-  return timingSafeEqual(actual, expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -563,7 +527,7 @@ export class ExecutiveAgent {
       });
     }
 
-    // Auth (login is public; logout/status need a session/token).
+    // Auth (login is public; logout/status/change-password need a session/token).
     if (path === "/api/auth/login" && method === "POST") return this.handleLogin(request);
     if (!authorized(request, this.env, this.store)) {
       return json({ error: "Unauthorized" }, 401);
@@ -571,6 +535,7 @@ export class ExecutiveAgent {
     if (path === "/api/auth/logout" && method === "POST") return this.handleLogout(request);
     if (path === "/api/auth/status" && method === "GET") return json({ ok: true, authenticated: true });
     if (path === "/api/auth/bootstrap" && method === "POST") return this.handleBootstrap(request);
+    if (path === "/api/auth/change-password" && method === "POST") return this.handleChangePassword(request);
 
     // Overview
     if (path === "/api/executive/overview" && method === "GET") {
@@ -975,6 +940,41 @@ export class ExecutiveAgent {
     if (password.length < 8) return json({ error: "password must be at least 8 characters" }, 400);
     this.store.setFounderCredentials({ username, password_hash: await hashPassword(password) });
     return json({ ok: true, note: "Founder credentials configured. Log in via /api/auth/login." });
+  }
+
+  /**
+   * Change the Founder password. Requires an authenticated session/token so
+   * only the Founder (or someone with API access) can rotate it. The current
+   * password must be verified; the new password replaces it and any other
+   * active sessions are invalidated so a stolen session dies immediately.
+   */
+  private async handleChangePassword(request: Request): Promise<Response> {
+    const body = (await readBody<{ currentPassword?: string; newPassword?: string }>(request).catch(() => ({}))) as { currentPassword?: string; newPassword?: string };
+    const creds = this.store.getFounderCredentials();
+    if (!creds) return json({ error: "No founder account configured." }, 401);
+    const newPassword = body.newPassword ?? "";
+    if (newPassword.length < 4) return json({ error: "new password must be at least 4 characters" }, 400);
+    if (!(await verifyPassword(body.currentPassword ?? "", creds.password_hash))) {
+      return json({ error: "Current password is incorrect" }, 401);
+    }
+    this.store.setFounderCredentials({ username: creds.username, password_hash: await hashPassword(newPassword) });
+    // Invalidate every session except the caller's so other logged-in devices
+    // must re-authenticate with the new password.
+    const caller = request.headers.get("Authorization") || "";
+    const callerToken = caller.startsWith("Bearer ") ? caller.slice(7) : null;
+    this.store.deleteSessionsExcept(callerToken);
+    this.store.insertAudit({
+      id: newId("aud"),
+      actor: "founder",
+      action: "auth.password_changed",
+      entity_type: "founder_credentials",
+      entity_id: creds.id,
+      detail_json: JSON.stringify({ note: "Founder rotated password; other sessions invalidated." }),
+      source: "api",
+      created_at: nowIso(),
+      updated_at: nowIso(),
+    });
+    return json({ ok: true, note: "Password changed. Other sessions were signed out." });
   }
 
   private async handleLogout(request: Request): Promise<Response> {
