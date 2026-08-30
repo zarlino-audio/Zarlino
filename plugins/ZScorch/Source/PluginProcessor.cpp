@@ -34,9 +34,9 @@ namespace
                                  float bellFreq, float bellGainDb, float bellQ,
                                  float highFreq, float highGainDb, float highQ)
         {
-            *lowShelf.coefficients  = juce::dsp::IIR::Coefficients<float>::makeLowShelf  (sampleRate, lowFreq,  lowQ,  dbToGain (lowGainDb));
-            *bell.coefficients      = juce::dsp::IIR::Coefficients<float>::makePeakFilter (sampleRate, bellFreq, bellQ, dbToGain (bellGainDb));
-            *highShelf.coefficients = juce::dsp::IIR::Coefficients<float>::makeHighShelf (sampleRate, highFreq, highQ, dbToGain (highGainDb));
+            *lowShelf.coefficients  = *juce::dsp::IIR::Coefficients<float>::makeLowShelf  (sampleRate, lowFreq,  lowQ,  dbToGain (lowGainDb));
+            *bell.coefficients      = *juce::dsp::IIR::Coefficients<float>::makePeakFilter (sampleRate, bellFreq, bellQ, dbToGain (bellGainDb));
+            *highShelf.coefficients = *juce::dsp::IIR::Coefficients<float>::makeHighShelf (sampleRate, highFreq, highQ, dbToGain (highGainDb));
         }
 
         void processBlock (juce::AudioBuffer<float>& buffer)
