@@ -943,6 +943,37 @@ export class ExecutiveStore implements CostStorage {
     }
     return ids;
   }
+  /**
+   * Requeue completed/failed local tasks whose result or error mentions a
+   * retryable condition (default: the tool-call limit). A task that "finished"
+   * with the tool-call-limit message never actually completed — it returns to
+   * PENDING so the daemon retries it with the extended limit. Tasks whose text
+   * contains `exclude` (default "402" — insufficient balance, needs funding)
+   * are skipped. Uses SQL LIKE so only matching rows are read (row-budget safe).
+   * Returns the requeued ids.
+   */
+  requeueLocalTasks(opts: { match?: string; exclude?: string; limit?: number } = {}): string[] {
+    const match = opts.match ?? "tool-call limit";
+    const exclude = opts.exclude ?? "402";
+    const limit = Math.max(1, Math.min(5000, opts.limit ?? 2000));
+    const like = `%${match}%`;
+    const rows = this.sql.all<Row>(
+      "SELECT id, result, error FROM local_tasks WHERE status IN ('DONE','FAILED') AND (result LIKE ? OR error LIKE ?) ORDER BY updated_at ASC LIMIT ?",
+      like, like, limit,
+    );
+    const now = new Date().toISOString();
+    const ids: string[] = [];
+    for (const r of rows) {
+      const text = `${String(r.result ?? "")} ${String(r.error ?? "")}`;
+      if (exclude && text.includes(exclude)) continue;
+      this.sql.run(
+        "UPDATE local_tasks SET status = 'PENDING', result = NULL, error = NULL, finished_at = NULL, claimed_by = NULL, started_at = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ?",
+        now, String(r.id),
+      );
+      ids.push(String(r.id));
+    }
+    return ids;
+  }
 
   // -- uploaded files (migration v11) -------------------------------------
   createUploadedFile(f: UploadedFile): void {

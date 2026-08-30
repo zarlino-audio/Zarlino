@@ -863,7 +863,7 @@ export async function buildSystem(): Promise<string> {
   ].join("\n");
 }
 
-export async function runTurn(userMessage: string, maxToolCalls = 12): Promise<string> {
+export async function runTurn(userMessage: string, maxToolCalls = Number(process.env.LOCAL_AGENT_MAX_TOOL_CALLS) || 40): Promise<string> {
   const messages: Array<Record<string, unknown>> = [
     { role: "system", content: await buildSystem() },
     ...HISTORY.slice(-20),

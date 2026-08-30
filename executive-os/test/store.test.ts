@@ -115,6 +115,40 @@ describe("ExecutiveStore (node:sqlite)", () => {
     expect(store.claimLocalTask("daemon-b")).toBeNull();
   });
 
+  it("requeues local tasks that finished with the tool-call limit, skipping 402s", () => {
+    const now = new Date().toISOString();
+    // DONE with the limit message (runTurn returns it instead of throwing).
+    store.createLocalTask({
+      id: "lt_limited", prompt: "long task", status: "DONE", result: "Reached the tool-call limit — please rephrase or narrow the task.",
+      source: "test", created_at: now, updated_at: now,
+    });
+    // FAILED with the limit message in error.
+    store.createLocalTask({
+      id: "lt_limited2", prompt: "long task 2", status: "FAILED", error: "Reached the tool-call limit",
+      source: "test", created_at: now, updated_at: now,
+    });
+    // DONE with a funding error — must NOT be requeued.
+    store.createLocalTask({
+      id: "lt_nomoney", prompt: "paywall", status: "FAILED", error: "DeepSeek HTTP 402: Insufficient Balance",
+      source: "test", created_at: now, updated_at: now,
+    });
+    // DONE normally — must NOT be requeued.
+    store.createLocalTask({
+      id: "lt_ok", prompt: "fine", status: "DONE", result: "all good",
+      source: "test", created_at: now, updated_at: now,
+    });
+
+    const ids = store.requeueLocalTasks();
+    expect(ids).toContain("lt_limited");
+    expect(ids).toContain("lt_limited2");
+    expect(ids).not.toContain("lt_nomoney");
+    expect(ids).not.toContain("lt_ok");
+    expect(store.getLocalTask("lt_limited")?.status).toBe("PENDING");
+    expect(store.getLocalTask("lt_limited")?.result).toBeNull();
+    expect(store.getLocalTask("lt_nomoney")?.status).toBe("FAILED");
+    expect(store.getLocalTask("lt_ok")?.status).toBe("DONE");
+  });
+
   it("adapts to a legacy schema_migrations table (no name column) — production bug", () => {
     // The production store's schema_migrations predates the `name` column.
     // Reproduce that exact shape and confirm migrate() adapts in place instead

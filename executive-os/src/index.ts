@@ -1136,6 +1136,22 @@ export class ExecutiveAgent {
       this.store.finishLocalTask(body.id ?? "", (body.status === "FAILED" ? "FAILED" : "DONE") as never, body.result, body.error);
       return json({ ok: true });
     }
+    if (path === "/api/local-tasks/requeue" && method === "POST") {
+      const body = (await readBody<{ match?: string; exclude?: string; limit?: number }>(request).catch(() => ({}))) as { match?: string; exclude?: string; limit?: number };
+      const ids = this.store.requeueLocalTasks(body);
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "local_tasks.requeue",
+        entity_type: "local_tasks",
+        entity_id: "bulk",
+        detail_json: JSON.stringify({ match: body.match ?? "tool-call limit", count: ids.length, ids }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, requeued: ids.length, ids });
+    }
 
     return json({ error: "Not found", path }, 404);
   }

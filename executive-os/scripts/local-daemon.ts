@@ -21,6 +21,11 @@ import { API_KEY, EXEC_URL, TOKEN, ensureApiKey, runTurn } from "./local-agent.j
 
 const POLL_MS = 30_000; // claim + heartbeat cadence
 const LEASE_HB_MS = 60_000; // heartbeat while working (lease is 10 min)
+// Max DeepSeek tool-loop iterations per task. The old default (12–16) was
+// constantly hit on long-horizon tasks (concept→shipped pipelines, multi-file
+// builds, website deploys), which returned "Reached the tool-call limit" and
+// left the task uncompleted. Override with LOCAL_AGENT_MAX_TOOL_CALLS.
+const MAX_TOOL_CALLS = Number(process.env.LOCAL_AGENT_MAX_TOOL_CALLS) || 60;
 const LOOP = process.argv.includes("--loop");
 
 function log(...args: string[]): void {
@@ -70,7 +75,7 @@ async function runTask(task: { id: string; prompt: string }): Promise<void> {
     void beacon(false).catch(() => {});
   }, LEASE_HB_MS);
   try {
-    const result = await runTurn(task.prompt, 16);
+    const result = await runTurn(task.prompt, MAX_TOOL_CALLS);
     await post("/api/local-tasks/finish", { id: task.id, status: "DONE", result });
     log("finished task", task.id, "(DONE,", String(result.length), "chars)");
   } catch (err) {
