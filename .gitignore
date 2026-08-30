@@ -30,3 +30,6 @@ Thumbs.db
 .vscode/
 *.xcuserdata/
 *.xcworkspace/
+
+# Migration backups (data exports, not source)
+backups/

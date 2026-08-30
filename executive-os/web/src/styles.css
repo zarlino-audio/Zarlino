@@ -811,3 +811,221 @@ footer {
   background: rgba(248, 81, 73, 0.06);
 }
 
+/* ---- high-end chat (3-panel) ---- */
+.chat3 {
+  display: grid;
+  grid-template-columns: 240px 1fr 280px;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .chat3 {
+    grid-template-columns: 1fr;
+  }
+  .chat3-side, .chat3-rail {
+    display: none;
+  }
+}
+.chat3-side, .chat3-main, .chat3-rail {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.chat3-side {
+  padding: 10px;
+  max-height: 78vh;
+  overflow-y: auto;
+}
+.chat3-side-head {
+  margin-bottom: 10px;
+}
+.chat3-session {
+  padding: 9px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  margin-bottom: 4px;
+}
+.chat3-session:hover {
+  background: var(--panel-2);
+}
+.chat3-session.active {
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+.chat3-session-title {
+  font-size: 13px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.chat3-session-meta {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.chat3-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 62vh;
+}
+.chat3-log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  max-height: 62vh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.msg3 {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.msg3.assistant {
+  flex-direction: row;
+}
+.msg3-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  font-size: 17px;
+  flex-shrink: 0;
+}
+.msg3-body {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  max-width: 85%;
+}
+.msg3.user .msg3-body {
+  background: rgba(240, 180, 41, 0.08);
+  border-color: var(--accent-2);
+}
+.msg3-meta {
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+.msg3-content {
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.chat3-composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  align-items: flex-end;
+}
+.chat3-composer textarea {
+  flex: 1;
+  min-height: 48px;
+  max-height: 160px;
+}
+.chat3-composer .action {
+  height: 48px;
+  white-space: nowrap;
+}
+.chat3-rail {
+  padding: 12px;
+  max-height: 78vh;
+  overflow-y: auto;
+  font-size: 13px;
+}
+.chat3-rail h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+.rail-item {
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+/* ---- local worker cards ---- */
+.worker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.worker-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.worker-card.done {
+  border-left: 3px solid var(--ok);
+}
+.worker-card.failed {
+  border-left: 3px solid var(--fail);
+}
+.worker-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.worker-head:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.worker-prompt-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.worker-detail {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.worker-block {
+  margin-bottom: 10px;
+}
+.worker-block:last-child {
+  margin-bottom: 0;
+}
+.worker-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.worker-text {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+.worker-text.err {
+  color: var(--fail);
+}
+

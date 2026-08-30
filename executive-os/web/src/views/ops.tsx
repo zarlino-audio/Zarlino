@@ -50,6 +50,7 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
   const runs = data.runs ?? [];
   const busy = useState(false);
   const la = data.localAgent as { host?: string | null; online?: boolean; seenAgoMs?: number | null; pending?: number; lastSeen?: string | null } | undefined;
+  const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const resume = async (id: string) => {
     try {
@@ -60,6 +61,8 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
       notify(e instanceof Error ? e.message : String(e), false);
     }
   };
+
+  const sorted = [...localTasks].sort((a, b) => String(b.updated_at ?? "").localeCompare(String(a.updated_at ?? "")));
 
   return (
     <div>
@@ -84,25 +87,56 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
       </div>
 
       <div className="card">
-        <h2>Local machine tasks</h2>
-        {localTasks.length === 0 ? (
-          <p className="muted">No local tasks. The local daemon claims PENDING tasks and reports results back here.</p>
+        <h2>Local worker — prompts & reports</h2>
+        <p className="muted">
+          Every task the daemon claims: its <b>prompt</b> (the instruction it was given) and the{" "}
+          <b>report</b> it posted back on completion.
+        </p>
+        {sorted.length === 0 ? (
+          <p className="muted">No local tasks yet. The daemon claims PENDING tasks and reports results back here.</p>
         ) : (
-          <table>
-            <thead>
-              <tr><th>Prompt</th><th>Status</th><th>Claimed by</th><th>Updated</th></tr>
-            </thead>
-            <tbody>
-              {localTasks.map((t, i) => (
-                <tr key={i}>
-                  <td>{String(t.prompt ?? "")}</td>
-                  <td><Badge tone={String(t.status) === "DONE" ? "ok" : String(t.status) === "FAILED" ? "fail" : "warn"}>{String(t.status)}</Badge></td>
-                  <td className="mono muted">{String(t.claimed_by ?? "—")}</td>
-                  <td className="mono muted">{timeAgo(String(t.updated_at ?? ""))}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="worker-list">
+            {sorted.slice(0, 50).map((t, i) => {
+              const id = String(t.id ?? i);
+              const status = String(t.status ?? "");
+              const prompt = String(t.prompt ?? "");
+              const result = String(t.result ?? "");
+              const err = String(t.error ?? "");
+              const isOpen = open[id];
+              return (
+                <div className={`worker-card ${status === "DONE" ? "done" : status === "FAILED" ? "failed" : ""}`} key={i}>
+                  <div className="worker-head" onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}>
+                    <span className={`badge ${status === "DONE" ? "ok" : status === "FAILED" ? "fail" : "warn"}`}>{status}</span>
+                    <span className="worker-prompt-preview">{prompt.slice(0, 90)}{prompt.length > 90 ? "…" : ""}</span>
+                    <span className="muted mono" style={{ marginLeft: "auto", fontSize: 11 }}>{timeAgo(String(t.updated_at ?? ""))} {isOpen ? "▴" : "▾"}</span>
+                  </div>
+                  {isOpen && (
+                    <div className="worker-detail">
+                      <div className="worker-block">
+                        <div className="worker-label">📋 Prompt</div>
+                        <pre className="worker-text">{prompt}</pre>
+                      </div>
+                      {result && (
+                        <div className="worker-block">
+                          <div className="worker-label">📄 Report</div>
+                          <pre className="worker-text">{result}</pre>
+                        </div>
+                      )}
+                      {err && (
+                        <div className="worker-block">
+                          <div className="worker-label">❌ Error</div>
+                          <pre className="worker-text err">{err}</pre>
+                        </div>
+                      )}
+                      {!result && !err && (
+                        <p className="muted">Still working or no report posted yet.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
       <div className="card">
@@ -343,6 +377,34 @@ export function ProductivityView({ data, mutate, notify }: ViewProps) {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Local worker — recent prompts & reports</h2>
+        {(data.localTasks ?? []).length === 0 ? (
+          <p className="muted">No local tasks yet.</p>
+        ) : (
+          <div className="worker-list">
+            {(data.localTasks ?? [])
+              .filter((t) => String(t.status) === "DONE" || String(t.status) === "FAILED")
+              .slice(0, 8)
+              .map((t, i) => (
+                <div className={`worker-card ${String(t.status) === "DONE" ? "done" : "failed"}`} key={i}>
+                  <div className="worker-head">
+                    <span className={`badge ${String(t.status) === "DONE" ? "ok" : "fail"}`}>{String(t.status)}</span>
+                    <span className="worker-prompt-preview">{String(t.prompt ?? "").slice(0, 90)}</span>
+                    <span className="muted mono" style={{ marginLeft: "auto", fontSize: 11 }}>{timeAgo(String(t.updated_at ?? ""))}</span>
+                  </div>
+                  <div className="worker-detail">
+                    <div className="worker-block">
+                      <div className="worker-label">📄 Report</div>
+                      <pre className="worker-text">{String(t.result ?? t.error ?? "—")}</pre>
+                    </div>
+                  </div>
+                </div>
+              ))}
+          </div>
         )}
       </div>
     </div>

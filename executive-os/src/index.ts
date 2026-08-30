@@ -728,8 +728,15 @@ export class ExecutiveAgent {
 
     // Chat
     if (path === "/api/chat" && method === "POST") return this.handleChat(request);
+    if (path === "/api/chat/sessions" && method === "GET") {
+      return json({ sessions: this.store.listChatSessions(50) });
+    }
+    if (path === "/api/chat/messages" && method === "GET") {
+      const sessionId = url.searchParams.get("sessionId") ?? "default";
+      return json({ messages: this.store.listChatMessages(sessionId, 200) });
+    }
     if (path === "/api/chat/stream" && method === "GET") {
-      const id = url.searchParams.get("id") || "";
+      const id = url.searchParams.get("streamId") ?? url.searchParams.get("id") ?? "";
       const after = Math.max(0, Number(url.searchParams.get("after")) || 0);
       return json(this.store.readChatStream(id, after));
     }
@@ -1294,6 +1301,81 @@ export class ExecutiveAgent {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Chat SSE relay (worker-level): forwards the DO-buffered agent reply to the
+// browser as Server-Sent Events. The DO runs the agent loop and buffers
+// deltas into chat_streams; we poll it and push `data:` events, ending with
+// `event: done`. The caller's auth header is forwarded for each poll.
+// ---------------------------------------------------------------------------
+
+async function handleChatSse(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url);
+  const streamId = url.searchParams.get("streamId") ?? "";
+  const auth = request.headers.get("Authorization") ?? "";
+  if (!streamId) return json({ error: "streamId required" }, 400);
+
+  const id = env.EXECUTIVE_AGENT.idFromName("zarlino");
+  const stub = env.EXECUTIVE_AGENT.get(id);
+  const encoder = new TextEncoder();
+
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let after = 0;
+      const timeout = 5 * 60 * 1000;
+      const started = Date.now();
+      try {
+        // Poll the DO's buffered stream until it completes.
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          if (Date.now() - started > timeout) {
+            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: "stream timeout" })}\n\n`));
+            break;
+          }
+          const res = await stub.fetch(
+            new Request(`https://executive.internal/api/chat/stream?streamId=${encodeURIComponent(streamId)}&after=${after}`, {
+              headers: { Authorization: auth },
+            }),
+          );
+          if (!res.ok) {
+            controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: `HTTP ${res.status}` })}\n\n`));
+            break;
+          }
+          const data = (await res.json()) as { chunks: string[]; nextIndex: number; complete: boolean; error?: string };
+          for (const chunk of data.chunks ?? []) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: chunk })}\n\n`));
+          }
+          after = data.nextIndex ?? after;
+          if (data.complete) {
+            controller.enqueue(encoder.encode(`event: done\ndata: ${JSON.stringify({ error: data.error ?? null })}\n\n`));
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      } catch (err) {
+        controller.enqueue(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err instanceof Error ? err.message : String(err) })}\n\n`));
+      } finally {
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    },
+    cancel() {
+      /* client disconnected — stop polling */
+    },
+  });
+
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
 function numOrUndef(v: unknown): number | undefined {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : undefined;
@@ -1306,7 +1388,13 @@ function numOrUndef(v: unknown): number | undefined {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname.startsWith("/api/")) {
+    const path = url.pathname;
+    if (path.startsWith("/api/")) {
+      // Chat SSE: stream the DO-buffered reply to the browser as real
+      // Server-Sent Events (the DO runs the agent loop; we relay chunks).
+      if (path === "/api/chat/sse" && request.method === "GET") {
+        return handleChatSse(request, env);
+      }
       const id = env.EXECUTIVE_AGENT.idFromName("zarlino");
       const stub = env.EXECUTIVE_AGENT.get(id);
       return stub.fetch(request);

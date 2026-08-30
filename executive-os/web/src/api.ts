@@ -99,6 +99,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ message, sessionId }),
     }),
+  chatSessions: () => request<{ sessions: ChatSession[] }>("/api/chat/sessions"),
+  chatMessages: (sessionId: string) =>
+    request<{ messages: ChatMessage[] }>(`/api/chat/messages?sessionId=${encodeURIComponent(sessionId)}`),
+  /** Kick off a streaming reply; returns the stream id to consume via chatSse. */
+  chatStreamStart: (message: string, sessionId: string) =>
+    request<{ ok: boolean; streamId: string; sessionId: string }>("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ message, sessionId, stream: true }),
+    }),
+  clearChat: (sessionId: string) =>
+    request<{ ok: boolean }>("/api/chat/clear", {
+      method: "POST",
+      body: JSON.stringify({ sessionId }),
+    }),
 
   tasks: () => request<{ tasks: Task[] }>("/api/tasks"),
   createTask: (title: string, description?: string, priority?: string) =>
@@ -302,6 +316,64 @@ export interface ChatReply {
   ok: boolean;
   reply: string;
   runId?: string;
+}
+
+export interface ChatSession {
+  session_id: string;
+  message_count: number;
+  last_at: string;
+  last_message: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant";
+  content: string;
+  source: string;
+  created_at: string;
+}
+
+/**
+ * Consume a streaming reply via SSE. Calls onText for each chunk and resolves
+ * when the stream finishes. Throws on an error event.
+ */
+export async function chatSse(
+  streamId: string,
+  onText: (text: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(`/api/chat/sse?streamId=${encodeURIComponent(streamId)}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+    signal,
+  });
+  if (!res.ok || !res.body) throw new Error(`SSE HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      for (const line of part.split("\n")) {
+        if (line.startsWith("data: ")) {
+          try {
+            const payload = JSON.parse(line.slice(6)) as { text?: string; error?: string | null };
+            if (payload.text) onText(payload.text);
+            if (payload.error) throw new Error(payload.error);
+          } catch (e) {
+            if (e instanceof Error && e.message !== "Unexpected end of JSON input") throw e;
+          }
+        } else if (line.startsWith("event: error")) {
+          throw new Error("Stream failed");
+        }
+      }
+    }
+  }
 }
 
 export interface Task {
