@@ -211,7 +211,7 @@ async function agentLoop(opts: {
   messages: ChatMsg[];
   onChunk?: (text: string) => void;
   maxIterations?: number;
-}): Promise<{ text: string; iterations: number; toolsCalled: number }> {
+}): Promise<{ text: string; iterations: number; toolsCalled: number; limitReached: boolean }> {
   const apiKey = opts.env.DEEPSEEK_API_KEY;
   if (!apiKey) throw new Error("DEEPSEEK_API_KEY not configured — set it as a Worker secret.");
   const store = opts.store;
@@ -222,6 +222,15 @@ async function agentLoop(opts: {
   };
   let iterations = 0;
   let toolsCalled = 0;
+  // Keep the in-memory transcript bounded so very long runs don't overflow the
+  // model context window (system + prompt head, recent tail).
+  const prune = () => {
+    if (messages.length > 100) {
+      const head = messages.slice(0, 10);
+      const tail = messages.slice(-70);
+      messages.splice(0, messages.length, ...head, ...tail);
+    }
+  };
 
   for (let i = 0; i < maxIter; i++) {
     iterations++;
@@ -263,15 +272,21 @@ async function agentLoop(opts: {
           content: result.ok ? truncate(JSON.stringify(result.output), 6000) : `ERROR: ${truncate(result.error, 1000)}`,
         });
       }
+      // Durable transcript so a continued run resumes where it left off
+      // (checkpointAgentRun also refreshes last_heartbeat).
+      prune();
+      if (opts.runId) store.checkpointAgentRun(opts.runId, JSON.stringify(messages));
       continue;
     }
     const text = String(reply.content ?? "");
     opts.onChunk?.(text);
-    return { text, iterations, toolsCalled };
+    return { text, iterations, toolsCalled, limitReached: false };
   }
+  // Ran out of iterations while still requesting tools — the caller decides
+  // whether to mark DONE (chat) or auto-continue (long-horizon runs).
   const text = "Reached the tool-call limit for this turn. Narrow the request or ask to continue.";
   opts.onChunk?.(text);
-  return { text, iterations, toolsCalled };
+  return { text, iterations, toolsCalled, limitReached: true };
 }
 
 function safeParseArgs(raw: string): Record<string, unknown> {
@@ -325,19 +340,24 @@ function startAutoRunnable(store: ExecutiveStore, maxJobs: number): { started: s
 }
 
 /**
- * Resume interrupted long-horizon runs (restart orphans, 0 iterations — no
- * tool side-effects happened, so re-running is lossless). Bounded by the same
- * concurrency budget as startAutoRunnable; skips tasks that are blocked, done,
- * already running, or awaiting founder approval. Returns the resumed run ids.
+ * Resume resumable long-horizon runs — restart orphans (FAILED, 0 iterations —
+ * no tool side-effects happened, so re-running is lossless) AND limit-reached
+ * runs (STOPPED with an auto-continue note + a durable checkpoint). Bounded by
+ * the same concurrency budget as startAutoRunnable; skips tasks that are
+ * blocked, done, already running, or awaiting founder approval. Returns the
+ * resumed run ids.
  */
 function resumeInterruptedRuns(store: ExecutiveStore, maxJobs: number): { resumed: string[] } {
   const running = store.countRunningAgentRuns();
   const budget = Math.max(0, maxJobs - running);
   if (budget <= 0) return { resumed: [] };
-  const candidates = store.listInterruptedRuns(50);
+  const candidates = [...store.listInterruptedRuns(50), ...store.listLimitReachedRuns(50)];
   const resumed: string[] = [];
+  const seen = new Set<string>();
   for (const run of candidates) {
     if (resumed.length >= budget) break;
+    if (seen.has(run.id)) continue;
+    seen.add(run.id);
     if (run.task_id) {
       if (store.hasRunningRunForTask(run.task_id)) continue;
       if (store.pendingApprovalForTask(run.task_id)) continue;
@@ -352,20 +372,38 @@ function resumeInterruptedRuns(store: ExecutiveStore, maxJobs: number): { resume
 }
 
 async function executeAgentRun(store: ExecutiveStore, registry: ToolRegistry, env: Env, run: AgentRun): Promise<void> {
-  // Long-horizon runs need a real iteration budget (the old min(8, AI_PER_RUN_BUDGET)
-  // cap made auto-runs constantly hit "Reached the tool-call limit"). Cost is still
-  // bounded by the AI budget tracker. Override with MAX_RUN_ITERATIONS.
+  // Long-horizon runs get a real per-sweep iteration budget; when they hit it
+  // they are marked STOPPED and the maintenance sweep AUTO-CONTINUES them from
+  // their checkpoint (see resumeInterruptedRuns) — so a run can work all day,
+  // bounded only by the AI spend gate, not an arbitrary call count.
   const maxIter = Math.max(1, Math.min(60, Number(env.MAX_RUN_ITERATIONS) || 40));
   try {
+    // Resume from the durable checkpoint if one exists (keeps the transcript
+    // across auto-continue sweeps instead of restarting from the bare prompt).
+    let initial: ChatMsg[] = [buildSystemContext(env), { role: "user", content: run.prompt }];
+    if (run.checkpoint_json) {
+      try {
+        const parsed = JSON.parse(run.checkpoint_json) as ChatMsg[];
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.role === "system") initial = parsed;
+      } catch {
+        /* malformed checkpoint — fall back to the prompt */
+      }
+    }
     const result = await agentLoop({
       store,
       registry,
       env,
       runId: run.id,
       sessionId: `run_${run.id}`,
-      messages: [buildSystemContext(env), { role: "user", content: run.prompt }],
+      messages: initial,
       maxIterations: maxIter,
     });
+    if (result.limitReached) {
+      // Not finished — keep it resumable; the sweep auto-continues it.
+      // Deliberately NOT marking the task DONE (it isn't).
+      store.finishAgentRun(run.id, "STOPPED", undefined, `Hit the ${maxIter}-iteration per-sweep limit — auto-continue scheduled.`);
+      return;
+    }
     store.finishAgentRun(run.id, "DONE", result.text);
     if (run.task_id) store.updateTask(run.task_id, { status: "DONE", completed_at: nowIso() } as never);
   } catch (err) {

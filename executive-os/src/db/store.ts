@@ -895,6 +895,38 @@ export class ExecutiveStore implements CostStorage {
     }
     return ids;
   }
+  /**
+   * Long-horizon runs that hit the per-sweep iteration limit and were parked as
+   * STOPPED with an auto-continue note. They hold a durable checkpoint, so the
+   * maintenance sweep resumes them and they keep working across sweeps (all-day
+   * execution, bounded only by the AI spend gate).
+   */
+  listLimitReachedRuns(limit = 50): AgentRun[] {
+    return this.sql
+      .all<Row>(
+        "SELECT * FROM agent_jobs WHERE status = 'STOPPED' AND error LIKE '%auto-continue%' ORDER BY updated_at ASC LIMIT ?",
+        limit,
+      )
+      .map((r) => rowTo<AgentRun>(r));
+  }
+  countLimitReachedRuns(): number {
+    const rows = this.sql.all<Row>("SELECT COUNT(*) AS c FROM agent_jobs WHERE status = 'STOPPED' AND error LIKE '%auto-continue%'");
+    return Number(rows[0]?.c ?? 0);
+  }
+  /** Reopen a batch of limit-reached runs back to RUNNING (checkpoint preserved). */
+  resetLimitReachedRuns(limit = 10): string[] {
+    const rows = this.sql.all<Row>(
+      "SELECT id FROM agent_jobs WHERE status = 'STOPPED' AND error LIKE '%auto-continue%' ORDER BY updated_at ASC LIMIT ?",
+      limit,
+    );
+    const ids: string[] = [];
+    for (const r of rows) {
+      const id = String(r.id);
+      this.resetAgentRun(id);
+      ids.push(id);
+    }
+    return ids;
+  }
   /** True if the task had a run end in a terminal failure within `withinMs` (re-creation backoff). */
   hasRecentFailedRunForTask(taskId: string, withinMs = 10 * 60_000): boolean {
     const cutoff = new Date(Date.now() - withinMs).toISOString();

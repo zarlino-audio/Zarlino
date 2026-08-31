@@ -116,18 +116,24 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     label: "No orphaned interrupted long-horizon runs",
     severity: "HIGH",
     run: (ctx, autoFix) => {
-      const n = ctx.store.countInterruptedRuns();
+      const orphans = ctx.store.countInterruptedRuns();
+      const limitReached = ctx.store.countLimitReachedRuns();
+      const n = orphans + limitReached;
       if (n > 0) {
         // Deliberately report-only: the maintenance sweep (runWakeMaintenance,
-        // runs right after the doctor) auto-resumes interrupted runs IN
-        // LOCKSTEP with execution (bounded by the concurrency budget), so a
-        // bulk resume here would create RUNNING zombies that never get picked
-        // up. The sweep drains the pile at maxJobs per wake.
+        // runs right after the doctor) auto-resumes both restart orphans and
+        // limit-reached runs IN LOCKSTEP with execution (bounded by the
+        // concurrency budget), so a bulk resume here would create RUNNING
+        // zombies that never get picked up. The sweep drains the pile at
+        // maxJobs per wake, continuing checkpointed runs until they finish.
+        const what: string[] = [];
+        if (orphans > 0) what.push(`${orphans} restart-orphan(s)`);
+        if (limitReached > 0) what.push(`${limitReached} limit-reached (auto-continue pending)`);
         return failResult(
           "jobs.interrupted_runs",
           "No orphaned interrupted long-horizon runs",
           "HIGH",
-          `Found ${n} interrupted long-horizon run(s) (restart orphans, 0 iterations — no work done).`,
+          `Found ${n} resumable long-horizon run(s): ${what.join(", ")}.`,
           "The maintenance sweep auto-resumes and re-executes them (bounded).",
         );
       }

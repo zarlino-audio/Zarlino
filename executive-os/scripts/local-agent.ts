@@ -871,27 +871,76 @@ export async function buildSystem(): Promise<string> {
   ].join("\n");
 }
 
-export async function runTurn(userMessage: string, maxToolCalls = Number(process.env.LOCAL_AGENT_MAX_TOOL_CALLS) || 40): Promise<string> {
+export interface RunTurnOptions {
+  /** Model calls per continuation turn before we inject a CONTINUE prompt. */
+  perTurnCalls?: number;
+  /** Hard ceiling on total tool-loop calls for the whole task (all-day work). */
+  maxTotalCalls?: number;
+  onProgress?: (p: { iterations: number; tools: number; turn: number }) => void;
+}
+
+/**
+ * Run one task to completion. NOT a hard per-turn cap: when the per-turn tool
+ * budget is spent and the model still wants more tools, we inject a CONTINUE
+ * prompt (with the accumulated context) and keep going — so a task that
+ * genuinely needs hundreds/thousands of tool calls (long builds, multi-file
+ * rewrites, website deploys) can run all day. The only hard stop is the total
+ * all-day budget (default 2000 calls) or the model producing a final answer.
+ */
+export async function runTurn(
+  userMessage: string,
+  maxToolCalls = Number(process.env.LOCAL_AGENT_MAX_TOOL_CALLS) || 40,
+  opts: RunTurnOptions = {},
+): Promise<string> {
+  const perTurn = Math.max(1, Math.floor(maxToolCalls));
+  const totalBudget = Math.max(perTurn, opts.maxTotalCalls ?? (Number(process.env.LOCAL_AGENT_MAX_TOTAL_TOOL_CALLS) || 2000));
   const messages: Array<Record<string, unknown>> = [
     { role: "system", content: await buildSystem() },
     ...HISTORY.slice(-20),
     { role: "user", content: userMessage },
   ];
-  for (let i = 0; i < maxToolCalls; i++) {
-    const reply = await callDeepSeek(messages);
-    messages.push(reply);
-    const toolCalls = reply.tool_calls as Array<{ id: string; function: { name: string; arguments: string } }> | undefined;
-    if (toolCalls && toolCalls.length > 0) {
-      for (const call of toolCalls) {
-        const result = await executeToolCall(call.function.name, call.function.arguments);
-        console.log(`\x1b[90m⚙ ${call.function.name} → ${result.split("\n")[0]?.slice(0, 120)}\x1b[0m`);
-        messages.push({ role: "tool", tool_call_id: call.id, content: result });
+  let total = 0;
+  let tools = 0;
+  let turn = 0;
+  while (total < totalBudget) {
+    turn++;
+    const turnCalls = Math.min(perTurn, totalBudget - total);
+    for (let i = 0; i < turnCalls; i++) {
+      total++;
+      const reply = await callDeepSeek(messages);
+      messages.push(reply);
+      const toolCalls = reply.tool_calls as Array<{ id: string; function: { name: string; arguments: string } }> | undefined;
+      if (toolCalls && toolCalls.length > 0) {
+        for (const call of toolCalls) {
+          tools++;
+          const result = await executeToolCall(call.function.name, call.function.arguments);
+          console.log(`\x1b[90m⚙ ${call.function.name} → ${result.split("\n")[0]?.slice(0, 120)}\x1b[0m`);
+          messages.push({ role: "tool", tool_call_id: call.id, content: result });
+        }
+        continue;
       }
-      continue;
+      opts.onProgress?.({ iterations: total, tools, turn });
+      return String(reply.content ?? "");
     }
-    return String(reply.content ?? "");
+    opts.onProgress?.({ iterations: total, tools, turn });
+    if (total >= totalBudget) {
+      return `Reached the tool-call budget after ${total} calls — the task was not completed. Please rephrase, narrow, or queue a follow-up.`;
+    }
+    // Keep the conversation bounded: system + history + original prompt, then
+    // the most recent exchange (drop the middle once it grows very large).
+    if (messages.length > 100) {
+      const head = messages.slice(0, 20);
+      const tail = messages.slice(-60);
+      messages.splice(0, messages.length, ...head, ...tail);
+    }
+    console.log(`\x1b[33m↻ turn ${turn}: ${total}/${totalBudget} calls used, continuing…\x1b[0m`);
+    messages.push({
+      role: "user",
+      content: `CONTINUE the task you are working on. You have used ${total} tool calls so far (budget ${totalBudget}). Do NOT repeat completed work — keep making progress on the original goal. When the work is genuinely complete, reply with your final report and DO NOT request any more tools.`,
+    });
   }
-  return "Reached the tool-call limit — please rephrase or narrow the task.";
+  opts.onProgress?.({ iterations: total, tools, turn });
+  return `Reached the tool-call budget after ${total} calls — the task was not completed. Please rephrase, narrow, or queue a follow-up.`;
 }
 
 // ---- REPL -----------------------------------------------------------------------

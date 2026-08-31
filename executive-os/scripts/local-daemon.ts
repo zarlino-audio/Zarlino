@@ -21,11 +21,15 @@ import { API_KEY, EXEC_URL, TOKEN, ensureApiKey, runTurn } from "./local-agent.j
 
 const POLL_MS = 30_000; // claim + heartbeat cadence
 const LEASE_HB_MS = 60_000; // heartbeat while working (lease is 10 min)
-// Max DeepSeek tool-loop iterations per task. The old default (12–16) was
-// constantly hit on long-horizon tasks (concept→shipped pipelines, multi-file
-// builds, website deploys), which returned "Reached the tool-call limit" and
-// left the task uncompleted. Override with LOCAL_AGENT_MAX_TOOL_CALLS.
+// Max DeepSeek tool-loop iterations per task. The old hard cap (12–16) was
+// constantly hit on long-horizon tasks and returned "Reached the tool-call
+// limit" without finishing. runTurn now CONTINUES past the per-turn budget
+// until the total all-day budget is spent or the model answers — so a task
+// can legitimately use hundreds/thousands of calls. Override per-turn with
+// LOCAL_AGENT_MAX_TOOL_CALLS, the all-day ceiling with
+// LOCAL_AGENT_MAX_TOTAL_TOOL_CALLS.
 const MAX_TOOL_CALLS = Number(process.env.LOCAL_AGENT_MAX_TOOL_CALLS) || 60;
+const MAX_TOTAL_TOOL_CALLS = Number(process.env.LOCAL_AGENT_MAX_TOTAL_TOOL_CALLS) || 2000;
 const LOOP = process.argv.includes("--loop");
 
 function log(...args: string[]): void {
@@ -75,7 +79,12 @@ async function runTask(task: { id: string; prompt: string }): Promise<void> {
     void beacon(false).catch(() => {});
   }, LEASE_HB_MS);
   try {
-    const result = await runTurn(task.prompt, MAX_TOOL_CALLS);
+    const result = await runTurn(task.prompt, MAX_TOOL_CALLS, {
+      maxTotalCalls: MAX_TOTAL_TOOL_CALLS,
+      onProgress: (p) => {
+        if (p.turn > 1) log("task", task.id, `— continuing (turn ${p.turn}, ${p.iterations}/${MAX_TOTAL_TOOL_CALLS} calls, ${p.tools} tools)`);
+      },
+    });
     await post("/api/local-tasks/finish", { id: task.id, status: "DONE", result });
     log("finished task", task.id, "(DONE,", String(result.length), "chars)");
   } catch (err) {

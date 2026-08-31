@@ -149,6 +149,31 @@ describe("ExecutiveStore (node:sqlite)", () => {
     expect(store.getLocalTask("lt_ok")?.status).toBe("DONE");
   });
 
+  it("lists and resumes limit-reached (auto-continue) long-horizon runs", () => {
+    const now = new Date().toISOString();
+    store.createAgentRun({
+      id: "run_limit", prompt: "long work", status: "STOPPED", iterations: 40, tools_called: 120,
+      started_at: now, source: "system", created_at: now, updated_at: now,
+      checkpoint_json: JSON.stringify([{ role: "system", content: "ctx" }, { role: "user", content: "long work" }]),
+      error: "Hit the 40-iteration per-sweep limit — auto-continue scheduled.",
+    });
+    // A STOPPED run with a different reason must NOT be auto-resumed.
+    store.createAgentRun({
+      id: "run_halted", prompt: "x", status: "STOPPED", iterations: 3, tools_called: 5,
+      started_at: now, source: "test", created_at: now, updated_at: now,
+      error: "Stopped by founder",
+    });
+    expect(store.countLimitReachedRuns()).toBe(1);
+    expect(store.listLimitReachedRuns(10).map((r) => r.id)).toContain("run_limit");
+    expect(store.listLimitReachedRuns(10).map((r) => r.id)).not.toContain("run_halted");
+    const resumed = store.resetLimitReachedRuns(10);
+    expect(resumed).toContain("run_limit");
+    const run = store.getAgentRun("run_limit")!;
+    expect(run.status).toBe("RUNNING");
+    expect(run.last_heartbeat).toBeTruthy();
+    expect(run.checkpoint_json).toBeTruthy(); // checkpoint preserved for continuation
+  });
+
   it("adapts to a legacy schema_migrations table (no name column) — production bug", () => {
     // The production store's schema_migrations predates the `name` column.
     // Reproduce that exact shape and confirm migrate() adapts in place instead
