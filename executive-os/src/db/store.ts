@@ -966,7 +966,11 @@ export class ExecutiveStore implements CostStorage {
     return rows.length ? rowTo<LocalTask>(rows[0]) : null;
   }
   listLocalTasks(limit = 25): LocalTask[] {
-    return this.sql.all<Row>("SELECT * FROM local_tasks ORDER BY created_at DESC LIMIT ?", limit).map((r) => rowTo<LocalTask>(r));
+    // updated_at DESC so the most RECENTLY ACTIVE tasks (claimed / running /
+    // just finished / heartbeated) surface first — otherwise, with a long
+    // backlog of older-created tasks, the dashboard always shows stale
+    // "last done hours ago" even while the daemon is actively working.
+    return this.sql.all<Row>("SELECT * FROM local_tasks ORDER BY updated_at DESC LIMIT ?", limit).map((r) => rowTo<LocalTask>(r));
   }
   /**
    * Reap local tasks whose claim lease has expired (the machine went offline

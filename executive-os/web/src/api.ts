@@ -261,6 +261,7 @@ export interface DataBundle {
     seenAgoMs: number | null;
     online: boolean;
     pending: number;
+    currentTask?: { id: string; status: string; prompt: string; updatedAt: string } | null;
   };
   links: Record<string, string>;
 }

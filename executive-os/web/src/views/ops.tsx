@@ -49,7 +49,9 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
   const localTasks = data.localTasks ?? [];
   const runs = data.runs ?? [];
   const busy = useState(false);
-  const la = data.localAgent as { host?: string | null; online?: boolean; seenAgoMs?: number | null; pending?: number; lastSeen?: string | null } | undefined;
+  const la = data.localAgent as
+    | { host?: string | null; online?: boolean; seenAgoMs?: number | null; pending?: number; lastSeen?: string | null; currentTask?: { id: string; status: string; prompt: string; updatedAt: string } | null }
+    | undefined;
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const resume = async (id: string) => {
@@ -69,12 +71,23 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
       <div className={`card ${la?.online ? "" : "agent-offline-card"}`}>
         <h2>Local agent (daemon)</h2>
         {la?.online ? (
-          <p>
-            <Badge tone="ok">ONLINE</Badge>{" "}
-            <span className="mono">host {la.host ?? "—"}</span> · last seen{" "}
-            {la.seenAgoMs != null ? `${Math.max(1, Math.round(la.seenAgoMs / 1000))}s ago` : "—"} ·{" "}
-            <span className="muted">{la.pending ?? 0} pending task(s)</span>
-          </p>
+          <>
+            <p>
+              <Badge tone="ok">ONLINE</Badge>{" "}
+              <span className="mono">host {la.host ?? "—"}</span> · last seen{" "}
+              {la.seenAgoMs != null ? `${Math.max(1, Math.round(la.seenAgoMs / 1000))}s ago` : "—"} ·{" "}
+              <span className="muted">{la.pending ?? 0} pending task(s)</span>
+            </p>
+            {la.currentTask && (
+              <div className="worker-card" style={{ marginTop: 8 }}>
+                <div className="worker-head">
+                  <span className="badge warn">{String(la.currentTask.status)}</span>
+                  <span className="worker-prompt-preview">⏳ working: {String(la.currentTask.prompt ?? "").slice(0, 90)}</span>
+                  <span className="muted mono" style={{ marginLeft: "auto", fontSize: 11 }}>{timeAgo(String(la.currentTask.updatedAt ?? ""))}</span>
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <p>
             <Badge tone="fail">OFFLINE</Badge>{" "}

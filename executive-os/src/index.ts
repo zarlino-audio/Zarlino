@@ -629,6 +629,8 @@ export class ExecutiveAgent {
       localAgent: (() => {
         const st = s.getLocalAgentStatus();
         const ago = s.localAgentSeenAgoMs();
+        // What the daemon is working on right now (most recently active claim).
+        const current = s.listLocalTasks(50).find((t) => t.status === "CLAIMED" || t.status === "RUNNING");
         return st
           ? {
               host: st.host ?? null,
@@ -639,8 +641,20 @@ export class ExecutiveAgent {
               online: ago !== null && ago < 5 * 60 * 1000,
               lastClaimAt: st.last_claim_at ?? null,
               pending: s.listLocalTasks(100).filter((t) => t.status === "PENDING").length,
+              currentTask: current
+                ? { id: current.id, status: current.status, prompt: current.prompt, updatedAt: current.updated_at }
+                : null,
             }
-          : { host: null, online: false, seenAgoMs: null, pending: s.listLocalTasks(100).filter((t) => t.status === "PENDING").length };
+          : {
+              host: null,
+              online: false,
+              seenAgoMs: null,
+              pending: s.listLocalTasks(100).filter((t) => t.status === "PENDING").length,
+              currentTask: (() => {
+                const c = s.listLocalTasks(50).find((t) => t.status === "CLAIMED" || t.status === "RUNNING");
+                return c ? { id: c.id, status: c.status, prompt: c.prompt, updatedAt: c.updated_at } : null;
+              })(),
+            };
       })(),
       links: {
         overview: "/api/executive/overview",
