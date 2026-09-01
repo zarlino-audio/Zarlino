@@ -209,6 +209,48 @@ describe("ExecutiveStore (node:sqlite)", () => {
     expect(f?.kind).toBe("cloud");
   });
 
+  it("files and decides review items (sound/UI vetting)", () => {
+    const now = new Date().toISOString();
+    store.createReviewItem({
+      id: "rev_sound1", kind: "sound", title: "ZTame A/B — tighter low end", description: "B tames 200Hz",
+      status: "PENDING", payload_json: JSON.stringify({ audioA: "f_a", audioB: "f_b" }),
+      source: "agent", created_at: now, updated_at: now,
+    });
+    store.createReviewItem({
+      id: "rev_ui1", kind: "ui", title: "ZScorch editor screenshot", status: "PENDING",
+      payload_json: JSON.stringify({ image: "f_img", report: "knobs laid out" }),
+      source: "agent", created_at: now, updated_at: now,
+    });
+    expect(store.countPendingReviews()).toBe(2);
+    const listed = store.listReviewItems({ limit: 10 }).map((r) => r.id);
+    expect(listed).toContain("rev_sound1");
+    expect(listed).toContain("rev_ui1");
+    store.decideReviewItem("rev_sound1", "APPROVED", "B is better", "founder");
+    expect(store.getReviewItem("rev_sound1")?.status).toBe("APPROVED");
+    expect(store.getReviewItem("rev_sound1")?.decided_by).toBe("founder");
+    expect(store.countPendingReviews()).toBe(1);
+  });
+
+  it("resets production progress to a clean slate (archive, never delete)", () => {
+    const now = new Date().toISOString();
+    store.insertTask({ id: "tsk_reset1", title: "old work", priority: "P1", source: "test", status: "IN_PROGRESS", created_at: now, updated_at: now } as never);
+    store.insertTask({ id: "tsk_reset2", title: "done work", priority: "P2", source: "test", status: "DONE", created_at: now, updated_at: now } as never);
+    // A gate and product to reset (seeded rows exist).
+    const result = store.resetProductionProgress();
+    expect(result.archivedTasks).toBeGreaterThanOrEqual(1);
+    expect(result.resetGates).toBeGreaterThanOrEqual(1);
+    expect(result.resetProducts).toBeGreaterThanOrEqual(1);
+    // The old IN_PROGRESS task is archived (CANCELLED), the DONE one untouched.
+    expect(store.getTask("tsk_reset1")?.status).toBe("CANCELLED");
+    expect(store.getTask("tsk_reset2")?.status).toBe("DONE");
+    // Gates/products back to clean slate.
+    expect(store.listPipelineGates().every((g) => g.status === "NOT_STARTED")).toBe(true);
+    expect(store.listProducts().every((p) => p.status === "CONCEPT")).toBe(true);
+    // Snapshot was captured for backup.
+    expect(result.snapshot.tasks).toBeDefined();
+    expect(Array.isArray(result.snapshot.tasks)).toBe(true);
+  });
+
   it("adapts to a legacy schema_migrations table (no name column) — production bug", () => {
     // The production store's schema_migrations predates the `name` column.
     // Reproduce that exact shape and confirm migrate() adapts in place instead

@@ -1198,6 +1198,96 @@ function internalTools(): Tool[] {
         return { url: sitemapUrl, status: res.status, ok: true, pageCount: urls.length, pages: withStatus };
       },
     },
+    {
+      name: "review.request_sound_approval",
+      description:
+        "File a SOUND review for the operator: when you have produced or discovered an audio A/B (e.g. a rendered plugin comparison, a saturation/tone change, an A/B WAV pair uploaded to files), submit it for the operator to LISTEN and approve/reject. Pass the uploaded-file ids for audioA and audioB, a short title, and a description of what differs and why it matters. This is how sound decisions are vetted remotely — not just text decisions.",
+      inputSchema: z.object({
+        title: z.string().min(3).max(300),
+        description: z.string().max(2000).optional(),
+        audioAFileId: z.string().optional(),
+        audioBFileId: z.string().optional(),
+        meta: z.record(z.string(), z.unknown()).optional(),
+      }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { title: string; description?: string; audioAFileId?: string; audioBFileId?: string; meta?: Record<string, unknown> }) => {
+        const store = ctx.store;
+        if (!store) throw new Error("store unavailable");
+        const now = new Date().toISOString();
+        const id = newId("rev");
+        store.createReviewItem({
+          id,
+          kind: "sound",
+          title: input.title,
+          description: input.description ?? "",
+          status: "PENDING",
+          payload_json: JSON.stringify({ audioA: input.audioAFileId, audioB: input.audioBFileId, meta: input.meta ?? {} }),
+          source: "agent",
+          created_at: now,
+          updated_at: now,
+        });
+        return { ok: true, id, kind: "sound", status: "PENDING", note: "Operator can now listen and approve/reject from the console Reviews queue." };
+      },
+    },
+    {
+      name: "review.request_ui_approval",
+      description:
+        "File a UI review for the operator: when you have a plugin UI screenshot (uploaded file id) or a UI inspection/report that needs sign-off, submit it for the operator to LOOK and approve/reject. Pass the image fileId (or the report text), a title, and what to verify.",
+      inputSchema: z.object({
+        title: z.string().min(3).max(300),
+        description: z.string().max(2000).optional(),
+        imageFileId: z.string().optional(),
+        report: z.string().max(4000).optional(),
+        meta: z.record(z.string(), z.unknown()).optional(),
+      }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { title: string; description?: string; imageFileId?: string; report?: string; meta?: Record<string, unknown> }) => {
+        const store = ctx.store;
+        if (!store) throw new Error("store unavailable");
+        const now = new Date().toISOString();
+        const id = newId("rev");
+        store.createReviewItem({
+          id,
+          kind: "ui",
+          title: input.title,
+          description: input.description ?? "",
+          status: "PENDING",
+          payload_json: JSON.stringify({ image: input.imageFileId, report: input.report ?? "", meta: input.meta ?? {} }),
+          source: "agent",
+          created_at: now,
+          updated_at: now,
+        });
+        return { ok: true, id, kind: "ui", status: "PENDING", note: "Operator can now look and approve/reject from the console Reviews queue." };
+      },
+    },
+    {
+      name: "review.list_reviews",
+      description: "List review-queue items (sound / UI / document / build) so you know what the operator is vetting and what is already approved or needs work.",
+      inputSchema: z.object({ status: z.enum(["PENDING", "APPROVED", "REJECTED", "NEEDS_WORK"]).optional(), limit: z.number().int().min(1).max(100).optional() }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { status?: string; limit?: number }) => {
+        const store = ctx.store;
+        if (!store) throw new Error("store unavailable");
+        const items = store.listReviewItems({ status: input.status as never, limit: input.limit ?? 50 });
+        return {
+          count: items.length,
+          pending: store.countPendingReviews(),
+          items: items.map((r) => ({
+            id: r.id, kind: r.kind, title: r.title, status: r.status,
+            decided_by: r.decided_by ?? null, note: r.note ?? null, created_at: r.created_at,
+          })),
+        };
+      },
+    },
   ];
 }
 

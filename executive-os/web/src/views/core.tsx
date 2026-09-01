@@ -136,6 +136,7 @@ export function Overview({ data, mutate, notify }: ViewProps) {
         <Metric label="Overdue reminders" value={c.overdueReminders ?? 0} />
         <Metric label="Contradictions" value={c.contradictionsOpen ?? 0} tone={(c.contradictionsOpen ?? 0) > 0 ? "warn" : undefined} />
         <Metric label="Assignments open" value={c.assignmentsOpen ?? 0} />
+        <Metric label="Reviews pending" value={c.pendingReviews ?? 0} tone={(c.pendingReviews ?? 0) > 0 ? "warn" : undefined} />
       </div>
 
       <div className="card section-gap">
@@ -188,6 +189,20 @@ export function Overview({ data, mutate, notify }: ViewProps) {
               <ul className="founder-list">
                 {(data.founderBrief?.topRisks ?? []).map((rk, i) => (
                   <li key={i}><span className="muted mono">{String((rk as { severity?: string }).severity ?? "")}</span> — {String((rk as { title?: string }).title ?? (rk as { description?: string }).description ?? "").slice(0, 90)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="card sub">
+            <h3>🎧 Reviews to vet ({data.founderBrief?.pendingReviews.length ?? 0})</h3>
+            {(data.founderBrief?.pendingReviews ?? []).length === 0 ? (
+              <p className="muted">Nothing to listen to or look at</p>
+            ) : (
+              <ul className="founder-list">
+                {(data.founderBrief?.pendingReviews ?? []).map((rv, i) => (
+                  <li key={i}>
+                    <span className="muted mono">{String((rv as { kind?: string }).kind ?? "").toUpperCase()}</span> — {String((rv as { title?: string }).title ?? "").slice(0, 90)}
+                  </li>
                 ))}
               </ul>
             )}

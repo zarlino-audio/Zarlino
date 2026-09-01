@@ -162,6 +162,28 @@ export interface ApprovalRequest {
   decided_at?: string;
 }
 
+/**
+ * Review queue item — work product (sound A/B, UI screenshot/report, artifact,
+ * document) submitted for a REMOTE operator to vet, listen to, or look at and
+ * approve/reject. Payload carries uploaded_files ids (audioA/audioB/image/
+ * artifact) plus optional meta so the console can play/view without a local
+ * machine.
+ */
+export interface ReviewItem {
+  id: string;
+  kind: string; // 'sound' | 'ui' | 'document' | 'build'
+  title: string;
+  description?: string;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "NEEDS_WORK" | string;
+  payload_json?: string;
+  note?: string;
+  source?: string;
+  created_at: string;
+  updated_at: string;
+  decided_at?: string;
+  decided_by?: string;
+}
+
 export interface Risk {
   id: string;
   title: string;

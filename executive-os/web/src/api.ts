@@ -185,6 +185,20 @@ export const api = {
     }),
   productivityMetrics: () => request<{ metrics: ProductivityMetric[] }>("/api/productivity/metrics"),
 
+  // Review queue (remote operator vetting of sound / UI / artifacts).
+  reviews: (status?: string) => request<{ reviews: ReviewItem[] }>(`/api/reviews${status ? `?status=${status}` : ""}`),
+  createReview: (kind: string, title: string, description: string, payload: Record<string, unknown>) =>
+    request<{ ok: boolean; id: string }>("/api/reviews", {
+      method: "POST",
+      body: JSON.stringify({ kind, title, description, payload }),
+    }),
+  decideReview: (id: string, status: string, note: string) =>
+    request<{ ok: boolean; id: string; status: string }>(`/api/reviews/${encodeURIComponent(id)}/decide`, {
+      method: "POST",
+      body: JSON.stringify({ status, note }),
+    }),
+  getFile: (id: string) => request<{ id: string; name: string; mime?: string; kind?: string; data_base64?: string; size_bytes?: number }>(`/api/files/${encodeURIComponent(id)}`),
+
   // Deep data bundle (one bounded request powers every console view).
   dataAll: () => request<DataBundle>("/api/data/all"),
 
@@ -271,8 +285,10 @@ export interface DataBundle {
     pendingApprovals: Array<Record<string, unknown>>;
     openContradictions: Array<Record<string, unknown>>;
     topRisks: Array<Record<string, unknown>>;
+    pendingReviews: ReviewItem[];
     generatedAt: string;
   };
+  reviews: ReviewItem[];
   productivity: {
     assignments: Assignment[];
     optimizationEvents: OptimizationEvent[];
@@ -294,6 +310,21 @@ export interface DataBundle {
 }
 
 // ---- types ----------------------------------------------------------------
+
+export interface ReviewItem {
+  id: string;
+  kind: string;
+  title: string;
+  description?: string;
+  status: string;
+  payload_json?: string;
+  note?: string;
+  source?: string;
+  created_at: string;
+  updated_at: string;
+  decided_at?: string;
+  decided_by?: string;
+}
 
 export interface Health {
   ok: boolean;

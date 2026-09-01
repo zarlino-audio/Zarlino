@@ -46,6 +46,7 @@ import type {
   ProductStatusRecord,
   Project,
   Reminder,
+  ReviewItem,
   Risk,
   RoleSkill,
   Task,
@@ -272,6 +273,32 @@ export class ExecutiveStore implements CostStorage {
   }
   updateApproval(id: string, patch: Partial<ApprovalRequest>): void {
     this.update("approval_requests", id, patch as Row);
+  }
+
+  // -- review queue (sound / UI / artifact vetting by a remote operator) -----
+  createReviewItem(r: ReviewItem): void {
+    this.insert("review_items", r);
+  }
+  listReviewItems(opts: { status?: string; limit?: number } = {}): ReviewItem[] {
+    const where = opts.status ? "WHERE status = ?" : "";
+    const params: SqlParam[] = opts.status ? [opts.status] : [];
+    let sql = `SELECT * FROM review_items ${where} ORDER BY created_at DESC`;
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<ReviewItem>(r));
+  }
+  getReviewItem(id: string): ReviewItem | null {
+    const rows = this.sql.all<Row>("SELECT * FROM review_items WHERE id = ?", id);
+    return rows.length ? rowTo<ReviewItem>(rows[0]) : null;
+  }
+  countPendingReviews(): number {
+    const rows = this.sql.all<Row>("SELECT COUNT(*) AS c FROM review_items WHERE status = 'PENDING'");
+    return Number(rows[0]?.c ?? 0);
+  }
+  decideReviewItem(id: string, status: "APPROVED" | "REJECTED" | "NEEDS_WORK", note: string, by: string): void {
+    this.sql.run(
+      "UPDATE review_items SET status = ?, note = ?, decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
+      status, note, new Date().toISOString(), by, new Date().toISOString(), id,
+    );
   }
 
   // -- risks --------------------------------------------------------------
@@ -1295,6 +1322,38 @@ export class ExecutiveStore implements CostStorage {
       staleAgentRuns: Number(staleAgentRuns[0]?.c ?? 0),
       expiredLeases: Number(expiredLeases[0]?.c ?? 0),
     };
+  }
+  /**
+   * Reset the whole company's PRODUCTION PROGRESS to a clean slate so a new
+   * operator starts fresh (used when handing the company over). Safe by design:
+   * nothing is deleted — active tasks are CANCELLED (archived in place), gates
+   * go back to NOT_STARTED, products back to CONCEPT, and in-flight local work
+   * is cancelled. A full snapshot is returned for the caller to keep as a
+   * backup before the reset is considered complete.
+   */
+  resetProductionProgress(): {
+    archivedTasks: number;
+    resetGates: number;
+    resetProducts: number;
+    cancelledLocal: number;
+    clearedReviews: number;
+    snapshot: Record<string, unknown>;
+  } {
+    const now = new Date().toISOString();
+    const count = (q: string) => Number(this.sql.all<Row>(q)[0]?.c ?? 0);
+    const archivedTasks = count("SELECT COUNT(*) AS c FROM tasks WHERE status IN ('OPEN','IN_PROGRESS','BLOCKED')");
+    if (archivedTasks > 0) this.sql.run("UPDATE tasks SET status = 'CANCELLED', updated_at = ?, completed_at = ? WHERE status IN ('OPEN','IN_PROGRESS','BLOCKED')", now, now);
+    const resetGates = count("SELECT COUNT(*) AS c FROM pipeline_gates WHERE status IN ('PASSED','IN_PROGRESS','BLOCKED','SHIPPED')");
+    if (resetGates > 0) this.sql.run("UPDATE pipeline_gates SET status = 'NOT_STARTED', note = NULL, updated_at = ? WHERE status IN ('PASSED','IN_PROGRESS','BLOCKED','SHIPPED')", now);
+    const resetProducts = count("SELECT COUNT(*) AS c FROM products WHERE status IN ('SHIPPED','PLANNED','IN-THE-LAB')");
+    if (resetProducts > 0) this.sql.run("UPDATE products SET status = 'CONCEPT', version = NULL, updated_at = ? WHERE status IN ('SHIPPED','PLANNED','IN-THE-LAB')", now);
+    const cancelledLocal = count("SELECT COUNT(*) AS c FROM local_tasks WHERE status IN ('PENDING','CLAIMED','RUNNING')");
+    if (cancelledLocal > 0) this.sql.run("UPDATE local_tasks SET status = 'CANCELLED', updated_at = ? WHERE status IN ('PENDING','CLAIMED','RUNNING')", now);
+    // Operator review history is worth keeping, but pending reviews from the old
+    // regime are reset so the new operator starts a clean queue.
+    const clearedReviews = count("SELECT COUNT(*) AS c FROM review_items WHERE status = 'PENDING'");
+    if (clearedReviews > 0) this.sql.run("UPDATE review_items SET status = 'NEEDS_WORK', note = 'Superseded by production reset.', updated_at = ? WHERE status = 'PENDING'", now);
+    return { archivedTasks, resetGates, resetProducts, cancelledLocal, clearedReviews, snapshot: this.exportSnapshot() };
   }
 
   // -- Productivity Manager (migration v18) --------------------------------

@@ -617,6 +617,7 @@ export class ExecutiveAgent {
         events: s.listCalendarEvents(undefined, undefined, 1000).length,
         assignmentsOpen: s.listAssignments({ limit: 200 }).filter((a) => a.status === "ASSIGNED" || a.status === "IN_PROGRESS").length,
         contradictionsOpen: s.countOpenContradictions(),
+        pendingReviews: s.countPendingReviews(),
       },
       products: s.listProducts().map((p) => ({ id: p.id, name: p.name, category: p.category, status: p.status, version: p.version, price: p.price })),
       productStatus: s.listProducts().flatMap((p) => s.listProductStatus(p.id).slice(0, 5).map((st) => ({ product: p.name, ...st }))),
@@ -671,8 +672,10 @@ export class ExecutiveAgent {
         pendingApprovals: s.listApprovals({ status: "PENDING", limit: 6 }),
         openContradictions: s.listContradictions({ status: "OPEN", limit: 6 }),
         topRisks: s.openRisks().slice(0, 6),
+        pendingReviews: s.listReviewItems({ status: "PENDING", limit: 6 }),
         generatedAt: nowIso(),
       },
+      reviews: s.listReviewItems({ limit: 50 }),
       productivity: {
         assignments: s.listAssignments({ limit: 100 }),
         optimizationEvents: s.listOptimizationEvents(20),
@@ -836,6 +839,44 @@ export class ExecutiveAgent {
       return json({ logs: this.store.listDoctorLogs(20) });
     }
 
+    // Production reset — hands the whole company over to a new operator on a
+    // clean slate. Requires the confirmation phrase to fire; nothing deleted,
+    // a full snapshot is returned for the caller to keep as backup.
+    if (path === "/api/system/reset-production" && method === "POST") {
+      const body = (await readBody<{ confirm?: string }>(request).catch(() => ({}))) as { confirm?: string };
+      if (body.confirm !== "RESET PRODUCTION") {
+        return json({ error: "Send confirm: 'RESET PRODUCTION' to proceed. Nothing was changed." }, 400);
+      }
+      const result = this.store.resetProductionProgress();
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "system.reset_production",
+        entity_type: "system",
+        entity_id: "production",
+        detail_json: JSON.stringify({
+          archivedTasks: result.archivedTasks,
+          resetGates: result.resetGates,
+          resetProducts: result.resetProducts,
+          cancelledLocal: result.cancelledLocal,
+          clearedReviews: result.clearedReviews,
+        }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({
+        ok: true,
+        archivedTasks: result.archivedTasks,
+        resetGates: result.resetGates,
+        resetProducts: result.resetProducts,
+        cancelledLocal: result.cancelledLocal,
+        clearedReviews: result.clearedReviews,
+        backup: result.snapshot,
+        note: "Production progress reset to a clean slate. The returned backup snapshot was captured BEFORE the reset — keep it safe.",
+      });
+    }
+
     // Maintenance
     if (path === "/api/maintenance/run" && method === "POST") {
       const maintenance = this.store.runMaintenance();
@@ -855,8 +896,7 @@ export class ExecutiveAgent {
     }
 
     // Auto-run
-    if (path === "/api/autotasks/run" && method === "POST") {
-      const { started } = startAutoRunnable(this.store, 2);
+    if (path === "/api/autotasks/run" && method === "POST") {      const { started } = startAutoRunnable(this.store, 2);
       for (const taskId of started) {
         const run = this.store.listAgentRuns(50).find((r) => r.task_id === taskId && r.status === "RUNNING");
         if (run) await executeAgentRun(this.store, this.buildRegistry(), this.env, run);
@@ -959,6 +999,65 @@ export class ExecutiveAgent {
         updated_at: nowIso(),
       });
       return json({ ok: true, id: approval.id, status: decision });
+    }
+
+    // Review queue — remote operator vetting of produced work (sound / UI / artifacts)
+    if (path === "/api/reviews" && method === "GET") {
+      const status = url.searchParams.get("status") ?? undefined;
+      return json({ reviews: this.store.listReviewItems({ status: status as never, limit: 100 }) });
+    }
+    if (path === "/api/reviews" && method === "POST") {
+      const body = (await readBody<{ kind?: string; title?: string; description?: string; payload?: Record<string, unknown> }>(request).catch(() => ({}))) as { kind?: string; title?: string; description?: string; payload?: Record<string, unknown> };
+      const kind = String(body.kind ?? "").toLowerCase();
+      if (!["sound", "ui", "document", "build"].includes(kind)) return json({ error: "kind must be sound | ui | document | build" }, 400);
+      if (!body.title?.trim()) return json({ error: "title required" }, 400);
+      const now = nowIso();
+      const id = newId("rev");
+      this.store.createReviewItem({
+        id,
+        kind,
+        title: body.title.trim(),
+        description: body.description ?? "",
+        status: "PENDING",
+        payload_json: JSON.stringify(body.payload ?? {}),
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "review.request",
+        entity_type: "review_items",
+        entity_id: id,
+        detail_json: JSON.stringify({ kind, title: body.title.trim() }),
+        source: "api",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true, id });
+    }
+    const reviewDecide = /^\/api\/reviews\/([^/]+)\/decide$/.exec(path);
+    if (reviewDecide && method === "POST") {
+      const id = decodeURIComponent(reviewDecide[1]!);
+      const body = (await readBody<{ status?: string; note?: string }>(request).catch(() => ({}))) as { status?: string; note?: string };
+      const item = this.store.getReviewItem(id);
+      if (!item) return json({ error: "Review not found" }, 404);
+      const status = String(body.status ?? "").toUpperCase();
+      if (!["APPROVED", "REJECTED", "NEEDS_WORK"].includes(status)) return json({ error: "status must be APPROVED | REJECTED | NEEDS_WORK" }, 400);
+      this.store.decideReviewItem(id, status as never, body.note ?? "", "founder");
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: `review.${status.toLowerCase()}`,
+        entity_type: "review_items",
+        entity_id: id,
+        detail_json: JSON.stringify({ kind: item.kind, title: item.title, note: body.note ?? "" }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, id, status });
     }
 
     // Tool runner (executes any registered tool; HIGH-risk gating happens here)

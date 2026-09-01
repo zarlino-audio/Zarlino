@@ -76,6 +76,23 @@ export function SettingsView({ mutate, notify }: ViewProps) {
 
   return (
     <div>
+      <div className="card" style={{ maxWidth: 720 }}>
+        <h2>📘 Operating manual (runbook)</h2>
+        <p className="muted" style={{ lineHeight: 1.6 }}>
+          <b>Daily loop:</b> 🏠 Overview → read <b>🎯 Needs the Founder</b> → 🎧 <b>Reviews</b> (listen to sound A/B, look at UI,
+          approve / needs-work / reject with a note) → ✋ Approvals → 💬 Chat.
+          <br />
+          <b>Order work:</b> just chat in plain language — the cloud agent turns it into tasks and does everything it can
+          from the web (research, website, GitHub, finance, docs). Dev-machine work (building plugins, FL launch tests)
+          needs the local daemon; when it's offline the Doctor flags it.
+          <br />
+          <b>If stuck:</b> Continue resumes any STOPPED run from its checkpoint; the Doctor auto-fixes safe issues and
+          surfaces what needs <i>your</i> judgment.
+          <br />
+          <b>HTTP 402 = DeepSeek balance empty</b> — top up at platform.deepseek.com (the Doctor will say so).
+        </p>
+      </div>
+
       <div className="card" style={{ maxWidth: 540 }}>
         <h2>Budget overrides</h2>
         {!loaded && <p className="muted">Loading…</p>}

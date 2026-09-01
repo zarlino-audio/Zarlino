@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -435,6 +435,33 @@ CREATE TABLE IF NOT EXISTS local_agent_status (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+`;
+
+/**
+ * Review queue (migration v21): lets a REMOTE operator vet and approve
+ * produced work — not just text decisions. When the agent renders a sound
+ * A/B comparison, produces a UI screenshot/report, or builds an artifact, it
+ * files a review item; the operator listens / looks and approves, rejects, or
+ * asks for work — all from the web console, with no local machine required.
+ * Payload holds fileIds (audioA/audioB/image/artifact) resolved against the
+ * uploaded_files table so the console can play/view them.
+ */
+export const REVIEW_ITEMS_SQL = `
+CREATE TABLE IF NOT EXISTS review_items (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL,
+  payload_json TEXT,
+  note TEXT,
+  source TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_review_status ON review_items(status);
 `;
 
 /**

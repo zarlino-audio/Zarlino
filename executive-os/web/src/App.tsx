@@ -11,6 +11,7 @@ const Overview = lazy(() => import("./views/core").then((m) => ({ default: m.Ove
 const Activity = lazy(() => import("./views/core").then((m) => ({ default: m.Activity })));
 const Tasks = lazy(() => import("./views/core").then((m) => ({ default: m.Tasks })));
 const Approvals = lazy(() => import("./views/core").then((m) => ({ default: m.Approvals })));
+const Reviews = lazy(() => import("./views/reviews").then((m) => ({ default: m.ReviewsView })));
 const Pipeline = lazy(() => import("./views/business").then((m) => ({ default: m.Pipeline })));
 const Finance = lazy(() => import("./views/business").then((m) => ({ default: m.Finance })));
 const Decisions = lazy(() => import("./views/business").then((m) => ({ default: m.Decisions })));
@@ -45,6 +46,7 @@ const VIEWS: ViewDef[] = [
   { id: "activity", label: "Activity", group: "Operate", emoji: "🕘", comp: Activity },
   { id: "tasks", label: "Tasks", group: "Operate", emoji: "✅", comp: Tasks },
   { id: "approvals", label: "Approvals", group: "Operate", emoji: "✋", comp: Approvals },
+  { id: "reviews", label: "Reviews", group: "Operate", emoji: "🎧", comp: Reviews },
   { id: "pipeline", label: "Pipeline", group: "Operate", emoji: "🚀", comp: Pipeline },
   { id: "finance", label: "Finance", group: "Operate", emoji: "💰", comp: Finance },
   { id: "decisions", label: "Decisions & Risks", group: "Knowledge", emoji: "🧭", comp: Decisions },
@@ -96,7 +98,8 @@ const EMPTY_BUNDLE: DataBundle = {
   metrics: [],
   workstreams: [],
   budget: { daily: 0, monthly: 0, spentToday: 0, spentThisMonth: 0, tokensToday: 0, tokensThisMonth: 0, overrides: {} },
-  founderBrief: { overdueReminders: [], pendingApprovals: [], openContradictions: [], topRisks: [], generatedAt: "" },
+  founderBrief: { overdueReminders: [], pendingApprovals: [], openContradictions: [], topRisks: [], pendingReviews: [], generatedAt: "" },
+  reviews: [],
   productivity: { assignments: [], optimizationEvents: [], contradictions: [], budgets: [] },
   doctorLastRun: null,
   localAgent: { host: null, seenAgoMs: null, online: false, pending: 0 },
