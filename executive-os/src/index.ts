@@ -13,7 +13,7 @@
  * PAYSTACK_SECRET_KEY, GITHUB_TOKEN, CF_API_TOKEN, ZARLINO_LICENSE_PRIVATE_KEY.
  */
 
-import { ExecutiveStore } from "./db/store";
+import { ExecutiveStore, SNAPSHOT_TABLES } from "./db/store";
 import { createDoSql, type Sql } from "./db/sql";
 import { buildToolRegistry } from "./agent/tools";
 import type { ToolRegistry } from "./core/tools/registry";
@@ -506,6 +506,49 @@ function safeJson(raw: string | null | undefined, fallback: unknown): unknown {
 }
 
 // ---------------------------------------------------------------------------
+// Backup pipeline
+// ---------------------------------------------------------------------------
+// The reset flow must hand over a durable backup WITHOUT materialising the
+// whole database in the DO isolate (that OOM'd the isolate: 128MB heap vs the
+// append-only tables). Strategy: write each table to KV one at a time, chunked
+// per 1000 rows so a single `put` never exceeds KV's 25MB value limit and peak
+// heap stays proportional to the largest table.
+
+const BACKUP_CHUNK_ROWS = 1000;
+
+async function persistBackupToKv(
+  kv: KVNamespace | undefined,
+  store: ExecutiveStore,
+): Promise<{ key: string; tables: number; rows: number }> {
+  const stamp = nowIso().replace(/[^\d]/g, "").slice(0, 14);
+  const prefix = `backup/reset-${stamp}`;
+  let tables = 0;
+  let rows = 0;
+  if (kv) {
+    for (const table of SNAPSHOT_TABLES) {
+      let all: Record<string, unknown>[];
+      try {
+        all = store.exportTableRows(table);
+      } catch {
+        continue;
+      }
+      if (all.length === 0) continue;
+      for (let i = 0; i < all.length; i += BACKUP_CHUNK_ROWS) {
+        const chunk = all.slice(i, i + BACKUP_CHUNK_ROWS);
+        await kv.put(`${prefix}/${table}.${i / BACKUP_CHUNK_ROWS}.json`, JSON.stringify(chunk));
+      }
+      rows += all.length;
+      tables += 1;
+    }
+    await kv.put(
+      `${prefix}/_manifest.json`,
+      JSON.stringify({ exportedAt: nowIso(), tables, rows, tableList: SNAPSHOT_TABLES, chunkRows: BACKUP_CHUNK_ROWS }),
+    );
+  }
+  return { key: prefix, tables, rows };
+}
+
+// ---------------------------------------------------------------------------
 // Durable Object
 // ---------------------------------------------------------------------------
 
@@ -840,13 +883,16 @@ export class ExecutiveAgent {
     }
 
     // Production reset — hands the whole company over to a new operator on a
-    // clean slate. Requires the confirmation phrase to fire; nothing deleted,
-    // a full snapshot is returned for the caller to keep as backup.
+    // clean slate. Requires the confirmation phrase to fire; nothing is ever
+    // deleted. The FULL backup is persisted to KV (one table at a time, so the
+    // DO isolate never materialises the whole DB in memory) and the response
+    // only carries the backup reference + counts.
     if (path === "/api/system/reset-production" && method === "POST") {
       const body = (await readBody<{ confirm?: string }>(request).catch(() => ({}))) as { confirm?: string };
       if (body.confirm !== "RESET PRODUCTION") {
         return json({ error: "Send confirm: 'RESET PRODUCTION' to proceed. Nothing was changed." }, 400);
       }
+      const backupRef = await persistBackupToKv(this.env.ZARLINO_KV, this.store);
       const result = this.store.resetProductionProgress();
       this.store.insertAudit({
         id: newId("aud"),
@@ -855,6 +901,7 @@ export class ExecutiveAgent {
         entity_type: "system",
         entity_id: "production",
         detail_json: JSON.stringify({
+          backupRef: backupRef.key,
           archivedTasks: result.archivedTasks,
           resetGates: result.resetGates,
           resetProducts: result.resetProducts,
@@ -867,13 +914,15 @@ export class ExecutiveAgent {
       });
       return json({
         ok: true,
+        backupRef: backupRef.key,
+        backupTables: backupRef.tables,
+        backupRows: backupRef.rows,
         archivedTasks: result.archivedTasks,
         resetGates: result.resetGates,
         resetProducts: result.resetProducts,
         cancelledLocal: result.cancelledLocal,
         clearedReviews: result.clearedReviews,
-        backup: result.snapshot,
-        note: "Production progress reset to a clean slate. The returned backup snapshot was captured BEFORE the reset — keep it safe.",
+        note: "Production progress reset to a clean slate. Full pre-reset backup persisted to KV under backupRef; nothing was deleted.",
       });
     }
 

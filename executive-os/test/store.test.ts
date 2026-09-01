@@ -246,9 +246,13 @@ describe("ExecutiveStore (node:sqlite)", () => {
     // Gates/products back to clean slate.
     expect(store.listPipelineGates().every((g) => g.status === "NOT_STARTED")).toBe(true);
     expect(store.listProducts().every((p) => p.status === "CONCEPT")).toBe(true);
-    // Snapshot was captured for backup.
-    expect(result.snapshot.tasks).toBeDefined();
-    expect(Array.isArray(result.snapshot.tasks)).toBe(true);
+    // The reset returns counts only (the full backup is persisted to KV by the
+    // route — shipping the snapshot through the response is what OOM'd the DO
+    // isolate in production). Bounded export still works for quick exports.
+    expect(result.archivedTasks).toBeGreaterThanOrEqual(1);
+    expect(store.exportSnapshot().tasks).toBeDefined();
+    expect(Array.isArray(store.exportSnapshot().tasks)).toBe(true);
+    expect(store.exportTableRows("tasks").length).toBeGreaterThan(0);
   });
 
   it("adapts to a legacy schema_migrations table (no name column) — production bug", () => {

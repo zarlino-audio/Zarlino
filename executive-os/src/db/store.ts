@@ -1337,7 +1337,6 @@ export class ExecutiveStore implements CostStorage {
     resetProducts: number;
     cancelledLocal: number;
     clearedReviews: number;
-    snapshot: Record<string, unknown>;
   } {
     const now = new Date().toISOString();
     const count = (q: string) => Number(this.sql.all<Row>(q)[0]?.c ?? 0);
@@ -1353,7 +1352,7 @@ export class ExecutiveStore implements CostStorage {
     // regime are reset so the new operator starts a clean queue.
     const clearedReviews = count("SELECT COUNT(*) AS c FROM review_items WHERE status = 'PENDING'");
     if (clearedReviews > 0) this.sql.run("UPDATE review_items SET status = 'NEEDS_WORK', note = 'Superseded by production reset.', updated_at = ? WHERE status = 'PENDING'", now);
-    return { archivedTasks, resetGates, resetProducts, cancelledLocal, clearedReviews, snapshot: this.exportSnapshot() };
+    return { archivedTasks, resetGates, resetProducts, cancelledLocal, clearedReviews };
   }
 
   // -- Productivity Manager (migration v18) --------------------------------
@@ -1662,26 +1661,37 @@ export class ExecutiveStore implements CostStorage {
    * same migrations can re-import this snapshot to fully reconstruct state.
    * (Auth sessions + credential hashes are included so the Founder can sign in
    * after a restore; uploads are included so files survive too.)
+   *
+   * MEMORY SAFETY: rows are capped per table (default 500) so the returned
+   * object and its JSON serialization stay well inside the DO isolate's heap.
+   * The full, uncapped backup is persisted per-table to KV by the production
+   * reset flow (see exportTableRows), never shipped through an HTTP response.
    */
-  exportSnapshot(): Record<string, unknown[]> {
-    const tables = [
-      "executive_state", "founder_profile", "organizations", "objectives", "projects",
-      "tasks", "decisions", "approval_requests", "risks", "metrics", "financial_snapshots",
-      "products", "product_status", "engineering_issues", "marketing_campaigns", "persons",
-      "delegations", "memories", "doctrine_rules", "policies", "audit_events", "chat_messages",
-      "tool_executions", "workstreams", "pipeline_gates", "model_costs", "founder_credentials",
-      "auth_sessions", "uploaded_files", "local_tasks", "agent_jobs", "settings",
-      "calendar_events", "notes", "reminders", "contacts",
-    ];
+  exportSnapshot(opts: { maxRowsPerTable?: number } = {}): Record<string, unknown[]> {
+    const cap = Math.max(1, opts.maxRowsPerTable ?? 500);
     const out: Record<string, unknown[]> = {};
-    for (const table of tables) {
+    for (const table of SNAPSHOT_TABLES) {
       try {
-        out[table] = this.sql.all<Row>(`SELECT * FROM ${table}`).map((r) => rowTo<unknown>(r));
+        out[table] = this.sql.all<Row>(`SELECT * FROM ${table} LIMIT ${cap}`).map((r) => rowTo<unknown>(r));
       } catch {
         out[table] = []; // table may not exist on an old schema
       }
     }
     return out;
+  }
+
+  /**
+   * Return ALL rows of a single table (bounded by an optional safety cap).
+   * Used by the backup pipeline to persist one table at a time to KV, so peak
+   * heap stays proportional to the largest table rather than the whole DB.
+   */
+  exportTableRows(table: string, maxRows?: number): Record<string, unknown>[] {
+    const cap = maxRows && maxRows > 0 ? maxRows : 50000;
+    try {
+      return this.sql.all<Row>(`SELECT * FROM ${table} LIMIT ${cap}`).map((r) => rowTo<Record<string, unknown>>(r));
+    } catch {
+      return []; // table may not exist on an old schema
+    }
   }
 
   /**
@@ -1712,6 +1722,17 @@ export class ExecutiveStore implements CostStorage {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Every business table, in export order (used by snapshot/backup flows). */
+export const SNAPSHOT_TABLES = [
+  "executive_state", "founder_profile", "organizations", "objectives", "projects",
+  "tasks", "decisions", "approval_requests", "risks", "metrics", "financial_snapshots",
+  "products", "product_status", "engineering_issues", "marketing_campaigns", "persons",
+  "delegations", "memories", "doctrine_rules", "policies", "audit_events", "chat_messages",
+  "tool_executions", "workstreams", "pipeline_gates", "model_costs", "founder_credentials",
+  "auth_sessions", "uploaded_files", "local_tasks", "agent_jobs", "settings",
+  "calendar_events", "notes", "reminders", "contacts",
+];
 
 function rowTo<T>(row: Row | undefined): T {
   return row as unknown as T;
