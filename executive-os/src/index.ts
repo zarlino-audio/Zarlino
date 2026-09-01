@@ -462,8 +462,8 @@ function buildOverview(store: ExecutiveStore, env: Env): Record<string, unknown>
       : { lastRunAt: null, note: "Doctor has not run yet — it runs on DO wake." },
     maintenance: { staleAgentRuns: stuck.staleAgentRuns, expiredLocalLeases: stuck.expiredLeases },
     budget: {
-      daily: Number(env.AI_DAILY_BUDGET) || 0,
-      monthly: Number(env.AI_MONTHLY_BUDGET) || 0,
+      daily: overrides.aiDailyBudget ?? (Number(env.AI_DAILY_BUDGET) || 0),
+      monthly: overrides.aiMonthlyBudget ?? (Number(env.AI_MONTHLY_BUDGET) || 0),
       spentToday: store.spentToday(),
       spentThisMonth: store.spentThisMonth(),
       tokensToday: store.tokensToday(),
@@ -645,14 +645,33 @@ export class ExecutiveAgent {
       toolExecutions: s.listToolExecutions(40),
       metrics: s.listMetrics(10),
       workstreams: s.listWorkstreams(),
-      budget: {
-        daily: Number(this.env.AI_DAILY_BUDGET) || 0,
-        monthly: Number(this.env.AI_MONTHLY_BUDGET) || 0,
-        spentToday: s.spentToday(),
-        spentThisMonth: s.spentThisMonth(),
-        tokensToday: s.tokensToday(),
-        tokensThisMonth: s.tokensThisMonth(),
-        overrides: s.getBudgetOverrides(),
+      budget: (() => {
+        const overrides = s.getBudgetOverrides();
+        const envDaily = Number(this.env.AI_DAILY_BUDGET) || 0;
+        const envMonthly = Number(this.env.AI_MONTHLY_BUDGET) || 0;
+        // Effective caps = override ?? env default (never show a cap the user
+        // didn't actually set). The old display mixed env caps with overrides,
+        // showing a different denominator than what was actually enforced.
+        const daily = overrides.aiDailyBudget ?? envDaily;
+        const monthly = overrides.aiMonthlyBudget ?? envMonthly;
+        return {
+          daily,
+          monthly,
+          envDaily,
+          envMonthly,
+          spentToday: s.spentToday(),
+          spentThisMonth: s.spentThisMonth(),
+          tokensToday: s.tokensToday(),
+          tokensThisMonth: s.tokensThisMonth(),
+          overrides,
+        };
+      })(),
+      founderBrief: {
+        overdueReminders: s.listReminders({ overdueOnly: true, limit: 8 }),
+        pendingApprovals: s.listApprovals({ status: "PENDING", limit: 6 }),
+        openContradictions: s.listContradictions({ status: "OPEN", limit: 6 }),
+        topRisks: s.openRisks().slice(0, 6),
+        generatedAt: nowIso(),
       },
       productivity: {
         assignments: s.listAssignments({ limit: 100 }),

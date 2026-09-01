@@ -302,38 +302,50 @@ export interface PaletteItem {
 
 export function CommandPalette({ open, items, onClose, onPick }: { open: boolean; items: PaletteItem[]; onClose: () => void; onPick: (id: string) => void }) {
   const [q, setQ] = useState("");
+  const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (open) {
       setQ("");
+      setActive(0);
       setTimeout(() => inputRef.current?.focus(), 10);
     }
   }, [open]);
   if (!open) return null;
-  const filtered = items.filter((i) => i.label.toLowerCase().includes(q.toLowerCase())).slice(0, 12);
+  const all = items.filter((i) => i.label.toLowerCase().includes(q.toLowerCase()));
+  const filtered = all.slice(0, 12);
+  const more = all.length - filtered.length;
+  const pick = (i: PaletteItem) => { onPick(i.id); onClose(); };
   return (
     <div className="palette-overlay" onClick={onClose}>
-      <div className="palette" onClick={(e) => e.stopPropagation()}>
+      <div className="palette" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Jump to a view">
         <input
           ref={inputRef}
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => { setQ(e.target.value); setActive(0); }}
           onKeyDown={(e) => {
             if (e.key === "Escape") onClose();
-            if (e.key === "Enter" && filtered[0]) {
-              onPick(filtered[0].id);
-              onClose();
-            }
+            else if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, filtered.length - 1)); }
+            else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+            else if (e.key === "Home") { e.preventDefault(); setActive(0); }
+            else if (e.key === "End") { e.preventDefault(); setActive(filtered.length - 1); }
+            else if (e.key === "Enter" && filtered[active]) { pick(filtered[active]!); }
           }}
           placeholder="Jump to…"
         />
         <div className="palette-list">
-          {filtered.map((i) => (
-            <button key={i.id} className="palette-item" onClick={() => { onPick(i.id); onClose(); }}>
+          {filtered.map((i, idx) => (
+            <button
+              key={i.id}
+              className={`palette-item ${idx === active ? "active" : ""}`}
+              onMouseEnter={() => setActive(idx)}
+              onClick={() => pick(i)}
+            >
               <span>{i.label}</span>
               {i.hint && <span className="muted mono">{i.hint}</span>}
             </button>
           ))}
+          {more > 0 && <div className="muted palette-empty">…and {more} more — refine your search</div>}
           {filtered.length === 0 && <div className="muted palette-empty">No matches</div>}
         </div>
       </div>

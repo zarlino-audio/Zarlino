@@ -96,6 +96,7 @@ const EMPTY_BUNDLE: DataBundle = {
   metrics: [],
   workstreams: [],
   budget: { daily: 0, monthly: 0, spentToday: 0, spentThisMonth: 0, tokensToday: 0, tokensThisMonth: 0, overrides: {} },
+  founderBrief: { overdueReminders: [], pendingApprovals: [], openContradictions: [], topRisks: [], generatedAt: "" },
   productivity: { assignments: [], optimizationEvents: [], contradictions: [], budgets: [] },
   doctorLastRun: null,
   localAgent: { host: null, seenAgoMs: null, online: false, pending: 0 },
@@ -137,18 +138,28 @@ export function App() {
   }, [load]);
   usePolling(() => void load(), 60_000, []);
 
-  // Keyboard: Ctrl/Cmd+K or "?" opens palette, Alt+←/→ cycles views.
+  // Keyboard: Ctrl/Cmd+K opens palette, "?" opens palette (ignored while
+  // typing), Alt+←/→ cycles views (guarded so it can't destroy draft text).
   useEffect(() => {
+    const isEditable = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+    };
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPalette((p) => !p);
-      } else if (e.key === "?") {
+        return;
+      }
+      if (isEditable(e.target)) return; // never hijack typing in inputs
+      if (e.key === "?") {
         setPalette((p) => !p);
       } else if (e.altKey && e.key === "ArrowRight") {
+        e.preventDefault();
         const i = VIEWS.findIndex((v) => v.id === view);
         setView(VIEWS[(i + 1) % VIEWS.length]!.id);
       } else if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
         const i = VIEWS.findIndex((v) => v.id === view);
         setView(VIEWS[(i - 1 + VIEWS.length) % VIEWS.length]!.id);
       }
@@ -156,6 +167,18 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view]);
+
+  // Session expiry: a 401 anywhere clears the token and returns to the login
+  // gate instead of leaving the founder stuck in a dead app.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      clearToken();
+      setTokenState("");
+      setView("overview");
+    };
+    window.addEventListener("exec-os-unauthorized", onUnauthorized);
+    return () => window.removeEventListener("exec-os-unauthorized", onUnauthorized);
+  }, []);
 
   const signOut = async () => {
     try {
@@ -214,6 +237,12 @@ export function App() {
       </header>
 
       {error && !data && <div className="error-box">{error}</div>}
+      {error && data && (
+        <div className="error-box" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>⚠️ Showing stale data — refresh failed: {error}</span>
+          <button className="mini" onClick={() => void load()}>Retry</button>
+        </div>
+      )}
 
       {toast && <div className={`toast ${toast.ok ? "ok" : "fail"}`} key={toast.id}>{toast.text}</div>}
 
@@ -224,7 +253,13 @@ export function App() {
           </div>
         }
       >
-        <C {...props} />
+        {data === null && !error ? (
+          <div className="loading">
+            <span className="dot" /><span className="dot" /><span className="dot" /> loading live data…
+          </div>
+        ) : (
+          <C {...props} />
+        )}
       </Suspense>
 
       <CommandPalette
@@ -235,7 +270,7 @@ export function App() {
       />
 
       <footer className="muted">
-        <span>Ctrl/⌘+K jump · Alt+←/→ views · {VIEWS.length} views · data refreshes every 60s</span>
+        <span>Ctrl/⌘+K jump · Alt+←/→ views · {VIEWS.length} views · data refreshes every 60s{data?.generatedAt ? ` · data as of ${new Date(data.generatedAt).toLocaleTimeString()}` : ""}</span>
       </footer>
     </div>
   );

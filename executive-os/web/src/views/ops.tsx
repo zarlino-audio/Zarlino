@@ -30,14 +30,14 @@ export function FilesView({ data, mutate: _mutate, notify: _notify }: ViewProps)
                   <td>{f.name}</td>
                   <td><Badge>{f.kind ?? "—"}</Badge></td>
                   <td className="mono muted">{f.mime ?? "—"}</td>
-                  <td className="mono">{f.sizeBytes !== undefined ? fmt(Math.round(f.sizeBytes / 1024)) + " KB" : "—"}</td>
+                  <td className="mono">{f.sizeBytes !== undefined ? (f.sizeBytes < 1024 ? `${f.sizeBytes} B` : `${fmt(Math.round(f.sizeBytes / 1024))} KB`) : "—"}</td>
                   <td className="mono muted">{timeAgo(f.created_at)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-        <p className="muted">Files are uploaded from Chat (📎 attach) or via the API.</p>
+        <p className="muted">Files are uploaded via the API or by attaching them in Chat (📎 in the composer).</p>
       </div>
     </div>
   );
@@ -48,19 +48,22 @@ export function FilesView({ data, mutate: _mutate, notify: _notify }: ViewProps)
 export function LocalRunsView({ data, mutate, notify }: ViewProps) {
   const localTasks = data.localTasks ?? [];
   const runs = data.runs ?? [];
-  const busy = useState(false);
+  const [resuming, setResuming] = useState<string | null>(null);
   const la = data.localAgent as
     | { host?: string | null; online?: boolean; seenAgoMs?: number | null; pending?: number; lastSeen?: string | null; currentTask?: { id: string; status: string; prompt: string; updatedAt: string } | null }
     | undefined;
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const resume = async (id: string) => {
+    setResuming(id);
     try {
       await api.continueRun(id);
       await mutate();
       notify("Run resumed — it will execute on the next alarm/wake cycle");
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), false);
+    } finally {
+      setResuming(null);
     }
   };
 
@@ -75,7 +78,7 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
             <p>
               <Badge tone="ok">ONLINE</Badge>{" "}
               <span className="mono">host {la.host ?? "—"}</span> · last seen{" "}
-              {la.seenAgoMs != null ? `${Math.max(1, Math.round(la.seenAgoMs / 1000))}s ago` : "—"} ·{" "}
+              {la.seenAgoMs != null ? timeAgo(new Date(Date.now() - la.seenAgoMs).toISOString()) : "—"} ·{" "}
               <span className="muted">{la.pending ?? 0} pending task(s)</span>
             </p>
             {la.currentTask && (
@@ -118,11 +121,16 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
               const isOpen = open[id];
               return (
                 <div className={`worker-card ${status === "DONE" ? "done" : status === "FAILED" ? "failed" : ""}`} key={i}>
-                  <div className="worker-head" onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}>
+                  <button
+                    className="worker-head"
+                    onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}
+                    aria-expanded={isOpen}
+                    aria-label={`${status}: ${prompt.slice(0, 60)}`}
+                  >
                     <span className={`badge ${status === "DONE" ? "ok" : status === "FAILED" ? "fail" : "warn"}`}>{status}</span>
                     <span className="worker-prompt-preview">{prompt.slice(0, 90)}{prompt.length > 90 ? "…" : ""}</span>
                     <span className="muted mono" style={{ marginLeft: "auto", fontSize: 11 }}>{timeAgo(String(t.updated_at ?? ""))} {isOpen ? "▴" : "▾"}</span>
-                  </div>
+                  </button>
                   {isOpen && (
                     <div className="worker-detail">
                       <div className="worker-block">
@@ -171,7 +179,9 @@ export function LocalRunsView({ data, mutate, notify }: ViewProps) {
                   <td className="mono muted">{timeAgo(String(r.updated_at ?? ""))}</td>
                   <td>
                     {["STOPPED", "TIMEOUT", "FAILED"].includes(String(r.status)) && (
-                      <button className="mini" disabled={busy[0]} onClick={() => resume(String(r.id))}>Continue</button>
+                      <button className="mini" disabled={resuming === String(r.id)} onClick={() => resume(String(r.id))}>
+                        {resuming === String(r.id) ? "…" : "Continue"}
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -231,10 +241,15 @@ export function DoctorView({ data, mutate, notify }: ViewProps) {
           </div>
         </div>
         {last ? (
-          <p className="muted">
+          <div className="muted" style={{ lineHeight: 1.6 }}>
             Last run <b>{timeAgo(last.runAt)}</b> · trigger {last.trigger} ·{" "}
-            {last.summary ? <span className="mono">{JSON.stringify(last.summary)}</span> : null}
-          </p>
+            {last.summary && typeof last.summary === "object" && !Array.isArray(last.summary) ? (
+              <span>
+                {Number((last.summary as Record<string, number>).ok ?? 0)} ok · {Number((last.summary as Record<string, number>).warn ?? 0)} warn ·{" "}
+                {Number((last.summary as Record<string, number>).fail ?? 0)} fail · {Number((last.summary as Record<string, number>).fixed ?? 0)} fixed
+              </span>
+            ) : null}
+          </div>
         ) : (
           <p className="muted">Doctor runs on DO wake and every 6h (cron).</p>
         )}
@@ -348,7 +363,7 @@ export function ProductivityView({ data, mutate, notify }: ViewProps) {
                   <td className="mono">{b.scope}{b.scopeId ? `:${b.scopeId}` : ""}</td>
                   <td className="mono">{b.monthlyBudget?.toLocaleString() ?? "—"}</td>
                   <td className="mono">{b.tokensUsedMonth.toLocaleString()}</td>
-                  <td><Badge tone={b.status === "OVER" ? "fail" : b.status === "WARN" ? "warn" : "ok"}>{b.usagePctMonth}%</Badge></td>
+                  <td><Badge tone={b.status === "OVER" ? "fail" : b.status === "WARN" ? "warn" : "ok"}>{Math.round(b.usagePctMonth)}%</Badge></td>
                   <td className="mono">{b.modelTier ?? "—"}</td>
                 </tr>
               ))}

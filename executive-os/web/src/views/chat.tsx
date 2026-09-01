@@ -45,6 +45,8 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
   const [rail, setRail] = useState<"approvals" | "contradictions" | "daemon">("contradictions");
   const logRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -85,12 +87,25 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
   }, [busy]);
 
   useEffect(() => {
-    logRef.current?.scrollTo({ top: logRef.current.scrollHeight, behavior: "smooth" });
+    const el = logRef.current;
+    if (!el) return;
+    // Only auto-scroll when the founder is already near the bottom, so reading
+    // earlier messages while streaming isn't yanked back down.
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages, streaming]);
+
+  // Auto-dismiss transient chat errors so the red box doesn't sit forever.
+  useEffect(() => {
+    if (!error) return;
+    const t = setTimeout(() => setError(""), 8000);
+    return () => clearTimeout(t);
+  }, [error]);
 
   const send = async (text: string) => {
     const content = text.trim();
     if (!content || busy) return;
+    const sid = sessionIdRef.current; // capture — the founder may switch sessions mid-stream
     setInput("");
     setError("");
     setMessages((m) => [...m, { role: "user", content }]);
@@ -99,11 +114,12 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
     const acc: string[] = [];
     abortRef.current = new AbortController();
     try {
-      const start = await api.chatStreamStart(content, sessionId);
+      const start = await api.chatStreamStart(content, sid);
       setMessages((m) => [...m, { role: "assistant", content: "" }]);
       await chatSse(
         start.streamId,
         (chunk) => {
+          if (sessionIdRef.current !== sid) return; // dropped — session changed
           acc.push(chunk);
           const joined = acc.join("");
           setMessages((m) => {
@@ -116,9 +132,15 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
         },
         abortRef.current.signal,
       );
-      await loadHistory(sessionId);
+      await loadHistory(sid);
       await loadSessions();
     } catch (e) {
+      const isAbort = e instanceof DOMException && e.name === "AbortError";
+      if (isAbort) {
+        // Stop pressed — intentional, not a failure.
+        await loadHistory(sid);
+        return;
+      }
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       notify(`Chat failed: ${msg}`, false);
@@ -145,6 +167,7 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
   };
 
   const deleteSession = async (sid: string) => {
+    if (!window.confirm("Delete this conversation? This cannot be undone.")) return;
     try {
       await api.clearChat(sid);
       if (sid === sessionId) {
@@ -157,9 +180,14 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
     }
   };
 
-  const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text);
-    notify("Copied");
+  const copy = async (text: string) => {
+    try {
+      if (!navigator.clipboard) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(text);
+      notify("Copied");
+    } catch {
+      notify("Couldn't copy to clipboard", false);
+    }
   };
 
   const contradictions: Contradiction[] = data.productivity?.contradictions ?? [];
@@ -196,6 +224,9 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
       {/* ---- main chat ---- */}
       <section className="chat3-main">
         <div className="chat3-log" ref={logRef}>
+          {!historyLoaded && messages.length === 0 && (
+            <div className="muted" style={{ padding: 20 }}>Loading conversation…</div>
+          )}
           {messages.length === 0 && historyLoaded && (
             <div className="chat-hero">
               <h2>Ask the Executive</h2>
@@ -219,7 +250,7 @@ export function ChatView({ data, mutate: _mutate, notify }: ViewProps) {
                   {m.role === "assistant" ? <Markdown text={m.content} /> : <span>{m.content}</span>}
                 </div>
                 <div className="msg-tools">
-                  <button className="mini" onClick={() => copy(m.content)}>⧉ copy</button>
+                  <button className="mini" onClick={() => void copy(m.content)}>⧉ copy</button>
                 </div>
               </div>
             </div>

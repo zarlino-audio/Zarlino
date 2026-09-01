@@ -94,7 +94,7 @@ export function Pipeline({ data, mutate, notify }: ViewProps) {
           <div className="grid">
             {persons.map((p, i) => (
               <div className="metric" key={i}>
-                <div className="value" style={{ fontSize: 14 }}>{String(p.name)}</div>
+                <div className="value" style={{ fontSize: 14 }}>{String(p.name ?? "")}</div>
                 <div className="key">{String(p.role ?? "")}</div>
               </div>
             ))}
@@ -118,10 +118,10 @@ export function Finance({ data }: ViewProps) {
           <p className="muted">No financial snapshot yet.</p>
         ) : (
           <div className="grid">
-            <div className="metric"><div className="value">${fmt(Number(fin.cash ?? 0), 2)}</div><div className="key">Cash</div></div>
-            <div className="metric"><div className="value">${fmt(Number(fin.revenue ?? 0), 2)}</div><div className="key">Revenue</div></div>
-            <div className="metric"><div className="value">${fmt(Number(fin.expenses ?? 0), 2)}</div><div className="key">Expenses</div></div>
-            <div className="metric"><div className="value">{fin.runway_months ? String(fin.runway_months) : "—"}</div><div className="key">Runway (mo)</div></div>
+            <div className="metric"><div className="value">{fin.cash !== undefined && fin.cash !== null ? `$${fmt(Number(fin.cash), 2)}` : "—"}</div><div className="key">Cash</div></div>
+            <div className="metric"><div className="value">{fin.revenue !== undefined && fin.revenue !== null ? `$${fmt(Number(fin.revenue), 2)}` : "—"}</div><div className="key">Revenue</div></div>
+            <div className="metric"><div className="value">{fin.expenses !== undefined && fin.expenses !== null ? `$${fmt(Number(fin.expenses), 2)}` : "—"}</div><div className="key">Expenses</div></div>
+            <div className="metric"><div className="value">{(fin.runway_months !== undefined && fin.runway_months !== null) ? String(fin.runway_months) : "—"}</div><div className="key">Runway (mo)</div></div>
           </div>
         )}
       </div>
@@ -230,7 +230,7 @@ export function Catalog({ data }: ViewProps) {
         <h2>Objectives</h2>
         {objectives.length === 0 ? <p className="muted">None.</p> : objectives.map((o, i) => (
           <div key={i} className="metric" style={{ marginBottom: 8 }}>
-            <div className="value" style={{ fontSize: 14 }}>{String(o.title)}</div>
+            <div className="value" style={{ fontSize: 14 }}>{String(o.title ?? "")}</div>
             <div className="key">{String(o.status ?? "")} · priority {String(o.priority ?? "")}</div>
           </div>
         ))}
@@ -245,8 +245,8 @@ export function Catalog({ data }: ViewProps) {
             <tbody>
               {projects.map((p, i) => (
                 <tr key={i}>
-                  <td>{String(p.name)}</td>
-                  <td><Badge tone={String(p.status) === "ACTIVE" ? "ok" : "warn"}>{String(p.status)}</Badge></td>
+                  <td>{String(p.name ?? "")}</td>
+                  <td><Badge tone={String(p.status) === "ACTIVE" ? "ok" : "warn"}>{String(p.status ?? "")}</Badge></td>
                   <td>{String(p.priority ?? "")}</td>
                   <td className="mono muted">{String(p.target_date ?? "")}</td>
                 </tr>
@@ -284,7 +284,7 @@ export function Catalog({ data }: ViewProps) {
             <tbody>
               {marketing.map((m, i) => (
                 <tr key={i}>
-                  <td>{String(m.name)}</td>
+                  <td>{String(m.name ?? "")}</td>
                   <td className="mono">{String(m.channel ?? "")}</td>
                   <td className="mono">${fmt(Number(m.budget ?? 0), 0)}</td>
                   <td><Badge>{String(m.status ?? "")}</Badge></td>

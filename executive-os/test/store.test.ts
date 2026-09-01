@@ -174,6 +174,41 @@ describe("ExecutiveStore (node:sqlite)", () => {
     expect(run.checkpoint_json).toBeTruthy(); // checkpoint preserved for continuation
   });
 
+  it("deletes superseded restart-orphan runs and reports provider payment failures", () => {
+    const now = new Date().toISOString();
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    // Orphan whose task now has a newer RUNNING run → superseded, delete it.
+    store.createAgentRun({
+      id: "run_orphan_superseded", task_id: "tsk_a", prompt: "x", status: "FAILED", iterations: 0, tools_called: 0,
+      started_at: old, source: "system", created_at: old, updated_at: old,
+      error: "Interrupted by a restart — use Continue to resume from the checkpoint.",
+    });
+    store.createAgentRun({
+      id: "run_newer", task_id: "tsk_a", prompt: "x", status: "RUNNING", iterations: 5, tools_called: 10,
+      started_at: now, source: "system", created_at: now, updated_at: now, last_heartbeat: now,
+    });
+    // Orphan whose task has NO newer run → must survive (still actionable).
+    store.createAgentRun({
+      id: "run_orphan_alone", task_id: "tsk_b", prompt: "y", status: "FAILED", iterations: 0, tools_called: 0,
+      started_at: old, source: "system", created_at: old, updated_at: old,
+      error: "Interrupted by a restart — use Continue to resume from the checkpoint.",
+    });
+    const deleted = store.cleanupSupersededOrphanRuns();
+    expect(deleted).toContain("run_orphan_superseded");
+    expect(deleted).not.toContain("run_orphan_alone");
+    expect(store.getAgentRun("run_orphan_superseded")).toBeNull();
+    expect(store.getAgentRun("run_orphan_alone")).not.toBeNull();
+    // 402 surfacing (a prior test already left a local 402 task — that's fine).
+    expect(store.recentProviderFailure()).not.toBeNull();
+    store.createAgentRun({
+      id: "run_402", prompt: "z", status: "FAILED", iterations: 1, tools_called: 0,
+      started_at: now, source: "system", created_at: now, updated_at: now,
+      error: 'DeepSeek HTTP 402: {"error":{"message":"Insufficient Balance"}}',
+    });
+    const f = store.recentProviderFailure();
+    expect(f?.kind).toBe("cloud");
+  });
+
   it("adapts to a legacy schema_migrations table (no name column) — production bug", () => {
     // The production store's schema_migrations predates the `name` column.
     // Reproduce that exact shape and confirm migrate() adapts in place instead

@@ -116,6 +116,13 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     label: "No orphaned interrupted long-horizon runs",
     severity: "HIGH",
     run: (ctx, autoFix) => {
+      // Dead weight first: orphans whose task already has a newer run can never
+      // be resumed — delete them so the count reflects real work.
+      if (autoFix) {
+        try {
+          ctx.store.cleanupSupersededOrphanRuns();
+        } catch { /* cleanup is best-effort */ }
+      }
       const orphans = ctx.store.countInterruptedRuns();
       const limitReached = ctx.store.countLimitReachedRuns();
       const n = orphans + limitReached;
@@ -138,6 +145,24 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
         );
       }
       return okResult("jobs.interrupted_runs", "No orphaned interrupted long-horizon runs", "HIGH", "No interrupted long-horizon runs.");
+    },
+  },
+  {
+    id: "provider.balance",
+    label: "AI provider balance is healthy",
+    severity: "HIGH",
+    run: (ctx) => {
+      const fail = ctx.store.recentProviderFailure();
+      if (fail) {
+        return failResult(
+          "provider.balance",
+          "AI provider balance is healthy",
+          "HIGH",
+          `AI provider is rejecting paid work: ${fail.kind} runs failing with HTTP 402 Insufficient Balance (last ${fail.at}).`,
+          "Top up the DeepSeek account — cloud runs and the local daemon keep failing with 402 until then.",
+        );
+      }
+      return okResult("provider.balance", "AI provider balance is healthy", "HIGH", "No recent AI provider payment failures.");
     },
   },
   {

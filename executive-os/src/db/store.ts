@@ -927,6 +927,47 @@ export class ExecutiveStore implements CostStorage {
     }
     return ids;
   }
+  /**
+   * Delete superseded restart-orphan runs — 0-iteration FAILED "Interrupted by
+   * a restart" runs whose task already has a newer non-FAILED run. They can
+   * never be resumed (a newer run owns the task), so they are dead weight that
+   * makes the Doctor's interrupted pile look bigger than the real work. Safe:
+   * 0 iterations means no tool side-effects happened. Returns deleted ids.
+   */
+  cleanupSupersededOrphanRuns(): string[] {
+    const rows = this.sql.all<Row>(
+      "SELECT id, task_id, created_at FROM agent_jobs WHERE status = 'FAILED' AND iterations = 0 AND error LIKE '%Interrupted by a restart%' AND task_id IS NOT NULL",
+    );
+    const deleted: string[] = [];
+    for (const r of rows) {
+      const taskId = String(r.task_id);
+      const created = String(r.created_at);
+      const newer = this.sql.all<Row>(
+        "SELECT id FROM agent_jobs WHERE task_id = ? AND status <> 'FAILED' AND created_at > ? LIMIT 1",
+        taskId, created,
+      );
+      if (newer.length === 0) continue;
+      this.sql.run("DELETE FROM agent_jobs WHERE id = ?", String(r.id));
+      deleted.push(String(r.id));
+    }
+    return deleted;
+  }
+  /**
+   * Most recent AI-provider payment failure (HTTP 402 / Insufficient Balance)
+   * across cloud runs and local tasks — surfaces "the account needs topping up"
+   * as a first-class Doctor concern instead of dozens of cryptic 402 errors.
+   */
+  recentProviderFailure(): { kind: string; at: string } | null {
+    const runs = this.sql.all<Row>(
+      "SELECT error, updated_at FROM agent_jobs WHERE error LIKE '%402%' OR error LIKE '%Insufficient Balance%' ORDER BY updated_at DESC LIMIT 1",
+    );
+    if (runs.length) return { kind: "cloud", at: String(runs[0]?.updated_at ?? "") };
+    const local = this.sql.all<Row>(
+      "SELECT error, updated_at FROM local_tasks WHERE error LIKE '%402%' OR error LIKE '%Insufficient Balance%' ORDER BY updated_at DESC LIMIT 1",
+    );
+    if (local.length) return { kind: "local-daemon", at: String(local[0]?.updated_at ?? "") };
+    return null;
+  }
   /** True if the task had a run end in a terminal failure within `withinMs` (re-creation backoff). */
   hasRecentFailedRunForTask(taskId: string, withinMs = 10 * 60_000): boolean {
     const cutoff = new Date(Date.now() - withinMs).toISOString();

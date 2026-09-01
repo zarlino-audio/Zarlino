@@ -530,11 +530,46 @@ footer {
   text-align: left;
   font-size: 14px;
 }
-.palette-item:hover {
+.palette-item:hover,
+.palette-item.active {
   background: var(--panel-2);
+  outline: 1px solid var(--accent);
 }
 .palette-empty {
   padding: 14px;
+}
+
+/* Founder digest (Overview) */
+.founder-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.founder-list li {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.card.sub {
+  padding: 12px;
+}
+.card.sub h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.worker-head {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font: inherit;
 }
 
 /* Chips / mini buttons */

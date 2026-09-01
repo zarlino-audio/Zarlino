@@ -17,11 +17,25 @@ export function Overview({ data, mutate, notify }: ViewProps) {
   const st = data.state;
   const fuelPct = budget.monthly > 0 ? Math.round((budget.spentThisMonth / budget.monthly) * 100) : 0;
 
-  const setControl = async (patch: Parameters<typeof api.controlExecutive>[0], label: string) => {
+  const setControl = async (patch: Parameters<typeof api.controlExecutive>[0], label: string, wasOn: boolean) => {
+    // Confirm serious toggles so one mis-click can't pause the OS, kill
+    // spending/deploys, or grant full autonomy.
+    const isDanger =
+      patch.paused !== undefined || patch.spendingDisabled !== undefined || patch.deploymentsDisabled !== undefined || patch.fullAccess !== undefined;
+    if (isDanger) {
+      const turningOn = patch.paused === true || patch.spendingDisabled === true || patch.deploymentsDisabled === true || patch.fullAccess === true;
+      if (!window.confirm(`${turningOn ? "ENABLE" : "DISABLE"} ${label.replace(/^[^\s]+\s/, "")}?`)) return;
+    }
     try {
       await api.controlExecutive(patch);
       await mutate();
-      notify(`${label} ${patch.paused ? "ON (executive paused)" : patch.fullAccess ? "ENABLED (full autonomy)" : "updated"}`);
+      const nowOn = patch.paused === true || patch.spendingDisabled === true || patch.deploymentsDisabled === true || patch.fullAccess === true;
+      const off = patch.paused === false || patch.spendingDisabled === false || patch.deploymentsDisabled === false || patch.delegateMode === false || patch.fullAccess === false;
+      if (patch.autonomyMode) notify(`Autonomy mode → ${patch.autonomyMode}`);
+      else if (nowOn) notify(`${label} ON`);
+      else if (off) notify(`${label} OFF`);
+      else if (wasOn) notify(`${label} OFF`);
+      else notify(`${label} ON`);
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), false);
     }
@@ -60,7 +74,8 @@ export function Overview({ data, mutate, notify }: ViewProps) {
                 key={t.key}
                 className={`control-toggle ${t.on ? "on" : ""} ${t.danger ? "danger" : ""}`}
                 title={t.hint}
-                onClick={() => setControl({ [t.key]: !t.on } as Parameters<typeof api.controlExecutive>[0], t.label)}
+                aria-label={t.label}
+                onClick={() => setControl({ [t.key]: !t.on } as Parameters<typeof api.controlExecutive>[0], t.label, t.on)}
               >
                 <span>{t.label}</span>
                 <span className="control-state">{t.on ? "ON" : "off"}</span>
@@ -71,7 +86,7 @@ export function Overview({ data, mutate, notify }: ViewProps) {
               <select
                 className="sel"
                 value={st.autonomy_mode ?? "CONTROLLED"}
-                onChange={(e) => setControl({ autonomyMode: e.target.value }, `autonomy → ${e.target.value}`)}
+                onChange={(e) => setControl({ autonomyMode: e.target.value }, `autonomy → ${e.target.value}`, false)}
               >
                 <option value="CONTROLLED">CONTROLLED</option>
                 <option value="DELEGATED">DELEGATED</option>
@@ -94,7 +109,14 @@ export function Overview({ data, mutate, notify }: ViewProps) {
         </div>
         <div className="row" style={{ gap: 20, flexWrap: "wrap" }}>
           <FuelGauge used={budget.spentThisMonth} budget={budget.monthly} label="AI budget (month)" />
-          <FuelGauge used={budget.tokensToday} budget={Math.max(budget.tokensToday, budget.daily || 30_000_000)} label="tokens today" />
+          {budget.daily > 0 ? (
+            <FuelGauge used={budget.tokensToday} budget={budget.daily} label="tokens today" />
+          ) : (
+            <div className="metric">
+              <div className="value">{fmt(budget.tokensToday)}</div>
+              <div className="key">tokens today · no daily cap set</div>
+            </div>
+          )}
         </div>
         <p className="muted">
           Spent today <b>${fmt(budget.spentToday, 2)}</b> · month <b>${fmt(budget.spentThisMonth, 2)}</b> of ${fmt(budget.monthly)} ({fuelPct}%) ·{" "}
@@ -114,6 +136,63 @@ export function Overview({ data, mutate, notify }: ViewProps) {
         <Metric label="Overdue reminders" value={c.overdueReminders ?? 0} />
         <Metric label="Contradictions" value={c.contradictionsOpen ?? 0} tone={(c.contradictionsOpen ?? 0) > 0 ? "warn" : undefined} />
         <Metric label="Assignments open" value={c.assignmentsOpen ?? 0} />
+      </div>
+
+      <div className="card section-gap">
+        <h2>🎯 Needs the Founder</h2>
+        <p className="muted">
+          A live digest of what only you can action — overdue reminders, pending approvals, open contradictions, and top risks.
+        </p>
+        <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <div className="card sub">
+            <h3>⏰ Overdue reminders ({data.founderBrief?.overdueReminders.length ?? 0})</h3>
+            {(data.founderBrief?.overdueReminders ?? []).length === 0 ? (
+              <p className="muted">None overdue 🎉</p>
+            ) : (
+              <ul className="founder-list">
+                {(data.founderBrief?.overdueReminders ?? []).map((r, i) => (
+                  <li key={i}><span className="muted mono">{timeAgo(String((r as { due_at?: string }).due_at ?? ""))}</span> — {String((r as { title?: string }).title ?? "")}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="card sub">
+            <h3>✋ Pending approvals ({data.founderBrief?.pendingApprovals.length ?? 0})</h3>
+            {(data.founderBrief?.pendingApprovals ?? []).length === 0 ? (
+              <p className="muted">Nothing waiting on you</p>
+            ) : (
+              <ul className="founder-list">
+                {(data.founderBrief?.pendingApprovals ?? []).map((a, i) => (
+                  <li key={i}><span className="muted mono">{timeAgo(String((a as { created_at?: string }).created_at ?? ""))}</span> — {String((a as { summary?: string }).summary ?? (a as { title?: string }).title ?? "")}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="card sub">
+            <h3>⚠️ Open contradictions ({data.founderBrief?.openContradictions.length ?? 0})</h3>
+            {(data.founderBrief?.openContradictions ?? []).length === 0 ? (
+              <p className="muted">No open contradictions</p>
+            ) : (
+              <ul className="founder-list">
+                {(data.founderBrief?.openContradictions ?? []).map((c2, i) => (
+                  <li key={i}><span className="muted mono">{String((c2 as { kind?: string }).kind ?? "")}</span> — {String((c2 as { detail?: string }).detail ?? "").slice(0, 90)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="card sub">
+            <h3>🚨 Top risks ({data.founderBrief?.topRisks.length ?? 0})</h3>
+            {(data.founderBrief?.topRisks ?? []).length === 0 ? (
+              <p className="muted">No open risks</p>
+            ) : (
+              <ul className="founder-list">
+                {(data.founderBrief?.topRisks ?? []).map((rk, i) => (
+                  <li key={i}><span className="muted mono">{String((rk as { severity?: string }).severity ?? "")}</span> — {String((rk as { title?: string }).title ?? (rk as { description?: string }).description ?? "").slice(0, 90)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="card section-gap">
@@ -241,6 +320,7 @@ export function Tasks({ data, mutate, notify }: ViewProps) {
     { status: "OPEN", label: "To Do", items: open },
     { status: "IN_PROGRESS", label: "In Progress", items: inProg },
     { status: "BLOCKED", label: "Blocked", items: blocked },
+    { status: "DONE", label: "Done", items: done },
   ];
 
   return (
@@ -281,12 +361,13 @@ export function Tasks({ data, mutate, notify }: ViewProps) {
                   {col.status === "BLOCKED" && (
                     <button className="mini" onClick={() => setStatus(t, "IN_PROGRESS")}>Unblock</button>
                   )}
-                  {t.status !== "BLOCKED" && (
+                  {(col.status === "OPEN" || col.status === "IN_PROGRESS") && (
                     <button className="mini" onClick={() => setStatus(t, "BLOCKED")}>⛔</button>
                   )}
                 </div>
               </div>
             ))}
+            {col.items.length > 40 && <p className="muted">…and {col.items.length - 40} more — open them via the agent or a narrowed search.</p>}
           </div>
         ))}
       </div>
@@ -300,13 +381,15 @@ export function Approvals({ mutate, notify }: ViewProps) {
   const [busy, setBusy] = useState(false);
   const [list, setList] = useState<Array<Record<string, unknown>>>([]);
   const [loaded, setLoaded] = useState(false);
+  const [err, setErr] = useState("");
 
   const load = async () => {
     try {
       const r = await api.approvals();
       setList(r.approvals as unknown as Array<Record<string, unknown>>);
-    } catch {
-      /* non-fatal */
+      setErr("");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setLoaded(true);
     }
@@ -314,6 +397,9 @@ export function Approvals({ mutate, notify }: ViewProps) {
 
   useEffect(() => {
     void load();
+    // Auto-refresh while the view is open (30s) so new requests appear.
+    const t = setInterval(() => void load(), 30_000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -336,6 +422,11 @@ export function Approvals({ mutate, notify }: ViewProps) {
         <h2>Approval requests</h2>
         {!loaded ? (
           <p className="muted">Loading…</p>
+        ) : err ? (
+          <div className="error-box">
+            Couldn't load approvals: {err}{" "}
+            <button className="mini" onClick={() => void load()}>Retry</button>
+          </div>
         ) : list.length === 0 ? (
           <p className="muted">No approval requests.</p>
         ) : (

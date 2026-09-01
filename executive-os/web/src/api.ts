@@ -25,18 +25,36 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body !== undefined && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
-  const res = await fetch(path, { ...init, headers });
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) msg = body.error;
-    } catch {
-      /* non-JSON error body */
+  // Hard 25s timeout so a hanging request can't freeze the console.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 25_000);
+  try {
+    const res = await fetch(path, { ...init, headers, signal: controller.signal });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (body.error) msg = body.error;
+      } catch {
+        /* non-JSON error body */
+      }
+      // Expired session: bounce to the login gate everywhere at once.
+      if (res.status === 401 && path !== "/api/auth/login") {
+        clearToken();
+        window.dispatchEvent(new Event("exec-os-unauthorized"));
+        msg = "Session expired — please sign in again.";
+      }
+      throw new Error(msg);
     }
-    throw new Error(msg);
+    return (await res.json()) as T;
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error("Request timed out — check your connection and retry.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return (await res.json()) as T;
 }
 
 export const api = {
@@ -240,11 +258,20 @@ export interface DataBundle {
   budget: {
     daily: number;
     monthly: number;
+    envDaily?: number;
+    envMonthly?: number;
     spentToday: number;
     spentThisMonth: number;
     tokensToday: number;
     tokensThisMonth: number;
     overrides: BudgetOverrides;
+  };
+  founderBrief: {
+    overdueReminders: Array<Record<string, unknown>>;
+    pendingApprovals: Array<Record<string, unknown>>;
+    openContradictions: Array<Record<string, unknown>>;
+    topRisks: Array<Record<string, unknown>>;
+    generatedAt: string;
   };
   productivity: {
     assignments: Assignment[];

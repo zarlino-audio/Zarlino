@@ -20,7 +20,7 @@ export function Doctrine({ data }: ViewProps) {
         <h2>Doctrine</h2>
         {doctrine.length === 0 ? <p className="muted">No active doctrine.</p> : doctrine.map((d, i) => (
           <div className="metric" key={i} style={{ marginBottom: 8 }}>
-            <div className="value" style={{ fontSize: 13 }}><span className="mono">{String(d.code)}</span> — {String(d.principle)}</div>
+            <div className="value" style={{ fontSize: 13 }}><span className="mono">{String(d.code ?? "")}</span> — {String(d.principle ?? "")}</div>
             <div className="key">{String(d.rationale ?? "")} · {String(d.category ?? "")}</div>
           </div>
         ))}
@@ -35,8 +35,8 @@ export function Doctrine({ data }: ViewProps) {
             <tbody>
               {policies.map((p, i) => (
                 <tr key={i}>
-                  <td className="mono">{String(p.code)}</td>
-                  <td>{String(p.title)}</td>
+                  <td className="mono">{String(p.code ?? "")}</td>
+                  <td>{String(p.title ?? "")}</td>
                   <td className="muted">{String(p.body ?? "")}</td>
                 </tr>
               ))}
@@ -106,15 +106,18 @@ export function CalendarView({ data, mutate, notify }: ViewProps) {
   };
 
   const remove = async (id: string) => {
+    if (!window.confirm("Delete this calendar event?")) return;
     try {
       await api.deleteCalendarEvent(id);
       await mutate();
+      notify("Event deleted");
     } catch (e) {
       notify(e instanceof Error ? e.message : String(e), false);
     }
   };
 
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   const dayEvents = events
     .filter((e) => String(e.start_at ?? "").startsWith(day))
     .sort((a, b) => String(a.start_at).localeCompare(String(b.start_at)));
@@ -164,8 +167,8 @@ export function CalendarView({ data, mutate, notify }: ViewProps) {
         ) : (
           dayEvents.map((e, i) => (
             <div className="row agenda-row" key={i}>
-              <span className="mono muted">{String(e.start_at ?? "").slice(11, 16)}</span>
-              <span style={{ flex: 1 }}>{String(e.title)}</span>
+              <span className="mono muted">{new Date(String(e.start_at ?? "")).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>
+              <span style={{ flex: 1 }}>{String(e.title ?? "")}</span>
               <button className="mini" onClick={() => remove(String(e.id))}>✕</button>
             </div>
           ))
@@ -188,6 +191,8 @@ export function NotesView({ data, mutate, notify }: ViewProps) {
   const [remTitle, setRemTitle] = useState("");
   const [remDue, setRemDue] = useState(() => new Date().toISOString().slice(0, 10));
   const [ctcName, setCtcName] = useState("");
+  const [ctcRole, setCtcRole] = useState("");
+  const [ctcCompany, setCtcCompany] = useState("");
   const [ctcEmail, setCtcEmail] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -213,13 +218,28 @@ export function NotesView({ data, mutate, notify }: ViewProps) {
     if (!ctcName.trim() || busy) return;
     setBusy(true);
     try {
-      await api.addContact(ctcName.trim(), "", "", ctcEmail.trim());
-      setCtcName(""); setCtcEmail("");
+      await api.addContact(ctcName.trim(), ctcRole.trim(), ctcCompany.trim(), ctcEmail.trim());
+      setCtcName(""); setCtcRole(""); setCtcCompany(""); setCtcEmail("");
       await mutate();
     } catch (e) { notify(e instanceof Error ? e.message : String(e), false); } finally { setBusy(false); }
   };
 
+  const del = async (fn: () => Promise<unknown>, okMsg: string, confirmMsg?: string) => {
+    if (confirmMsg && !window.confirm(confirmMsg)) return;
+    try {
+      await fn();
+      await mutate();
+      notify(okMsg);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : String(e), false);
+    }
+  };
+
   const overdue = reminders.filter((r) => !Number(r.done) && String(r.due_at ?? "") < new Date().toISOString()).length;
+  const sortedReminders = [...reminders].sort((a, b) => {
+    if (Number(a.done) !== Number(b.done)) return Number(a.done) - Number(b.done);
+    return String(a.due_at ?? "").localeCompare(String(b.due_at ?? ""));
+  });
 
   return (
     <div>
@@ -246,10 +266,10 @@ export function NotesView({ data, mutate, notify }: ViewProps) {
               {notes.map((n, i) => (
                 <div className="note-card" key={i}>
                   <div className="row" style={{ justifyContent: "space-between" }}>
-                    <b>{String(n.title)}</b>
-                    <button className="mini" onClick={async () => { await api.deleteNote(String(n.id)); await mutate(); }}>✕</button>
+                    <b>{String(n.title ?? "")}</b>
+                    <button className="mini" onClick={() => void del(() => api.deleteNote(String(n.id)), "Note deleted", "Delete this note?")}>✕</button>
                   </div>
-                  {String(n.body ?? "") && <p className="muted">{String(n.body)}</p>}
+                  {String(n.body ?? "") && <p className="muted">{String(n.body ?? "")}</p>}
                   {Number(n.pinned) === 1 && <Badge>📌 pinned</Badge>}
                 </div>
               ))}
@@ -272,14 +292,14 @@ export function NotesView({ data, mutate, notify }: ViewProps) {
                 <tr><th>Title</th><th>Due</th><th>Status</th><th></th></tr>
               </thead>
               <tbody>
-                {reminders.map((r, i) => (
+                {sortedReminders.map((r, i) => (
                   <tr key={i}>
-                    <td style={Number(r.done) ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>{String(r.title)}</td>
+                    <td style={Number(r.done) ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>{String(r.title ?? "")}</td>
                     <td className="mono muted">{String(r.due_at ?? "").slice(0, 10)} {Number(r.done) ? "" : timeAgo(String(r.due_at))}</td>
                     <td><Badge tone={Number(r.done) ? "ok" : String(r.due_at ?? "") < new Date().toISOString() ? "fail" : "warn"}>{Number(r.done) ? "done" : "due"}</Badge></td>
                     <td>
-                      {!Number(r.done) && <button className="mini" onClick={async () => { await api.markReminderDone(String(r.id)); await mutate(); }}>✔</button>}
-                      <button className="mini" onClick={async () => { await api.deleteReminder(String(r.id)); await mutate(); }}>✕</button>
+                      {!Number(r.done) && <button className="mini" onClick={async () => { try { await api.markReminderDone(String(r.id)); await mutate(); } catch (e) { notify(e instanceof Error ? e.message : String(e), false); } }}>✔</button>}
+                      <button className="mini" onClick={() => void del(() => api.deleteReminder(String(r.id)), "Reminder deleted", "Delete this reminder?")}>✕</button>
                     </td>
                   </tr>
                 ))}
@@ -294,6 +314,8 @@ export function NotesView({ data, mutate, notify }: ViewProps) {
           <h2>Contacts</h2>
           <div className="row">
             <input value={ctcName} onChange={(e) => setCtcName(e.target.value)} placeholder="Name" style={{ flex: 1 }} />
+            <input value={ctcRole} onChange={(e) => setCtcRole(e.target.value)} placeholder="Role" style={{ flex: 1 }} />
+            <input value={ctcCompany} onChange={(e) => setCtcCompany(e.target.value)} placeholder="Company" style={{ flex: 1 }} />
             <input value={ctcEmail} onChange={(e) => setCtcEmail(e.target.value)} placeholder="Email" style={{ flex: 1 }} />
             <button className="action" onClick={addContact} disabled={busy || !ctcName.trim()}>Add</button>
           </div>
@@ -305,7 +327,7 @@ export function NotesView({ data, mutate, notify }: ViewProps) {
               <tbody>
                 {contacts.map((c, i) => (
                   <tr key={i}>
-                    <td>{String(c.name)}</td>
+                    <td>{String(c.name ?? "")}</td>
                     <td className="muted">{String(c.role ?? "")}</td>
                     <td className="muted">{String(c.company ?? "")}</td>
                     <td className="mono muted">{String(c.email ?? "")}</td>

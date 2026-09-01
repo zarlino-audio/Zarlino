@@ -2,12 +2,16 @@
 import { useEffect, useState } from "react";
 import { api, type BudgetOverrides } from "../api";
 
-export function SettingsView() {
+interface ViewProps {
+  mutate: () => Promise<void>;
+  notify: (msg: string, ok?: boolean) => void;
+}
+
+export function SettingsView({ mutate, notify }: ViewProps) {
   const [overrides, setOverrides] = useState<BudgetOverrides>({});
   const [loaded, setLoaded] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
-
   const [curPassword, setCurPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -28,7 +32,10 @@ export function SettingsView() {
   }, []);
 
   const set = (key: keyof BudgetOverrides, value: string) => {
-    setOverrides((o) => ({ ...o, [key]: value === "" ? undefined : Number(value) }));
+    const n = Number(value);
+    // Never store NaN/partial numbers — a malformed value would render broken.
+    if (value !== "" && !Number.isFinite(n)) return;
+    setOverrides((o) => ({ ...o, [key]: value === "" ? undefined : n }));
     setSaved(false);
   };
 
@@ -37,6 +44,8 @@ export function SettingsView() {
       await api.saveSettings(overrides);
       setSaved(true);
       setError("");
+      await mutate(); // refresh Overview fuel gauge + budget immediately
+      notify("Budget overrides saved");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
