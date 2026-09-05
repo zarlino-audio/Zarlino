@@ -22,7 +22,8 @@
     "agent:daemon:install": "powershell -ExecutionPolicy Bypass -File scripts/install-daemon-startup.ps1",
     "agent:daemon:uninstall": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-daemon-startup.ps1",
     "build:console": "npm --prefix web run build",
-    "console:dev": "npm --prefix web run dev"
+    "console:dev": "npm --prefix web run dev",
+    "upload:audio": "tsx scripts/upload-audio.ts"
   },
   "dependencies": {
     "zod": "^4.4.3"

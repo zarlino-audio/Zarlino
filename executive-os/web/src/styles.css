@@ -787,7 +787,7 @@ footer {
   opacity: 0;
   transition: opacity 0.2s;
 }
-.msg:hover .msg-tools {
+.msg3:hover .msg-tools, .msg3:focus-within .msg-tools {
   opacity: 1;
 }
 
@@ -1064,3 +1064,213 @@ footer {
   color: var(--fail);
 }
 
+
+/* ---- refined executive chat controls (3-panel v2) ---- */
+.chat3-main-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.chat3-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.chat3-group-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  padding: 6px 4px 4px;
+}
+.chat3-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 0;
+}
+.rail-title {
+  font-size: 12px;
+  line-height: 1.4;
+}
+.rail-item.rail-q {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+}
+.rail-item.rail-q:hover {
+  border-color: var(--accent);
+  background: rgba(240, 180, 41, 0.08);
+}
+
+/* ===== chat P0/P1 polish (per-message copy tools, grouping, code blocks) ===== */
+
+/* Per-message toolbar lives in .msg3; reveal on hover/focus of the whole bubble
+   (the previous `.msg:hover .msg-tools` CSS baked the toolbar invisible because
+   the actual element class is `.msg3`). */
+.chat3-log .msg3 .msg-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(240, 180, 41, 0.12);
+}
+.chat3-log .msg3 .msg-tools {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-2px);
+  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s;
+}
+.chat3-log .msg3:hover .msg-tools,
+.chat3-log .msg3:focus-within .msg-tools,
+.chat3-log .msg3[data-regenerating] .msg-tools {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+.chat3-log .msg-tools button.mini {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  line-height: 1;
+}
+.chat3-log .msg-tools button.mini:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+.chat3-log .msg-tools button.mini.copied {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+.chat3-log .msg-tools .edge-label {
+  font-size: 10px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+/* Message grouping: consecutive same-author turns collapse so the avatar + name
+   show only once per group. Day separators sit between different calendar days. */
+.chat3-log .msg-group {
+  display: flex;
+  flex-direction: column;
+}
+.chat3-log .day-sep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 2px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.chat3-log .day-sep::before,
+.chat3-log .day-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.chat3-log .msg3 + .msg3 { margin-left: 44px; }
+.chat3-log .msg3.first-in-group .msg3-meta,
+.chat3-log .msg3.first-in-group .msg3-avatar { display: block; }
+.chat3-log .msg3:not(.first-in-group) .msg3-avatar,
+.chat3-log .msg3:not(.first-in-group) .msg3-meta { display: none; }
+.chat3-log .msg3 { position: relative; }
+
+/* timestamp tooltip (absolute time appears on title) is native tooltip; ensure it
+   doesn't get clipped by the bubble overflow. */
+.chat3-log .msg3-meta time { cursor: default; border-bottom: 1px dotted var(--border); }
+
+/* Code fences: language pill header + copy button on the toolbar's right. */
+.markdown .md-codeblock {
+  position: relative;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #0b0f16;
+  overflow: hidden;
+}
+.markdown .md-codeblock-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.markdown .md-codeblock-head .md-lang {
+  color: var(--accent-2);
+  font-family: var(--mono);
+  letter-spacing: 0.4px;
+}
+.markdown .md-codeblock-head button {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.markdown .md-codeblock-head button:hover { color: var(--text); }
+.markdown .md-codeblock-head button:focus-visible { outline: 1px solid var(--accent); }
+.markdown .md-codeblock pre { margin: 0; border: none; border-radius: 0; background: transparent; }
+.markdown .md-inline-code { background: transparent; }
+
+/* Syntax token colors (dark theme) */
+.markdown .tok-kw { color: #ff7b72; }
+.markdown .tok-str { color: #a5d6ff; }
+.markdown .tok-num { color: #79c0ff; }
+.markdown .tok-c  { color: #8b949e; font-style: italic; }
+.markdown .tok-op { color: #d2a8ff; }
+.markdown .tok-fn { color: #d2a8ff; }
+.markdown .tok-bool { color: #ff7b72; }
+.markdown .tok-prop { color: #79c0ff; }
+.markdown .tok-tag { color: #7ee787; }
+.markdown .tok-attr { color: #79c0ff; }
+
+/* Tables */
+.markdown table { margin: 8px 0; }
+.markdown tbody tr:nth-child(2n) { background: var(--panel-2); }
+
+/* Blockquotes */
+.markdown blockquote {
+  margin: 6px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--accent-2);
+  background: rgba(240, 180, 41, 0.05);
+  border-radius: 0 8px 8px 0;
+  color: var(--muted);
+}
+/* Ordered lists */
+.markdown ol { margin: 4px 0; padding-left: 22px; }
+.markdown li { margin: 2px 0; }
+.markdown .md-nest { margin: 2px 0; padding-left: 18px; }
+.markdown a { color: #58a6ff; text-decoration: none; }
+.markdown a:hover { text-decoration: underline; }
+.markdown img { max-width: 100%; border-radius: 8px; }
+
+/* Editing state on assistant messages */
+.chat3-log .msg3.editing .msg3-content { opacity: 0.55; filter: blur(0.3px); }
+.chat3-log .msg3[data-regenerating] .msg-tools button { pointer-events: none; opacity: 0.6; }
+.chat3-log .msg3[data-regenerating] .msg3-content {
+  animation: mdPulse 1.2s ease-in-out infinite;
+}
+@keyframes mdPulse { 50% { opacity: 0.55; } }
+.copied-ok { color: var(--ok); }
