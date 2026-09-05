@@ -29,6 +29,16 @@ import {
   productivityReport,
   recommendAssignment,
 } from "./core/productivity/manager";
+import {
+  aggregateTestResults,
+  attentionCheckFailed,
+  deriveKnowledge,
+  evaluateProductGates,
+  failureRecord,
+  normalizeTier,
+  perceptualKpi,
+  scoreProduct,
+} from "./core/perceptual/manager";
 import { newId, nowIso } from "./ids";
 import type { AgentRun, DoctorLog, Task } from "./types";
 import type { ModelCallRecord as _M } from "./core/model/types";
@@ -719,6 +729,15 @@ export class ExecutiveAgent {
         generatedAt: nowIso(),
       },
       reviews: s.listReviewItems({ limit: 50 }),
+      perceptual: {
+        tests: s.listPerceptualTests({ limit: 100 }),
+        results: s.listPerceptualResults({ limit: 200 }),
+        evaluators: s.listPerceptualEvaluators({ limit: 100 }),
+        knowledge: s.listPerceptualKnowledge({ limit: 100 }),
+        validations: s.listProductValidations().map((v) => ({ ...v, evaluation: evaluateProductGates(v) })),
+        failures: s.listFailureAnalyses({ limit: 100 }),
+        kpi: perceptualKpi(s),
+      },
       productivity: {
         assignments: s.listAssignments({ limit: 100 }),
         optimizationEvents: s.listOptimizationEvents(20),
@@ -1107,6 +1126,292 @@ export class ExecutiveAgent {
         updated_at: nowIso(),
       });
       return json({ ok: true, id, status });
+    }
+
+    // ---------------------------------------------------------------------
+    // Perceptual Intelligence (specs/zarlino-artificial-organization.md):
+    // evaluator panel, test registry, append-only results, validation gates,
+    // knowledge base, failure taxonomy, KPIs.
+    // ---------------------------------------------------------------------
+    if (path === "/api/perceptual/report" && method === "GET") {
+      return json(perceptualKpi(this.store));
+    }
+
+    // Evaluators (external human sensor network — NOT employees, spec §5)
+    if (path === "/api/perceptual/evaluators" && method === "GET") {
+      const actorType = url.searchParams.get("actorType") ?? undefined;
+      return json({ evaluators: this.store.listPerceptualEvaluators({ actorType, limit: 200 }) });
+    }
+    if (path === "/api/perceptual/evaluators" && method === "POST") {
+      const body = (await readBody<{ name?: string; actorType?: string; expertise?: string; genres?: string[]; experienceLevel?: string; compensationProfile?: string; conflicts?: string[] }>(request).catch(() => ({}))) as { name?: string; actorType?: string; expertise?: string; genres?: string[]; experienceLevel?: string; compensationProfile?: string; conflicts?: string[] };
+      if (!body.name?.trim()) return json({ error: "name required" }, 400);
+      const actorType = ["external_human", "internal_agent", "customer"].includes(String(body.actorType ?? "").toLowerCase())
+        ? String(body.actorType!).toLowerCase()
+        : "external_human";
+      const now = nowIso();
+      const id = newId("pev");
+      this.store.createPerceptualEvaluator({
+        id,
+        name: body.name.trim(),
+        actor_type: actorType,
+        expertise: body.expertise ?? "",
+        genres_json: JSON.stringify(body.genres ?? []),
+        experience_level: body.experienceLevel ?? "",
+        reliability_score: 0,
+        calibration_score: 0,
+        reliability_by_domain_json: "{}",
+        availability: "active",
+        compensation_profile: body.compensationProfile ?? "",
+        conflicts_json: JSON.stringify(body.conflicts ?? []),
+        test_count: 0,
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "perceptual.evaluator.register",
+        entity_type: "perceptual_evaluators",
+        entity_id: id,
+        detail_json: JSON.stringify({ name: body.name.trim(), actorType }),
+        source: "api",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true, id });
+    }
+    const evaluatorDelete = /^\/api\/perceptual\/evaluators\/([^/]+)$/.exec(path);
+    if (evaluatorDelete && method === "DELETE") {
+      return json({ deleted: this.store.deletePerceptualEvaluator(decodeURIComponent(evaluatorDelete[1]!)) });
+    }
+
+    // Test registry (spec §6)
+    if (path === "/api/perceptual/tests" && method === "GET") {
+      const productId = url.searchParams.get("productId") ?? undefined;
+      const status = url.searchParams.get("status") ?? undefined;
+      const tier = url.searchParams.get("tier") ?? undefined;
+      return json({ tests: this.store.listPerceptualTests({ productId, status, tier, limit: 200 }) });
+    }
+    if (path === "/api/perceptual/tests" && method === "POST") {
+      const body = (await readBody<{ productId?: string; title?: string; testType?: string; hypothesis?: string; objective?: string; protocol?: string; stimuli?: string[]; conditions?: string[]; evaluatorRequirements?: string; sampleSizeTarget?: number; blinding?: string; randomization?: string; metrics?: string[]; acceptanceThreshold?: string; tier?: string }>(request).catch(() => ({}))) as { productId?: string; title?: string; testType?: string; hypothesis?: string; objective?: string; protocol?: string; stimuli?: string[]; conditions?: string[]; evaluatorRequirements?: string; sampleSizeTarget?: number; blinding?: string; randomization?: string; metrics?: string[]; acceptanceThreshold?: string; tier?: string };
+      if (!body.productId?.trim() || !body.title?.trim()) return json({ error: "productId and title required" }, 400);
+      const types = ["blind_preference", "abx_identification", "problem_solution", "workflow", "preference_reach"];
+      const testType = types.includes(String(body.testType ?? "").toLowerCase()) ? String(body.testType!).toLowerCase() : "blind_preference";
+      const tier = ["exploratory", "validation", "high_confidence", "commercial"].includes(String(body.tier ?? "").toLowerCase())
+        ? String(body.tier!).toLowerCase()
+        : "exploratory";
+      const blinding = ["blind", "double_blind", "unblinded"].includes(String(body.blinding ?? "").toLowerCase())
+        ? String(body.blinding!).toLowerCase()
+        : "blind";
+      const now = nowIso();
+      const id = newId("pt");
+      this.store.createPerceptualTest({
+        id,
+        product_id: body.productId.trim(),
+        title: body.title.trim(),
+        hypothesis: body.hypothesis ?? "",
+        objective: body.objective ?? "",
+        test_type: testType,
+        protocol: body.protocol ?? "",
+        stimuli_json: JSON.stringify(body.stimuli ?? []),
+        conditions_json: JSON.stringify(body.conditions ?? []),
+        evaluator_requirements: body.evaluatorRequirements ?? "",
+        sample_size_target: Number.isFinite(body.sampleSizeTarget) ? Math.max(0, Math.min(1000, Math.trunc(body.sampleSizeTarget!))) : 0,
+        blinding,
+        randomization: body.randomization ?? "",
+        metrics_json: JSON.stringify(body.metrics ?? []),
+        acceptance_threshold: body.acceptanceThreshold ?? "",
+        tier,
+        status: "designed",
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "perceptual.test.create",
+        entity_type: "perceptual_tests",
+        entity_id: id,
+        detail_json: JSON.stringify({ productId: body.productId.trim(), title: body.title.trim(), testType, tier }),
+        source: "api",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true, id });
+    }
+    const testPatch = /^\/api\/perceptual\/tests\/([^/]+)$/.exec(path);
+    if (testPatch && method === "PATCH") {
+      const id = decodeURIComponent(testPatch[1]!);
+      const existing = this.store.getPerceptualTest(id);
+      if (!existing) return json({ error: "Test not found" }, 404);
+      const body = (await readBody<{ status?: string; protocol?: string }>(request).catch(() => ({}))) as { status?: string; protocol?: string };
+      const statuses = ["draft", "designed", "recruiting", "in_progress", "completed", "analyzed", "closed"];
+      if (body.status && !statuses.includes(body.status)) return json({ error: `Invalid test status: ${body.status}` }, 400);
+      this.store.updatePerceptualTest(id, {
+        status: body.status ?? existing.status,
+        protocol: body.protocol ?? existing.protocol,
+      });
+      return json({ ok: true, test: this.store.getPerceptualTest(id) });
+    }
+
+    // Results — APPEND-ONLY (spec §9): no PATCH/DELETE routes exist.
+    const testResults = /^\/api\/perceptual\/tests\/([^/]+)\/results$/.exec(path);
+    if (testResults && method === "GET") {
+      const testId = decodeURIComponent(testResults[1]!);
+      return json({ results: this.store.listPerceptualResults({ testId, limit: 500 }) });
+    }
+    if (testResults && method === "POST") {
+      const testId = decodeURIComponent(testResults[1]!);
+      const test = this.store.getPerceptualTest(testId);
+      if (!test) return json({ error: "Test not found" }, 404);
+      const body = (await readBody<{ evaluatorId?: string; responses?: Record<string, unknown>; attentionChecksPassed?: number; attentionChecksTotal?: number; selfConfidence?: number; completionMs?: number }>(request).catch(() => ({}))) as { evaluatorId?: string; responses?: Record<string, unknown>; attentionChecksPassed?: number; attentionChecksTotal?: number; selfConfidence?: number; completionMs?: number };
+      if (!body.evaluatorId?.trim()) return json({ error: "evaluatorId required" }, 400);
+      const evaluator = this.store.getPerceptualEvaluator(body.evaluatorId.trim());
+      if (!evaluator) return json({ error: "Evaluator not found" }, 404);
+      const passed = Math.max(0, Math.trunc(body.attentionChecksPassed ?? 0));
+      const total = Math.max(0, Math.trunc(body.attentionChecksTotal ?? 0));
+      const rejected = attentionCheckFailed({ attention_checks_passed: passed, attention_checks_total: total });
+      const now = nowIso();
+      const id = newId("prs");
+      this.store.createPerceptualResult({
+        id,
+        test_id: testId,
+        evaluator_id: body.evaluatorId.trim(),
+        responses_json: JSON.stringify(body.responses ?? {}),
+        completion_ms: Number.isFinite(body.completionMs) ? Math.max(0, Math.trunc(body.completionMs!)) : undefined,
+        attention_checks_passed: passed,
+        attention_checks_total: total,
+        self_confidence: typeof body.selfConfidence === "number" ? Math.max(0, Math.min(1, body.selfConfidence)) : undefined,
+        status: rejected ? "rejected" : "accepted",
+        source: "api",
+        created_at: now,
+      });
+      this.store.updatePerceptualEvaluator(evaluator.id, { test_count: evaluator.test_count + 1 });
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: rejected ? "perceptual.result.rejected" : "perceptual.result.record",
+        entity_type: "perceptual_results",
+        entity_id: id,
+        detail_json: JSON.stringify({ testId, evaluatorId: body.evaluatorId.trim(), attention: `${passed}/${total}` }),
+        source: "api",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true, id, status: rejected ? "rejected" : "accepted" });
+    }
+    const testAnalysis = /^\/api\/perceptual\/tests\/([^/]+)\/analysis$/.exec(path);
+    if (testAnalysis && method === "GET") {
+      const testId = decodeURIComponent(testAnalysis[1]!);
+      const test = this.store.getPerceptualTest(testId);
+      if (!test) return json({ error: "Test not found" }, 404);
+      const results = this.store.listPerceptualResults({ testId, limit: 1000 });
+      const agg = aggregateTestResults(test, results);
+      return json({ aggregation: agg, knowledgeDraft: deriveKnowledge(test, agg) });
+    }
+
+    // Product validation gates (spec §14)
+    if (path === "/api/perceptual/validations" && method === "GET") {
+      return json({ validations: this.store.listProductValidations().map((v) => ({ ...v, evaluation: evaluateProductGates(v) })) });
+    }
+    if (path === "/api/perceptual/validations" && method === "POST") {
+      const body = (await readBody<{ productId?: string; stage?: string; engineering?: string; measurement?: string; perceptual?: string; workflow?: string; commercial?: string; governance?: string; decision?: string; decisionNote?: string; iteration?: number }>(request).catch(() => ({}))) as { productId?: string; stage?: string; engineering?: string; measurement?: string; perceptual?: string; workflow?: string; commercial?: string; governance?: string; decision?: string; decisionNote?: string; iteration?: number };
+      if (!body.productId?.trim()) return json({ error: "productId required" }, 400);
+      const isVerdict = (v: unknown) => v === undefined || ["PASS", "FAIL", "INCONCLUSIVE"].includes(String(v).toUpperCase());
+      if (![body.engineering, body.measurement, body.perceptual, body.workflow, body.commercial, body.governance].every(isVerdict)) {
+        return json({ error: "verdicts must be PASS | FAIL | INCONCLUSIVE" }, 400);
+      }
+      const stages = ["prototype", "validation", "beta", "ship"];
+      const stage = stages.includes(String(body.stage ?? "")) ? String(body.stage) : "prototype";
+      const existing = this.store.getProductValidation(body.productId.trim());
+      const now = nowIso();
+      const row = {
+        product_id: body.productId.trim(),
+        stage,
+        engineering: body.engineering ? String(body.engineering).toUpperCase() : existing?.engineering ?? "INCONCLUSIVE",
+        measurement: body.measurement ? String(body.measurement).toUpperCase() : existing?.measurement ?? "INCONCLUSIVE",
+        perceptual: body.perceptual ? String(body.perceptual).toUpperCase() : existing?.perceptual ?? "INCONCLUSIVE",
+        workflow: body.workflow ? String(body.workflow).toUpperCase() : existing?.workflow ?? "INCONCLUSIVE",
+        commercial: body.commercial ? String(body.commercial).toUpperCase() : existing?.commercial ?? "INCONCLUSIVE",
+        governance: body.governance ? String(body.governance).toUpperCase() : existing?.governance ?? "PASS",
+        decision: body.decision ? String(body.decision).toUpperCase() : existing?.decision ?? "NONE",
+        decision_by: body.decision ? "founder" : existing?.decision_by,
+        decision_note: body.decisionNote ?? existing?.decision_note,
+        iteration: Number.isFinite(body.iteration) ? Math.max(0, Math.trunc(body.iteration!)) : existing?.iteration ?? 0,
+        notes_json: existing?.notes_json ?? "[]",
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      } as const;
+      this.store.upsertProductValidation(row as never);
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "perceptual.validation.set",
+        entity_type: "product_validations",
+        entity_id: body.productId.trim(),
+        detail_json: JSON.stringify({ stage, perceptual: row.perceptual, decision: row.decision }),
+        source: "api",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true, validation: { ...row, evaluation: evaluateProductGates(row as never) } });
+    }
+
+    // Knowledge base (spec §27-29)
+    if (path === "/api/perceptual/knowledge" && method === "GET") {
+      const productCategory = url.searchParams.get("productCategory") ?? undefined;
+      const evidenceTier = url.searchParams.get("evidenceTier") ?? undefined;
+      return json({ knowledge: this.store.listPerceptualKnowledge({ productCategory, evidenceTier, limit: 200 }) });
+    }
+    if (path === "/api/perceptual/knowledge" && method === "POST") {
+      const body = (await readBody<{ productCategory?: string; musicalContext?: string; desiredOutcome?: string; observations?: string[]; confidence?: number; sampleSize?: number; testProtocol?: string; sourceTestId?: string; evidenceTier?: string }>(request).catch(() => ({}))) as { productCategory?: string; musicalContext?: string; desiredOutcome?: string; observations?: string[]; confidence?: number; sampleSize?: number; testProtocol?: string; sourceTestId?: string; evidenceTier?: string };
+      if (!body.productCategory?.trim()) return json({ error: "productCategory required" }, 400);
+      const tiers = ["engineering", "measurement", "perceptual", "workflow", "market"];
+      const now = nowIso();
+      const id = newId("pk");
+      this.store.createPerceptualKnowledge({
+        id,
+        product_category: body.productCategory.trim(),
+        musical_context: body.musicalContext ?? "",
+        desired_outcome: body.desiredOutcome ?? "",
+        observation_json: JSON.stringify(body.observations ?? []),
+        confidence: typeof body.confidence === "number" ? Math.max(0, Math.min(1, body.confidence)) : 0,
+        sample_size: Number.isFinite(body.sampleSize) ? Math.max(0, Math.trunc(body.sampleSize!)) : 0,
+        test_protocol: body.testProtocol ?? "",
+        source_test_id: body.sourceTestId,
+        evidence_tier: tiers.includes(String(body.evidenceTier ?? "").toLowerCase()) ? String(body.evidenceTier).toLowerCase() : "perceptual",
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true, id });
+    }
+    const knowledgeDelete = /^\/api\/perceptual\/knowledge\/([^/]+)$/.exec(path);
+    if (knowledgeDelete && method === "DELETE") {
+      return json({ deleted: this.store.deletePerceptualKnowledge(decodeURIComponent(knowledgeDelete[1]!)) });
+    }
+
+    // Failure taxonomy (spec §39)
+    if (path === "/api/perceptual/failures" && method === "GET") {
+      const productId = url.searchParams.get("productId") ?? undefined;
+      return json({ failures: this.store.listFailureAnalyses({ productId, limit: 200 }) });
+    }
+    if (path === "/api/perceptual/failures" && method === "POST") {
+      const body = (await readBody<{ productId?: string; failureClass?: string; title?: string; description?: string; lessons?: string[] }>(request).catch(() => ({}))) as { productId?: string; failureClass?: string; title?: string; description?: string; lessons?: string[] };
+      if (!body.productId?.trim() || !body.title?.trim()) return json({ error: "productId and title required" }, 400);
+      const rec = failureRecord({
+        id: newId("pfl"),
+        productId: body.productId.trim(),
+        failureClass: body.failureClass ?? "perceptual",
+        title: body.title.trim(),
+        description: body.description ?? "",
+        lessons: body.lessons,
+        now: nowIso(),
+      });
+      this.store.createFailureAnalysis(rec);
+      return json({ ok: true, id: rec.id, failureClass: rec.failure_class });
     }
 
     // Tool runner (executes any registered tool; HIGH-risk gating happens here)

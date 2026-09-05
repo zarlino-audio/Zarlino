@@ -37,10 +37,15 @@ import type {
   Objective,
   OptimizationEvent,
   Organization,
+  PerceptualEvaluator,
+  PerceptualKnowledge,
+  PerceptualResult,
+  PerceptualTest,
   Person,
   PipelineGate,
   Policy,
   Product,
+  ProductValidation,
   ProductivityAssignment,
   ProductivityMetric,
   ProductStatusRecord,
@@ -55,6 +60,7 @@ import type {
   ToolExecution,
   UploadedFile,
   Workstream,
+  FailureAnalysis,
 } from "../types";
 import { retrieve, scoreMemory } from "../core/memory/retrieval";
 import type { ModelCallRecord } from "../core/model/types";
@@ -299,6 +305,139 @@ export class ExecutiveStore implements CostStorage {
       "UPDATE review_items SET status = ?, note = ?, decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
       status, note, new Date().toISOString(), by, new Date().toISOString(), id,
     );
+  }
+
+  // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
+  // -- evaluators (the human sensor network; NOT employees — spec §4-5) -----
+  createPerceptualEvaluator(e: PerceptualEvaluator): void {
+    this.insert("perceptual_evaluators", e);
+  }
+  listPerceptualEvaluators(opts: { actorType?: string; availability?: string; limit?: number } = {}): PerceptualEvaluator[] {
+    let sql = "SELECT * FROM perceptual_evaluators WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.actorType) { sql += " AND actor_type = ?"; params.push(opts.actorType); }
+    if (opts.availability) { sql += " AND availability = ?"; params.push(opts.availability); }
+    sql += " ORDER BY reliability_score DESC, created_at ASC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<PerceptualEvaluator>(r));
+  }
+  getPerceptualEvaluator(id: string): PerceptualEvaluator | null {
+    const rows = this.sql.all<Row>("SELECT * FROM perceptual_evaluators WHERE id = ?", id);
+    return rows[0] ? rowTo<PerceptualEvaluator>(rows[0]) : null;
+  }
+  updatePerceptualEvaluator(id: string, patch: Partial<PerceptualEvaluator>): PerceptualEvaluator | null {
+    const existing = this.getPerceptualEvaluator(id);
+    if (!existing) return null;
+    const next = { ...existing, ...patch, id, updated_at: new Date().toISOString() };
+    this.update("perceptual_evaluators", id, next);
+    return this.getPerceptualEvaluator(id);
+  }
+  deletePerceptualEvaluator(id: string): boolean {
+    if (!this.getPerceptualEvaluator(id)) return false;
+    this.sql.run("DELETE FROM perceptual_evaluators WHERE id = ?", id);
+    return true;
+  }
+
+  // -- test registry (spec §6) ---------------------------------------------
+  createPerceptualTest(t: PerceptualTest): void {
+    this.insert("perceptual_tests", t);
+  }
+  listPerceptualTests(opts: { productId?: string; status?: string; tier?: string; limit?: number } = {}): PerceptualTest[] {
+    let sql = "SELECT * FROM perceptual_tests WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.productId) { sql += " AND product_id = ?"; params.push(opts.productId); }
+    if (opts.status) { sql += " AND status = ?"; params.push(opts.status); }
+    if (opts.tier) { sql += " AND tier = ?"; params.push(opts.tier); }
+    sql += " ORDER BY created_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<PerceptualTest>(r));
+  }
+  getPerceptualTest(id: string): PerceptualTest | null {
+    const rows = this.sql.all<Row>("SELECT * FROM perceptual_tests WHERE id = ?", id);
+    return rows[0] ? rowTo<PerceptualTest>(rows[0]) : null;
+  }
+  updatePerceptualTest(id: string, patch: Partial<PerceptualTest>): PerceptualTest | null {
+    const existing = this.getPerceptualTest(id);
+    if (!existing) return null;
+    const next = { ...existing, ...patch, id, updated_at: new Date().toISOString() };
+    this.update("perceptual_tests", id, next);
+    return this.getPerceptualTest(id);
+  }
+
+  // -- results: APPEND-ONLY (spec §9 — engineering must not edit human evidence)
+  createPerceptualResult(r: PerceptualResult): void {
+    this.insert("perceptual_results", r);
+  }
+  listPerceptualResults(opts: { testId?: string; evaluatorId?: string; limit?: number } = {}): PerceptualResult[] {
+    let sql = "SELECT * FROM perceptual_results WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.testId) { sql += " AND test_id = ?"; params.push(opts.testId); }
+    if (opts.evaluatorId) { sql += " AND evaluator_id = ?"; params.push(opts.evaluatorId); }
+    sql += " ORDER BY created_at ASC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<PerceptualResult>(r));
+  }
+  countAcceptedPerceptualResults(testId: string): number {
+    const rows = this.sql.all<Row>(
+      "SELECT COUNT(*) AS c FROM perceptual_results WHERE test_id = ? AND status = 'accepted'",
+      testId,
+    );
+    return Number(rows[0]?.c ?? 0);
+  }
+
+  // -- perceptual knowledge (organizational memory — spec §27-29) ----------
+  createPerceptualKnowledge(k: PerceptualKnowledge): void {
+    this.insert("perceptual_knowledge", k);
+  }
+  listPerceptualKnowledge(opts: { productCategory?: string; evidenceTier?: string; limit?: number } = {}): PerceptualKnowledge[] {
+    let sql = "SELECT * FROM perceptual_knowledge WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.productCategory) { sql += " AND product_category = ?"; params.push(opts.productCategory); }
+    if (opts.evidenceTier) { sql += " AND evidence_tier = ?"; params.push(opts.evidenceTier); }
+    sql += " ORDER BY confidence DESC, created_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<PerceptualKnowledge>(r));
+  }
+  getPerceptualKnowledge(id: string): PerceptualKnowledge | null {
+    const rows = this.sql.all<Row>("SELECT * FROM perceptual_knowledge WHERE id = ?", id);
+    return rows[0] ? rowTo<PerceptualKnowledge>(rows[0]) : null;
+  }
+  deletePerceptualKnowledge(id: string): boolean {
+    if (!this.getPerceptualKnowledge(id)) return false;
+    this.sql.run("DELETE FROM perceptual_knowledge WHERE id = ?", id);
+    return true;
+  }
+
+  // -- product validation gate (spec §14) -----------------------------------
+  listProductValidations(): ProductValidation[] {
+    return this.sql.all<Row>("SELECT * FROM product_validations ORDER BY updated_at DESC").map((r) => rowTo<ProductValidation>(r));
+  }
+  getProductValidation(productId: string): ProductValidation | null {
+    const rows = this.sql.all<Row>("SELECT * FROM product_validations WHERE product_id = ?", productId);
+    return rows[0] ? rowTo<ProductValidation>(rows[0]) : null;
+  }
+  upsertProductValidation(v: ProductValidation): void {
+    const rows = this.sql.all<Row>("SELECT product_id FROM product_validations WHERE product_id = ?", v.product_id);
+    if (rows.length > 0) this.update("product_validations", v.product_id, v);
+    else this.insert("product_validations", v);
+  }
+
+  // -- failure taxonomy (spec §39) ------------------------------------------
+  createFailureAnalysis(f: FailureAnalysis): void {
+    this.insert("failure_analyses", f);
+  }
+  listFailureAnalyses(opts: { productId?: string; failureClass?: string; limit?: number } = {}): FailureAnalysis[] {
+    let sql = "SELECT * FROM failure_analyses WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.productId) { sql += " AND product_id = ?"; params.push(opts.productId); }
+    if (opts.failureClass) { sql += " AND failure_class = ?"; params.push(opts.failureClass); }
+    sql += " ORDER BY created_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<FailureAnalysis>(r));
+  }
+  getFailureAnalysis(id: string): FailureAnalysis | null {
+    const rows = this.sql.all<Row>("SELECT * FROM failure_analyses WHERE id = ?", id);
+    return rows[0] ? rowTo<FailureAnalysis>(rows[0]) : null;
   }
 
   // -- risks --------------------------------------------------------------
@@ -1732,6 +1871,8 @@ export const SNAPSHOT_TABLES = [
   "tool_executions", "workstreams", "pipeline_gates", "model_costs", "founder_credentials",
   "auth_sessions", "uploaded_files", "local_tasks", "agent_jobs", "settings",
   "calendar_events", "notes", "reminders", "contacts",
+  "perceptual_evaluators", "perceptual_tests", "perceptual_results",
+  "perceptual_knowledge", "product_validations", "failure_analyses",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

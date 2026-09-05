@@ -12,6 +12,7 @@ const Activity = lazy(() => import("./views/core").then((m) => ({ default: m.Act
 const Tasks = lazy(() => import("./views/core").then((m) => ({ default: m.Tasks })));
 const Approvals = lazy(() => import("./views/core").then((m) => ({ default: m.Approvals })));
 const Reviews = lazy(() => import("./views/reviews").then((m) => ({ default: m.ReviewsView })));
+const Perceptual = lazy(() => import("./views/perceptual").then((m) => ({ default: m.PerceptualView })));
 const Pipeline = lazy(() => import("./views/business").then((m) => ({ default: m.Pipeline })));
 const Finance = lazy(() => import("./views/business").then((m) => ({ default: m.Finance })));
 const Decisions = lazy(() => import("./views/business").then((m) => ({ default: m.Decisions })));
@@ -47,6 +48,7 @@ const VIEWS: ViewDef[] = [
   { id: "tasks", label: "Tasks", group: "Operate", emoji: "✅", comp: Tasks },
   { id: "approvals", label: "Approvals", group: "Operate", emoji: "✋", comp: Approvals },
   { id: "reviews", label: "Reviews", group: "Operate", emoji: "🎧", comp: Reviews },
+  { id: "perceptual", label: "Perceptual", group: "Operate", emoji: "👂", comp: Perceptual },
   { id: "pipeline", label: "Pipeline", group: "Operate", emoji: "🚀", comp: Pipeline },
   { id: "finance", label: "Finance", group: "Operate", emoji: "💰", comp: Finance },
   { id: "decisions", label: "Decisions & Risks", group: "Knowledge", emoji: "🧭", comp: Decisions },
@@ -100,6 +102,24 @@ const EMPTY_BUNDLE: DataBundle = {
   budget: { daily: 0, monthly: 0, spentToday: 0, spentThisMonth: 0, tokensToday: 0, tokensThisMonth: 0, overrides: {} },
   founderBrief: { overdueReminders: [], pendingApprovals: [], openContradictions: [], topRisks: [], pendingReviews: [], generatedAt: "" },
   reviews: [],
+  perceptual: {
+    tests: [],
+    results: [],
+    evaluators: [],
+    knowledge: [],
+    validations: [],
+    failures: [],
+    kpi: {
+      validatedProductYield: null,
+      seriousExperiments: 0,
+      viableProducts: 0,
+      testsByStatus: {},
+      testsByTier: {},
+      evaluatorsActive: 0,
+      evidenceGaps: [],
+      avgCycleDays: null,
+    },
+  },
   productivity: { assignments: [], optimizationEvents: [], contradictions: [], budgets: [] },
   doctorLastRun: null,
   localAgent: { host: null, seenAgoMs: null, online: false, pending: 0 },

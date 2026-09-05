@@ -29,7 +29,16 @@ import {
   recommendAssignment,
 } from "../core/productivity/manager";
 import { newId, nowIso } from "../ids";
-import type { Decision } from "../types";
+import type { Decision, ProductValidation } from "../types";
+import {
+  aggregateTestResults,
+  attentionCheckFailed,
+  deriveKnowledge,
+  evaluateProductGates,
+  failureRecord,
+  perceptualKpi,
+  scoreProduct,
+} from "../core/perceptual/manager";
 
 /** Decode a base64 string to UTF-8 text (works in the Worker runtime). */
 function atobSafe(b64: string): string {
@@ -1505,6 +1514,434 @@ function productivityTools(): Tool[] {
   ];
 }
 
+// ---------------------------------------------------------------------------
+// Perceptual Intelligence tools (specs/zarlino-artificial-organization.md)
+// ---------------------------------------------------------------------------
+
+const perceptualEvaluatorSchema = z.object({
+  name: z.string().min(1).max(120),
+  actorType: z.enum(["external_human", "internal_agent", "customer"]).optional(),
+  expertise: z.string().max(300).optional(),
+  genres: z.array(z.string().max(40)).max(20).optional(),
+  experienceLevel: z.string().max(80).optional(),
+  compensationProfile: z.string().max(300).optional(),
+  conflicts: z.array(z.string().max(120)).max(20).optional(),
+});
+const perceptualTestSchema = z.object({
+  productId: z.string().min(1).max(64),
+  title: z.string().min(1).max(200),
+  testType: z.enum(["blind_preference", "abx_identification", "problem_solution", "workflow", "preference_reach"]).optional(),
+  hypothesis: z.string().max(2000).optional(),
+  objective: z.string().max(2000).optional(),
+  protocol: z.string().max(4000).optional(),
+  stimuli: z.array(z.string().max(200)).max(50).optional(),
+  conditions: z.array(z.string().max(200)).max(20).optional(),
+  evaluatorRequirements: z.string().max(1000).optional(),
+  sampleSizeTarget: z.number().int().min(0).max(1000).optional(),
+  blinding: z.enum(["blind", "double_blind", "unblinded"]).optional(),
+  randomization: z.string().max(300).optional(),
+  metrics: z.array(z.string().max(80)).max(20).optional(),
+  acceptanceThreshold: z.string().max(500).optional(),
+  tier: z.enum(["exploratory", "validation", "high_confidence", "commercial"]).optional(),
+});
+const perceptualResultSchema = z.object({
+  testId: z.string().min(1),
+  evaluatorId: z.string().min(1),
+  responses: z.record(z.string(), z.unknown()),
+  attentionChecksPassed: z.number().int().min(0).max(20).optional(),
+  attentionChecksTotal: z.number().int().min(0).max(20).optional(),
+  selfConfidence: z.number().min(0).max(1).optional(),
+  completionMs: z.number().int().positive().max(7_200_000).optional(),
+});
+const perceptualValidationSchema = z.object({
+  productId: z.string().min(1).max(64),
+  stage: z.enum(["prototype", "validation", "beta", "ship"]).optional(),
+  engineering: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]).optional(),
+  measurement: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]).optional(),
+  perceptual: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]).optional(),
+  workflow: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]).optional(),
+  commercial: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]).optional(),
+  governance: z.enum(["PASS", "FAIL", "INCONCLUSIVE"]).optional(),
+  decision: z.string().max(40).optional(),
+  decisionNote: z.string().max(1000).optional(),
+  iteration: z.number().int().min(0).max(50).optional(),
+});
+const perceptualKnowledgeSchema = z.object({
+  productCategory: z.string().min(1).max(120),
+  musicalContext: z.string().max(500).optional(),
+  desiredOutcome: z.string().max(500).optional(),
+  observations: z.array(z.string().max(1000)).max(30).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  sampleSize: z.number().int().min(0).max(10000).optional(),
+  testProtocol: z.string().max(1000).optional(),
+  sourceTestId: z.string().max(64).optional(),
+  evidenceTier: z.enum(["engineering", "measurement", "perceptual", "workflow", "market"]).optional(),
+});
+const perceptualFailureSchema = z.object({
+  productId: z.string().min(1).max(64),
+  failureClass: z.enum(["discovery", "hypothesis", "dsp", "perceptual", "workflow", "positioning", "market", "execution"]),
+  title: z.string().min(1).max(200),
+  description: z.string().max(2000).optional(),
+  lessons: z.array(z.string().max(1000)).max(20).optional(),
+});
+const perceptualScoreSchema = z.object({
+  perceptual: z.number().min(0).max(1).optional(),
+  problemSeverity: z.number().min(0).max(1).optional(),
+  differentiation: z.number().min(0).max(1).optional(),
+  workflow: z.number().min(0).max(1).optional(),
+  marketDemand: z.number().min(0).max(1).optional(),
+  cpu: z.number().min(0).max(1).optional(),
+  stability: z.number().min(0).max(1).optional(),
+  monetization: z.number().min(0).max(1).optional(),
+});
+
+/**
+ * Perceptual Intelligence tools. Rules baked in (spec):
+ *   - results are append-only and can never be edited (spec §9 — product
+ *     agents must not control the perceptual result);
+ *   - evaluators are explicitly typed external_human | internal_agent |
+ *     customer (spec §5);
+ *   - the validation tool computes the decision matrix; it never overwrites a
+ *     recorded founder decision, and it reports conflicts instead of hiding
+ *     them (spec §24, §26).
+ */
+function perceptualTools(): Tool[] {
+  return [
+    {
+      name: "perceptual.kpi",
+      description:
+        "Perceptual Intelligence KPIs: Validated Product Yield (commercially viable / serious experiments), tests by status and tier, active evaluators, evidence gaps (products with insufficient perceptual evidence), and average prototype→decision cycle days.",
+      inputSchema: z.object({}),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, _input: Record<string, never>) => {
+        return perceptualKpi(ctx.store!);
+      },
+    },
+    {
+      name: "perceptual.list_tests",
+      description: "List controlled listening tests from the registry, optionally filtered by product, status, or tier. Every significant perceptual decision must reference one of these records (spec §6).",
+      inputSchema: z.object({
+        productId: z.string().max(64).optional(),
+        status: z.string().max(32).optional(),
+        tier: z.string().max(32).optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { productId?: string; status?: string; tier?: string; limit?: number }) => {
+        return { tests: ctx.store!.listPerceptualTests({ productId: input.productId, status: input.status, tier: input.tier, limit: input.limit ?? 100 }) };
+      },
+    },
+    {
+      name: "perceptual.create_test",
+      description:
+        "Register a controlled listening test (blind preference, ABX identification, problem-solution, workflow, or preference/reach). Requires a product id, title, and optionally the protocol, blinding, sample-size target and tier (spec §6-7, §10, §13).",
+      inputSchema: perceptualTestSchema,
+      requiredPermission: "create",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof perceptualTestSchema>) => {
+        const now = nowIso();
+        const id = newId("pt");
+        ctx.store!.createPerceptualTest({
+          id,
+          product_id: input.productId,
+          title: input.title,
+          hypothesis: input.hypothesis ?? "",
+          objective: input.objective ?? "",
+          test_type: input.testType ?? "blind_preference",
+          protocol: input.protocol ?? "",
+          stimuli_json: JSON.stringify(input.stimuli ?? []),
+          conditions_json: JSON.stringify(input.conditions ?? []),
+          evaluator_requirements: input.evaluatorRequirements ?? "",
+          sample_size_target: input.sampleSizeTarget ?? 0,
+          blinding: input.blinding ?? "blind",
+          randomization: input.randomization ?? "",
+          metrics_json: JSON.stringify(input.metrics ?? []),
+          acceptance_threshold: input.acceptanceThreshold ?? "",
+          tier: input.tier ?? "exploratory",
+          status: "designed",
+          source: "executive",
+          created_at: now,
+          updated_at: now,
+        });
+        ctx.audit?.("executive", "perceptual.test.create", "perceptual_tests", id, { productId: input.productId, title: input.title });
+        return { ok: true, id };
+      },
+    },
+    {
+      name: "perceptual.update_test",
+      description: "Update a test's status or protocol (e.g. move designed → recruiting → in_progress → completed). Results themselves can never be edited.",
+      inputSchema: z.object({ testId: z.string().min(1), status: z.string().max(32).optional(), protocol: z.string().max(4000).optional() }),
+      requiredPermission: "modify",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: { testId: string; status?: string; protocol?: string }) => {
+        const t = ctx.store!.getPerceptualTest(input.testId);
+        if (!t) return { error: `Test not found: ${input.testId}` };
+        ctx.store!.updatePerceptualTest(input.testId, { status: input.status ?? t.status, protocol: input.protocol ?? t.protocol });
+        ctx.audit?.("executive", "perceptual.test.update", "perceptual_tests", input.testId, { status: input.status });
+        return { ok: true, id: input.testId };
+      },
+    },
+    {
+      name: "perceptual.list_evaluators",
+      description: "List panel members of the external human ear network, with expertise, genres, per-domain reliability and availability (spec §4-5, §11).",
+      inputSchema: z.object({ actorType: z.string().max(32).optional(), limit: z.number().int().min(1).max(200).optional() }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { actorType?: string; limit?: number }) => {
+        return { evaluators: ctx.store!.listPerceptualEvaluators({ actorType: input.actorType, limit: input.limit ?? 100 }) };
+      },
+    },
+    {
+      name: "perceptual.register_evaluator",
+      description:
+        "Register a human evaluator on the panel. External humans are evaluators, NOT employees or agents (spec §5). Compensation must be for qualified participation, never for favorable results (spec §30); conflicts of interest must be disclosed and preserved as metadata (spec §31).",
+      inputSchema: perceptualEvaluatorSchema,
+      requiredPermission: "create",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof perceptualEvaluatorSchema>) => {
+        const now = nowIso();
+        const id = newId("pev");
+        ctx.store!.createPerceptualEvaluator({
+          id,
+          name: input.name,
+          actor_type: input.actorType ?? "external_human",
+          expertise: input.expertise ?? "",
+          genres_json: JSON.stringify(input.genres ?? []),
+          experience_level: input.experienceLevel ?? "",
+          reliability_score: 0,
+          calibration_score: 0,
+          reliability_by_domain_json: "{}",
+          availability: "active",
+          compensation_profile: input.compensationProfile ?? "",
+          conflicts_json: JSON.stringify(input.conflicts ?? []),
+          test_count: 0,
+          source: "executive",
+          created_at: now,
+          updated_at: now,
+        });
+        ctx.audit?.("executive", "perceptual.evaluator.register", "perceptual_evaluators", id, { name: input.name, actorType: input.actorType ?? "external_human" });
+        return { ok: true, id };
+      },
+    },
+    {
+      name: "perceptual.record_result",
+      description:
+        "Record ONE evaluator's responses to ONE test. Append-only evidence: results can never be edited or deleted afterwards, so the product team cannot manipulate the perceptual outcome (spec §9). Failed attention checks reject the response automatically (spec §11).",
+      inputSchema: perceptualResultSchema,
+      requiredPermission: "modify",
+      riskLevel: "MEDIUM",
+      reversible: false,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof perceptualResultSchema>) => {
+        const test = ctx.store!.getPerceptualTest(input.testId);
+        if (!test) return { error: `Test not found: ${input.testId}` };
+        const evaluator = ctx.store!.getPerceptualEvaluator(input.evaluatorId);
+        if (!evaluator) return { error: `Evaluator not found: ${input.evaluatorId}` };
+        const passed = input.attentionChecksPassed ?? 0;
+        const total = input.attentionChecksTotal ?? 0;
+        const rejected = attentionCheckFailed({ attention_checks_passed: passed, attention_checks_total: total });
+        const id = newId("prs");
+        ctx.store!.createPerceptualResult({
+          id,
+          test_id: input.testId,
+          evaluator_id: input.evaluatorId,
+          responses_json: JSON.stringify(input.responses),
+          completion_ms: input.completionMs,
+          attention_checks_passed: passed,
+          attention_checks_total: total,
+          self_confidence: input.selfConfidence,
+          status: rejected ? "rejected" : "accepted",
+          source: "executive",
+          created_at: nowIso(),
+        });
+        ctx.store!.updatePerceptualEvaluator(input.evaluatorId, { test_count: evaluator.test_count + 1 });
+        ctx.audit?.("executive", rejected ? "perceptual.result.rejected" : "perceptual.result.record", "perceptual_results", id, {
+          testId: input.testId,
+          evaluatorId: input.evaluatorId,
+          attention: `${passed}/${total}`,
+        });
+        return { ok: true, id, status: rejected ? "rejected" : "accepted" };
+      },
+    },
+    {
+      name: "perceptual.analyze_test",
+      description:
+        "Analyze a completed test: aggregate accepted responses (rejected attention failures excluded), compute preference majority or ABX detection significance (binomial), flag weak evidence when the sample is below the tier minimum (spec §13), and preview the derived knowledge entry. Read-only — makes no product decision.",
+      inputSchema: z.object({ testId: z.string().min(1) }),
+      requiredPermission: "analyze",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { testId: string }) => {
+        const test = ctx.store!.getPerceptualTest(input.testId);
+        if (!test) return { error: `Test not found: ${input.testId}` };
+        const results = ctx.store!.listPerceptualResults({ testId: input.testId, limit: 1000 });
+        const agg = aggregateTestResults(test, results);
+        return { aggregation: agg, knowledgeDraft: deriveKnowledge(test, agg) };
+      },
+    },
+    {
+      name: "perceptual.list_validations",
+      description: "List product validation gates (six evidence layers per product: engineering, measurement, perceptual, workflow, commercial, governance) with the decision-matrix recommendation for each (spec §14, §26).",
+      inputSchema: z.object({}),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, _input: Record<string, never>) => {
+        return {
+          validations: ctx.store!.listProductValidations().map((v) => ({ ...v, evaluation: evaluateProductGates(v) })),
+        };
+      },
+    },
+    {
+      name: "perceptual.set_validation",
+      description:
+        "Set or update a product's validation gate (PASS/FAIL/INCONCLUSIVE per evidence layer). This does NOT make the decision — it records evidence. The decision matrix computes a recommendation; a recorded founder decision is never overwritten, and conflicts stay visible (spec §24, §26). Technical completion is NOT product validation (spec §14).",
+      inputSchema: perceptualValidationSchema,
+      requiredPermission: "modify",
+      riskLevel: "MEDIUM",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof perceptualValidationSchema>) => {
+        const existing = ctx.store!.getProductValidation(input.productId);
+        const now = nowIso();
+        const row: ProductValidation = {
+          product_id: input.productId,
+          stage: input.stage ?? existing?.stage ?? "prototype",
+          engineering: input.engineering ?? existing?.engineering ?? "INCONCLUSIVE",
+          measurement: input.measurement ?? existing?.measurement ?? "INCONCLUSIVE",
+          perceptual: input.perceptual ?? existing?.perceptual ?? "INCONCLUSIVE",
+          workflow: input.workflow ?? existing?.workflow ?? "INCONCLUSIVE",
+          commercial: input.commercial ?? existing?.commercial ?? "INCONCLUSIVE",
+          governance: input.governance ?? existing?.governance ?? "PASS",
+          decision: input.decision ?? existing?.decision ?? "NONE",
+          decision_by: input.decision ? "executive" : existing?.decision_by,
+          decision_note: input.decisionNote ?? existing?.decision_note,
+          iteration: input.iteration ?? existing?.iteration ?? 0,
+          notes_json: existing?.notes_json ?? "[]",
+          created_at: existing?.created_at ?? now,
+          updated_at: now,
+        };
+        ctx.store!.upsertProductValidation(row);
+        ctx.audit?.("executive", "perceptual.validation.set", "product_validations", input.productId, {
+          stage: row.stage,
+          perceptual: row.perceptual,
+          decision: row.decision,
+        });
+        return { ok: true, validation: { ...row, evaluation: evaluateProductGates(row) } };
+      },
+    },
+    {
+      name: "perceptual.add_knowledge",
+      description:
+        "Store validated perceptual knowledge in organizational memory: DSP behavior → perceptual consequence → musical context → producer preference (spec §27-29, §40). Store the underlying knowledge, not just a score. Raw evaluator conversation is never stored.",
+      inputSchema: perceptualKnowledgeSchema,
+      requiredPermission: "create",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof perceptualKnowledgeSchema>) => {
+        const now = nowIso();
+        const id = newId("pk");
+        ctx.store!.createPerceptualKnowledge({
+          id,
+          product_category: input.productCategory,
+          musical_context: input.musicalContext ?? "",
+          desired_outcome: input.desiredOutcome ?? "",
+          observation_json: JSON.stringify(input.observations ?? []),
+          confidence: input.confidence ?? 0,
+          sample_size: input.sampleSize ?? 0,
+          test_protocol: input.testProtocol ?? "",
+          source_test_id: input.sourceTestId,
+          evidence_tier: input.evidenceTier ?? "perceptual",
+          source: "executive",
+          created_at: now,
+          updated_at: now,
+        });
+        ctx.audit?.("executive", "perceptual.knowledge.add", "perceptual_knowledge", id, { productCategory: input.productCategory });
+        return { ok: true, id };
+      },
+    },
+    {
+      name: "perceptual.list_knowledge",
+      description: "Retrieve structured perceptual knowledge from organizational memory, optionally filtered by product category or evidence tier. This is what future product hypotheses should draw on (spec §29, §40).",
+      inputSchema: z.object({ productCategory: z.string().max(120).optional(), evidenceTier: z.string().max(32).optional(), limit: z.number().int().min(1).max(200).optional() }),
+      requiredPermission: "read",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: { productCategory?: string; evidenceTier?: string; limit?: number }) => {
+        return { knowledge: ctx.store!.listPerceptualKnowledge({ productCategory: input.productCategory, evidenceTier: input.evidenceTier, limit: input.limit ?? 100 }) };
+      },
+    },
+    {
+      name: "perceptual.record_failure",
+      description:
+        "Classify a product failure using the taxonomy (discovery / hypothesis / dsp / perceptual / workflow / positioning / market / execution) and record the lesson (spec §39). Engineering hours are not wasted — they become organizational learning (spec §33).",
+      inputSchema: perceptualFailureSchema,
+      requiredPermission: "create",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: true,
+      run: async (ctx: ToolContext, input: z.infer<typeof perceptualFailureSchema>) => {
+        const rec = failureRecord({
+          id: newId("pfl"),
+          productId: input.productId,
+          failureClass: input.failureClass,
+          title: input.title,
+          description: input.description ?? "",
+          lessons: input.lessons,
+          now: nowIso(),
+        });
+        ctx.store!.createFailureAnalysis(rec);
+        ctx.audit?.("executive", "perceptual.failure.record", "failure_analyses", rec.id, { productId: input.productId, failureClass: rec.failure_class });
+        return { ok: true, id: rec.id };
+      },
+    },
+    {
+      name: "perceptual.score_product",
+      description:
+        "Score a product with the versioned scoring model (default weights: perceptual 30%, problem severity 20%, differentiation 15%, workflow 10%, market 10%, CPU 5%, stability 5%, monetization 5%). Weights are configurable and versioned — never permanent truth (spec §16).",
+      inputSchema: perceptualScoreSchema,
+      requiredPermission: "analyze",
+      riskLevel: "LOW",
+      reversible: true,
+      auditRequired: false,
+      run: async (ctx: ToolContext, input: z.infer<typeof perceptualScoreSchema>) => {
+        const result = scoreProduct(
+          {
+            perceptual: input.perceptual,
+            problem_severity: input.problemSeverity,
+            differentiation: input.differentiation,
+            workflow: input.workflow,
+            market_demand: input.marketDemand,
+            cpu: input.cpu,
+            stability: input.stability,
+            monetization: input.monetization,
+          },
+          ctx.store,
+        );
+        return result;
+      },
+    },
+  ];
+}
+
 export function buildToolRegistry(deps: {
   env: Record<string, string | undefined>;
   sink: { recordExecution(record: unknown): void };
@@ -1522,6 +1959,7 @@ export function buildToolRegistry(deps: {
     ...paystackTools({ env }),
     ...doctorTools(),
     ...productivityTools(),
+    ...perceptualTools(),
     ...internalTools(),
   ]) {
     registry.register(tool);

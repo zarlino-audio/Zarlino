@@ -19,6 +19,7 @@ import type { ExecutiveStore } from "../db/store";
 import type { DoctorCheckResult, DoctorReport, DoctorSeverity } from "../types";
 import type { Tool, ToolContext } from "./tools/types";
 import { newId } from "../ids";
+import { evaluateProductGates } from "./perceptual/manager";
 export interface DoctorContext {
   store: ExecutiveStore;
   env: Record<string, string | undefined>;
@@ -462,6 +463,32 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
         );
       }
       return okResult("productivity.contradictions", "No open contradictions/misconceptions", "LOW", "No open contradictions.");
+    },
+  },
+  {
+    id: "perceptual.evidence_gaps",
+    label: "No unresolved perceptual evidence gaps",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      try {
+        const validations = ctx.store.listProductValidations();
+        const gapIds = validations
+          .map((v) => ({ id: v.product_id, e: evaluateProductGates(v) }))
+          .filter(({ e }) => e.blockers.includes("perceptual") || e.insufficient.includes("perceptual"))
+          .map(({ id }) => id);
+        if (gapIds.length > 0) {
+          return warnResult(
+            "perceptual.evidence_gaps",
+            "No unresolved perceptual evidence gaps",
+            "MEDIUM",
+            `${gapIds.length} product(s) lack adequate perceptual evidence: ${gapIds.join(", ")}. AI judgment is NOT equivalent to external human listening evidence (spec §2).`,
+            "Design + run a controlled listening test (blind preference / ABX / workflow) via the Perceptual view.",
+          );
+        }
+        return okResult("perceptual.evidence_gaps", "No unresolved perceptual evidence gaps", "MEDIUM", "All products have adequate perceptual evidence or no validation gate requiring it.");
+      } catch {
+        return okResult("perceptual.evidence_gaps", "No unresolved perceptual evidence gaps", "MEDIUM", "Perceptual check unavailable (schema older than v22).");
+      }
     },
   },
 ];

@@ -199,6 +199,102 @@ export const api = {
     }),
   getFile: (id: string) => request<{ id: string; name: string; mime?: string; kind?: string; data_base64?: string; size_bytes?: number }>(`/api/files/${encodeURIComponent(id)}`),
 
+  // Perceptual Intelligence (external human ear network, test registry, gates).
+  perceptualReport: () => request<PerceptualKpi>("/api/perceptual/report"),
+  perceptualTests: () => request<{ tests: PerceptualTest[] }>("/api/perceptual/tests"),
+  createPerceptualTest: (t: {
+    productId: string;
+    title: string;
+    testType?: string;
+    hypothesis?: string;
+    objective?: string;
+    protocol?: string;
+    sampleSizeTarget?: number;
+    blinding?: string;
+    tier?: string;
+  }) =>
+    request<{ ok: boolean; id: string }>("/api/perceptual/tests", {
+      method: "POST",
+      body: JSON.stringify(t),
+    }),
+  patchPerceptualTest: (id: string, patch: { status?: string; protocol?: string }) =>
+    request<{ ok: boolean }>(`/api/perceptual/tests/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  perceptualResults: (testId: string) =>
+    request<{ results: PerceptualResult[] }>(`/api/perceptual/tests/${encodeURIComponent(testId)}/results`),
+  recordPerceptualResult: (testId: string, r: {
+    evaluatorId: string;
+    responses: Record<string, unknown>;
+    attentionChecksPassed?: number;
+    attentionChecksTotal?: number;
+    selfConfidence?: number;
+    completionMs?: number;
+  }) =>
+    request<{ ok: boolean; id: string; status: string }>(`/api/perceptual/tests/${encodeURIComponent(testId)}/results`, {
+      method: "POST",
+      body: JSON.stringify(r),
+    }),
+  perceptualAnalysis: (testId: string) =>
+    request<{ aggregation: TestAggregation; knowledgeDraft: Record<string, unknown> }>(`/api/perceptual/tests/${encodeURIComponent(testId)}/analysis`),
+  perceptualEvaluators: () => request<{ evaluators: PerceptualEvaluator[] }>("/api/perceptual/evaluators"),
+  registerEvaluator: (e: {
+    name: string;
+    actorType?: string;
+    expertise?: string;
+    genres?: string[];
+    experienceLevel?: string;
+    compensationProfile?: string;
+    conflicts?: string[];
+  }) =>
+    request<{ ok: boolean; id: string }>("/api/perceptual/evaluators", {
+      method: "POST",
+      body: JSON.stringify(e),
+    }),
+  deleteEvaluator: (id: string) =>
+    request<{ deleted: boolean }>(`/api/perceptual/evaluators/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  perceptualValidations: () => request<{ validations: ProductValidation[] }>("/api/perceptual/validations"),
+  setValidation: (v: {
+    productId: string;
+    stage?: string;
+    engineering?: string;
+    measurement?: string;
+    perceptual?: string;
+    workflow?: string;
+    commercial?: string;
+    governance?: string;
+    decision?: string;
+    decisionNote?: string;
+  }) =>
+    request<{ ok: boolean; validation: ProductValidation }>("/api/perceptual/validations", {
+      method: "POST",
+      body: JSON.stringify(v),
+    }),
+  perceptualKnowledge: () => request<{ knowledge: PerceptualKnowledge[] }>("/api/perceptual/knowledge"),
+  addKnowledge: (k: {
+    productCategory: string;
+    musicalContext?: string;
+    desiredOutcome?: string;
+    observations?: string[];
+    confidence?: number;
+    sampleSize?: number;
+    testProtocol?: string;
+    evidenceTier?: string;
+  }) =>
+    request<{ ok: boolean; id: string }>("/api/perceptual/knowledge", {
+      method: "POST",
+      body: JSON.stringify(k),
+    }),
+  deleteKnowledge: (id: string) =>
+    request<{ deleted: boolean }>(`/api/perceptual/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  perceptualFailures: () => request<{ failures: FailureAnalysis[] }>("/api/perceptual/failures"),
+  recordFailure: (f: { productId: string; failureClass: string; title: string; description?: string; lessons?: string[] }) =>
+    request<{ ok: boolean; id: string; failureClass: string }>("/api/perceptual/failures", {
+      method: "POST",
+      body: JSON.stringify(f),
+    }),
+
   // Deep data bundle (one bounded request powers every console view).
   dataAll: () => request<DataBundle>("/api/data/all"),
 
@@ -289,6 +385,15 @@ export interface DataBundle {
     generatedAt: string;
   };
   reviews: ReviewItem[];
+  perceptual: {
+    tests: PerceptualTest[];
+    results: PerceptualResult[];
+    evaluators: PerceptualEvaluator[];
+    knowledge: PerceptualKnowledge[];
+    validations: ProductValidation[];
+    failures: FailureAnalysis[];
+    kpi: PerceptualKpi;
+  };
   productivity: {
     assignments: Assignment[];
     optimizationEvents: OptimizationEvent[];
@@ -324,6 +429,147 @@ export interface ReviewItem {
   updated_at: string;
   decided_at?: string;
   decided_by?: string;
+}
+
+// ---- Perceptual Intelligence types -----------------------------------------
+
+export interface PerceptualEvaluator {
+  id: string;
+  name: string;
+  actor_type: string;
+  expertise: string;
+  genres_json: string;
+  experience_level: string;
+  reliability_score: number;
+  calibration_score: number;
+  reliability_by_domain_json: string;
+  availability: string;
+  compensation_profile: string;
+  conflicts_json: string;
+  test_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PerceptualTest {
+  id: string;
+  product_id: string;
+  title: string;
+  hypothesis: string;
+  objective: string;
+  test_type: string;
+  protocol: string;
+  stimuli_json: string;
+  conditions_json: string;
+  evaluator_requirements: string;
+  sample_size_target: number;
+  blinding: string;
+  randomization: string;
+  metrics_json: string;
+  acceptance_threshold: string;
+  tier: string;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PerceptualResult {
+  id: string;
+  test_id: string;
+  evaluator_id: string;
+  responses_json: string;
+  completion_ms?: number;
+  attention_checks_passed: number;
+  attention_checks_total: number;
+  self_confidence?: number;
+  status: string;
+  created_at: string;
+}
+
+export interface PerceptualKnowledge {
+  id: string;
+  product_category: string;
+  musical_context: string;
+  desired_outcome: string;
+  observation_json: string;
+  confidence: number;
+  sample_size: number;
+  test_protocol: string;
+  source_test_id?: string;
+  evidence_tier: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductValidation {
+  product_id: string;
+  stage: string;
+  engineering: string;
+  measurement: string;
+  perceptual: string;
+  workflow: string;
+  commercial: string;
+  governance: string;
+  decision: string;
+  decision_by?: string;
+  decision_note?: string;
+  iteration: number;
+  notes_json: string;
+  created_at: string;
+  updated_at: string;
+  evaluation?: GateEvaluation;
+}
+
+export interface GateEvaluation {
+  stage: string;
+  ok: boolean;
+  blockers: string[];
+  insufficient: string[];
+  recommendation: string;
+  conflict: boolean;
+  cycleLimitReached: boolean;
+}
+
+export interface FailureAnalysis {
+  id: string;
+  product_id: string;
+  failure_class: string;
+  title: string;
+  description: string;
+  evidence_json: string;
+  lesson_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TestAggregation {
+  testId: string;
+  total: number;
+  accepted: number;
+  rejected: number;
+  weakEvidence: boolean;
+  tierMinimum: number;
+  tally: Array<{ choice: string; count: number }>;
+  preferenceRatio: number | null;
+  majorityChoice: string | null;
+  correct: number;
+  detectionRate: number | null;
+  abxPValue: number | null;
+  detected: boolean | null;
+  meanConfidence: number | null;
+  meanCompletionMs: number | null;
+}
+
+export interface PerceptualKpi {
+  validatedProductYield: number | null;
+  seriousExperiments: number;
+  viableProducts: number;
+  testsByStatus: Record<string, number>;
+  testsByTier: Record<string, number>;
+  evaluatorsActive: number;
+  evidenceGaps: string[];
+  avgCycleDays: number | null;
 }
 
 export interface Health {

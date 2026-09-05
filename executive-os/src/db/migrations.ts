@@ -34,6 +34,7 @@ import {
   FOUNDER_CREDENTIALS_SEED_SQL,
   LOCAL_AGENT_STATUS_SQL,
   REVIEW_ITEMS_SQL,
+  PERCEPTUAL_SQL,
 } from "./schema";
 import type { Sql } from "./sql";
 
@@ -134,6 +135,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 19, name: "founder_credentials_seed", sql: [FOUNDER_CREDENTIALS_SEED_SQL] },
   { version: 20, name: "local_agent_status", sql: [LOCAL_AGENT_STATUS_SQL] },
   { version: 21, name: "review_queue", sql: [REVIEW_ITEMS_SQL] },
+  { version: 22, name: "perceptual_intelligence", sql: [PERCEPTUAL_SQL] },
 ];
 
 /** Latest schema version this code knows how to migrate to. */

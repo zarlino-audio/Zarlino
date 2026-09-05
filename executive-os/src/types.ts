@@ -688,3 +688,136 @@ export interface ProductivityMetric {
   updated_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Perceptual Intelligence (spec: zarlino-artificial-organization, migration v22)
+// ---------------------------------------------------------------------------
+
+/** Organizational actor type — internal agents, external human evaluators,
+ *  and customers are DIFFERENT actors and must stay distinct (spec §5). */
+export type PerceptualActorType = "external_human" | "internal_agent" | "customer";
+
+/** A panel member of the human sensor network. Not an employee (spec §4-5). */
+export interface PerceptualEvaluator {
+  id: string;
+  name: string;
+  actor_type: PerceptualActorType | string;
+  expertise: string; // e.g. "mixing_engineer, vocal_producer"
+  genres_json: string; // JSON array
+  experience_level: string;
+  reliability_score: number; // 0..1, accumulated per domain (spec §11)
+  calibration_score: number;
+  reliability_by_domain_json: string; // { "vocal_processing": 0.93, ... } — never one universal score
+  availability: string; // active | inactive | invite_sent
+  compensation_profile: string; // never tied to favorable results (spec §30)
+  conflicts_json: string; // disclosed conflicts of interest (spec §31)
+  test_count: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type PerceptualTestType =
+  | "blind_preference" | "abx_identification" | "problem_solution" | "workflow" | "preference_reach";
+export type PerceptualTestTier = "exploratory" | "validation" | "high_confidence" | "commercial";
+export type PerceptualTestStatus =
+  | "draft" | "designed" | "recruiting" | "in_progress" | "completed" | "analyzed" | "closed";
+
+/** A controlled listening test in the registry (spec §6). Every significant
+ *  perceptual decision must reference one of these records. */
+export interface PerceptualTest {
+  id: string;
+  product_id: string;
+  title: string;
+  hypothesis: string;
+  objective: string;
+  test_type: PerceptualTestType | string;
+  protocol: string;
+  stimuli_json: string; // JSON array of stimulus descriptors / file ids
+  conditions_json: string; // JSON array
+  evaluator_requirements: string;
+  sample_size_target: number;
+  blinding: string; // blind | double_blind | unblinded (spec §10)
+  randomization: string;
+  metrics_json: string; // JSON array of metric names
+  acceptance_threshold: string;
+  tier: PerceptualTestTier | string; // sample-size class (spec §13)
+  status: PerceptualTestStatus | string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One evaluator's response to one test. IMMUTABLE once recorded — engineering
+ *  must not be able to rewrite human evidence (spec §9). */
+export interface PerceptualResult {
+  id: string;
+  test_id: string;
+  evaluator_id: string;
+  responses_json: string; // structured answers
+  completion_ms?: number;
+  attention_checks_passed: number;
+  attention_checks_total: number;
+  self_confidence?: number; // 0..1
+  status: "accepted" | "rejected" | string; // rejected = failed attention checks
+  source: string;
+  created_at: string;
+}
+
+/** Structured perceptual knowledge — organizational memory of DSP → perceptual
+ *  consequence → musical context → producer preference (spec §27-29, §40). */
+export interface PerceptualKnowledge {
+  id: string;
+  product_category: string;
+  musical_context: string;
+  desired_outcome: string;
+  observation_json: string; // JSON array of validated observations
+  confidence: number; // 0..1
+  sample_size: number;
+  test_protocol: string;
+  source_test_id?: string;
+  evidence_tier: string; // engineering | measurement | perceptual | workflow | market
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type GateVerdict = "PASS" | "FAIL" | "INCONCLUSIVE";
+
+/** The six-layer product validation gate (spec §14, §3). Technical completion
+ *  is NOT product validation. */
+export interface ProductValidation {
+  product_id: string;
+  stage: string; // prototype | validation | beta | ship
+  engineering: GateVerdict | string;
+  measurement: GateVerdict | string;
+  perceptual: GateVerdict | string;
+  workflow: GateVerdict | string;
+  commercial: GateVerdict | string;
+  governance: GateVerdict | string;
+  /** Founder-recorded decision (authoritative override), e.g. SHIP/KILL. */
+  decision: string;
+  decision_by?: string;
+  decision_note?: string;
+  iteration: number; // bounded validation cycles (spec §18)
+  notes_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type FailureClass =
+  | "discovery" | "hypothesis" | "dsp" | "perceptual" | "workflow"
+  | "positioning" | "market" | "execution";
+
+/** Failure taxonomy record (spec §39) — feeds organizational memory. */
+export interface FailureAnalysis {
+  id: string;
+  product_id: string;
+  failure_class: FailureClass | string;
+  title: string;
+  description: string;
+  evidence_json: string;
+  lesson_json: string;
+  created_at: string;
+  updated_at: string;
+}
+

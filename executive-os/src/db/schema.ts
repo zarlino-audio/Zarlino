@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1063,4 +1063,148 @@ CREATE INDEX IF NOT EXISTS idx_risks_level ON risks(level);
 CREATE INDEX IF NOT EXISTS idx_costs_created ON model_costs(created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(session_id);
 CREATE INDEX IF NOT EXISTS idx_gates_plugin ON pipeline_gates(plugin_id);
+`;
+
+/**
+ * Perceptual Intelligence layer (migration v22).
+ *
+ * Implements the "Zarlino Artificial Organization" spec
+ * (specs/zarlino-artificial-organization.md): an external human ear network as
+ * a first-class organizational capability. Five evidence layers (spec §3) —
+ * engineering, measurement, perceptual, workflow, market — each independently
+ * tracked; the product validation gate (spec §14), the kill system (spec §15),
+ * the test registry (spec §6), evaluator calibration (spec §11), failure
+ * taxonomy (spec §39) and the perceptual knowledge base (spec §27-29, §40).
+ *
+ * Integrity rules enforced in code, not just schema:
+ *   - perceptual_results are append-only (spec §9: engineering must not edit
+ *     human evidence);
+ *   - evaluators are always one of external_human | internal_agent | customer
+ *     (spec §5: these are different organizational actors);
+ *   - evaluator reliability is stored per-domain, never one universal
+ *     "good ear" score (spec §11).
+ */
+export const PERCEPTUAL_SQL = `
+CREATE TABLE IF NOT EXISTS perceptual_evaluators (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  actor_type TEXT NOT NULL DEFAULT 'external_human',
+  expertise TEXT NOT NULL DEFAULT '',
+  genres_json TEXT NOT NULL DEFAULT '[]',
+  experience_level TEXT NOT NULL DEFAULT '',
+  reliability_score REAL NOT NULL DEFAULT 0,
+  calibration_score REAL NOT NULL DEFAULT 0,
+  reliability_by_domain_json TEXT NOT NULL DEFAULT '{}',
+  availability TEXT NOT NULL DEFAULT 'active',
+  compensation_profile TEXT NOT NULL DEFAULT '',
+  conflicts_json TEXT NOT NULL DEFAULT '[]',
+  test_count INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT 'founder',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_perceptual_evaluators_type ON perceptual_evaluators(actor_type);
+
+CREATE TABLE IF NOT EXISTS perceptual_tests (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  hypothesis TEXT NOT NULL DEFAULT '',
+  objective TEXT NOT NULL DEFAULT '',
+  test_type TEXT NOT NULL,
+  protocol TEXT NOT NULL DEFAULT '',
+  stimuli_json TEXT NOT NULL DEFAULT '[]',
+  conditions_json TEXT NOT NULL DEFAULT '[]',
+  evaluator_requirements TEXT NOT NULL DEFAULT '',
+  sample_size_target INTEGER NOT NULL DEFAULT 0,
+  blinding TEXT NOT NULL DEFAULT 'blind',
+  randomization TEXT NOT NULL DEFAULT '',
+  metrics_json TEXT NOT NULL DEFAULT '[]',
+  acceptance_threshold TEXT NOT NULL DEFAULT '',
+  tier TEXT NOT NULL DEFAULT 'exploratory',
+  status TEXT NOT NULL DEFAULT 'draft',
+  source TEXT NOT NULL DEFAULT 'founder',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_perceptual_tests_product ON perceptual_tests(product_id);
+CREATE INDEX IF NOT EXISTS idx_perceptual_tests_status ON perceptual_tests(status);
+
+CREATE TABLE IF NOT EXISTS perceptual_results (
+  id TEXT PRIMARY KEY,
+  test_id TEXT NOT NULL,
+  evaluator_id TEXT NOT NULL,
+  responses_json TEXT NOT NULL DEFAULT '{}',
+  completion_ms INTEGER,
+  attention_checks_passed INTEGER NOT NULL DEFAULT 0,
+  attention_checks_total INTEGER NOT NULL DEFAULT 0,
+  self_confidence REAL,
+  status TEXT NOT NULL DEFAULT 'accepted',
+  source TEXT NOT NULL DEFAULT 'api',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_perceptual_results_test ON perceptual_results(test_id);
+
+CREATE TABLE IF NOT EXISTS perceptual_knowledge (
+  id TEXT PRIMARY KEY,
+  product_category TEXT NOT NULL,
+  musical_context TEXT NOT NULL DEFAULT '',
+  desired_outcome TEXT NOT NULL DEFAULT '',
+  observation_json TEXT NOT NULL DEFAULT '[]',
+  confidence REAL NOT NULL DEFAULT 0,
+  sample_size INTEGER NOT NULL DEFAULT 0,
+  test_protocol TEXT NOT NULL DEFAULT '',
+  source_test_id TEXT,
+  evidence_tier TEXT NOT NULL DEFAULT 'perceptual',
+  source TEXT NOT NULL DEFAULT 'executive',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_perceptual_knowledge_cat ON perceptual_knowledge(product_category);
+
+CREATE TABLE IF NOT EXISTS product_validations (
+  product_id TEXT PRIMARY KEY,
+  stage TEXT NOT NULL DEFAULT 'prototype',
+  engineering TEXT NOT NULL DEFAULT 'INCONCLUSIVE',
+  measurement TEXT NOT NULL DEFAULT 'INCONCLUSIVE',
+  perceptual TEXT NOT NULL DEFAULT 'INCONCLUSIVE',
+  workflow TEXT NOT NULL DEFAULT 'INCONCLUSIVE',
+  commercial TEXT NOT NULL DEFAULT 'INCONCLUSIVE',
+  governance TEXT NOT NULL DEFAULT 'PASS',
+  decision TEXT NOT NULL DEFAULT 'NONE',
+  decision_by TEXT,
+  decision_note TEXT,
+  iteration INTEGER NOT NULL DEFAULT 0,
+  notes_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS failure_analyses (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  failure_class TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  lesson_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_failure_analyses_product ON failure_analyses(product_id);
+
+-- Honest baseline for the two shipped products: engineering/measurement and
+-- governance are satisfied, but perceptual evidence is NOT yet collected
+-- (ZTame P8 A/B listening test is still open). INCONCLUSIVE is recorded as-is
+-- rather than pretended PASS — evidence conflicts must stay visible (spec §24).
+INSERT OR IGNORE INTO product_validations
+ (product_id, stage, engineering, measurement, perceptual, workflow, commercial,
+  governance, decision, decision_by, decision_note, iteration, notes_json, created_at, updated_at)
+VALUES
+ ('prod_zscorch', 'ship', 'PASS', 'PASS', 'INCONCLUSIVE', 'INCONCLUSIVE', 'PASS', 'PASS',
+  'SHIP', 'founder', 'Shipped 1.0.0 on founder authority; blind perceptual validation outstanding.',
+  1, '[]', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('prod_ztame', 'ship', 'PASS', 'PASS', 'INCONCLUSIVE', 'INCONCLUSIVE', 'PASS', 'PASS',
+  'SHIP', 'founder', 'Shipped 1.0.0; P8 suppression-quality A/B listening test still BLOCKED.',
+  1, '[]', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;
