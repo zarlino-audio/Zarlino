@@ -1,7 +1,7 @@
 # AOrgI Retrofit Plan — Zarlino Artificial Organization (v1)
 
-Status: **PHASE 1 CODE COMPLETE — TESTED, AWAITING PRODUCTION ACTIVATION (founder-governed deploy)** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
-Architecture version: AOrgI-1.0 · Date: 2026-09-05 · Owner: Chief Operating Agent (COA) — first runtime instance.
+Status: **PHASE 1 OPERATIONAL (deployed 2026-09-06, version bd9b89d4) → PHASE 2 EXECUTING** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
+Architecture version: AOrgI-1.0 · Date: 2026-09-06 · Owner: Chief Operating Agent (COA) — first runtime instance.
 
 ---
 
@@ -63,7 +63,7 @@ Today exactly **two runtimes exist**: `executive_do_01` (cloud DO, performs the 
 | Doctor check `org.registry` (coherence + liveness, 2-day stale warning) | **IMPLEMENTED + TESTED** |
 | Runtime heartbeats: DO self-registers `executive_do_01` (role_coa) on wake; daemon heartbeat upserts `local_daemon_01` (role_software_engineering) | **IMPLEMENTED + INTEGRATED** |
 | Snapshot/backup includes `departments`, `org_roles`, `org_agents` | **IMPLEMENTED** |
-| Production activation | **AWAITING FOUNDER** — deploy is a governed action (doctrine AUTH_BEFORE_DEPLOY); migration v23 applies automatically on first DO wake after deploy. |
+| Production activation | **OPERATIONAL** — deployed 2026-09-06 (version `bd9b89d4`). Verified live: 6 departments, 12 roles, both runtime instances registered with fresh heartbeats (`executive_do_01` COA, `local_daemon_01` software-engineering), `tsk_ztame_p8` contract visible via `/api/org/task-contracts`. Doctor runs 20 checks (org.registry present; 2 pre-existing FAILs: provider balance + interrupted runs). |
 
 Nothing is marked OPERATIONAL until it runs in production (§41).
 

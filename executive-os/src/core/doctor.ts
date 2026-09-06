@@ -440,6 +440,36 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "org.post_objective",
+    label: "Completed objectives have PostObjectiveRecords",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      // AOrgI §38: after completing an objective the organization must record
+      // what worked, what failed, and what to change — otherwise the next
+      // objective cannot learn from this one.
+      const completed = ctx.store.listObjectives().filter((o) => ["COMPLETED", "DONE", "ACHIEVED"].includes(String(o.status).toUpperCase()));
+      const missing = completed.filter((o) => !ctx.store.hasPostObjectiveRecord(o.id));
+      if (missing.length > 0) {
+        return warnResult(
+          "org.post_objective",
+          "Completed objectives have PostObjectiveRecords",
+          "MEDIUM",
+          `${missing.length} completed objective(s) have no PostObjectiveRecord: ${missing.map((o) => o.id).join(", ")}.`,
+          "Record outcomes via POST /api/org/post-objectives (outcome, successful/failed roles, bottlenecks, lessons).",
+        );
+      }
+      if (completed.length === 0) {
+        return okResult("org.post_objective", "Completed objectives have PostObjectiveRecords", "MEDIUM", "No completed objectives yet.");
+      }
+      return okResult(
+        "org.post_objective",
+        "Completed objectives have PostObjectiveRecords",
+        "MEDIUM",
+        `All ${completed.length} completed objective(s) have PostObjectiveRecords.`,
+      );
+    },
+  },
+  {
     id: "kv.health",
     label: "KV namespace reachable",
     severity: "LOW",

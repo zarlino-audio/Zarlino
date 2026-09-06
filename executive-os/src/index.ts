@@ -757,6 +757,15 @@ export class ExecutiveAgent {
         contradictions: s.listContradictions({ limit: 100 }),
         budgets: budgetStatus(s),
       },
+      org: {
+        departments: s.listDepartments(),
+        roles: s.listOrgRoles(),
+        agents: s.listOrgAgents(),
+        memory: s.listOrgMemory({ limit: 20 }),
+        postObjectives: s.listPostObjectiveRecords(10),
+        trust: s.listOrgTrust(),
+        messages: s.listOrgMessages({ limit: 20 }),
+      },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
         return d ? { runAt: d.run_at, trigger: d.trigger, summary: safeJson(d.summary_json, null) } : null;
@@ -1185,6 +1194,144 @@ export class ExecutiveAgent {
         updated_at: nowIso(),
       });
       return json({ ok: true, task: updated });
+    }
+
+    // -- AOrgI Phase 2: org memory / post-objective / trust / messages ---------
+    if (path === "/api/org/memory" && method === "GET") {
+      const includeSuperseded = url.searchParams.get("include_superseded") === "1";
+      return json({ memory: this.store.listOrgMemory({ includeSuperseded, limit: 100 }) });
+    }
+    if (path === "/api/org/memory" && method === "POST") {
+      const body = (await readBody<{ key?: string; value?: unknown; author?: string; task_id?: string; supersedes?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.key || typeof body.key !== "string" || !body.key.trim()) return json({ error: "key required" }, 400);
+      if (body.value === undefined) return json({ error: "value required" }, 400);
+      const entry = this.store.writeOrgMemory({
+        key: body.key.trim(),
+        value: body.value,
+        author: body.author as string | undefined,
+        taskId: body.task_id as string | undefined,
+        supersedes: body.supersedes as string | undefined,
+      });
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "org.memory.write",
+        entity_type: "org_memory",
+        entity_id: entry.id,
+        detail_json: JSON.stringify({ key: entry.key, supersedes: entry.supersedes ?? null }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, entry });
+    }
+    const memoryPatch = /^\/api\/org\/memory\/([^/]+)$/.exec(path);
+    if (memoryPatch && method === "POST") {
+      const id = decodeURIComponent(memoryPatch[1]!);
+      const body = (await readBody<{ value?: unknown; expected_version?: number; author?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (body.value === undefined) return json({ error: "value required" }, 400);
+      if (typeof body.expected_version !== "number") return json({ error: "expected_version (number) required — READ the entry, then WRITE with its version (§14)" }, 400);
+      const result = this.store.updateOrgMemory(id, {
+        value: body.value,
+        expectedVersion: body.expected_version,
+        author: body.author as string | undefined,
+      });
+      if (result.status === "not_found") return json({ error: "Memory entry not found" }, 404);
+      if (result.status === "conflict") {
+        return json({ error: "ORG_MEMORY_CONFLICT", message: "Version mismatch — someone else wrote first. Re-read, merge, retry (§14: never silently overwrite).", current: result.record }, 409);
+      }
+      return json({ ok: true, entry: result.record });
+    }
+    if (path === "/api/org/post-objectives" && method === "GET") {
+      return json({ records: this.store.listPostObjectiveRecords(50) });
+    }
+    if (path === "/api/org/post-objectives" && method === "POST") {
+      const body = (await readBody<{
+        objective_id?: string;
+        outcome?: string;
+        expected_outcome?: string;
+        actual_outcome?: string;
+        successful_roles?: unknown[];
+        failed_roles?: unknown[];
+        bottlenecks?: unknown[];
+        incidents?: unknown[];
+        useful_workflows?: unknown[];
+        unnecessary_work?: unknown[];
+        decisions?: unknown[];
+        deviations?: unknown[];
+        trust_updates?: unknown[];
+        lessons?: unknown[];
+        topology_changes?: unknown[];
+        policy_changes?: unknown[];
+      }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.objective_id || typeof body.objective_id !== "string") return json({ error: "objective_id required" }, 400);
+      const objective = this.store.listObjectives().find((o) => o.id === body.objective_id);
+      if (!objective) return json({ error: "Objective not found" }, 404);
+      const now = nowIso();
+      const id = newId("por");
+      const jsonArr = (v: unknown) => JSON.stringify(Array.isArray(v) ? v : []);
+      this.store.createPostObjectiveRecord({
+        id,
+        objective_id: body.objective_id as string,
+        outcome: (body.outcome as string | undefined) ?? "",
+        expected_outcome: (body.expected_outcome as string | undefined) ?? "",
+        actual_outcome: (body.actual_outcome as string | undefined) ?? "",
+        successful_roles_json: jsonArr(body.successful_roles),
+        failed_roles_json: jsonArr(body.failed_roles),
+        bottlenecks_json: jsonArr(body.bottlenecks),
+        incidents_json: jsonArr(body.incidents),
+        useful_workflows_json: jsonArr(body.useful_workflows),
+        unnecessary_work_json: jsonArr(body.unnecessary_work),
+        decisions_json: jsonArr(body.decisions),
+        deviations_json: jsonArr(body.deviations),
+        trust_updates_json: jsonArr(body.trust_updates),
+        lessons_json: jsonArr(body.lessons),
+        topology_changes_json: jsonArr(body.topology_changes),
+        policy_changes_json: jsonArr(body.policy_changes),
+        recorded_at: now,
+        source: "founder",
+        created_at: now,
+        updated_at: now,
+      });
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "org.post_objective.create",
+        entity_type: "post_objective_records",
+        entity_id: id,
+        detail_json: JSON.stringify({ objective_id: body.objective_id }),
+        source: "api",
+        created_at: now,
+        updated_at: now,
+      });
+      return json({ ok: true, id });
+    }
+    if (path === "/api/org/trust" && method === "GET") {
+      return json({ trust: this.store.listOrgTrust() });
+    }
+    if (path === "/api/org/trust" && method === "POST") {
+      const body = (await readBody<{ agent_id?: string; capability?: string; success?: boolean }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.agent_id || typeof body.agent_id !== "string") return json({ error: "agent_id required" }, 400);
+      if (!body.capability || typeof body.capability !== "string") return json({ error: "capability required" }, 400);
+      if (!this.store.getOrgAgent(body.agent_id)) return json({ error: "Unknown agent instance" }, 404);
+      this.store.recordTrustEvidence(body.agent_id, body.capability, body.success === true);
+      return json({ ok: true });
+    }
+    if (path === "/api/org/messages" && method === "GET") {
+      const type = url.searchParams.get("type") ?? undefined;
+      return json({ messages: this.store.listOrgMessages({ type: type ?? undefined, limit: 200 }) });
+    }
+    if (path === "/api/org/messages" && method === "POST") {
+      const body = (await readBody<{ from_role?: string; to_role?: string; type?: string; task_id?: string; payload?: unknown }>(request).catch(() => ({}))) as Record<string, unknown>;
+      const result = this.store.sendOrgMessage({
+        fromRole: String(body.from_role ?? ""),
+        toRole: String(body.to_role ?? ""),
+        type: String(body.type ?? ""),
+        taskId: body.task_id as string | undefined,
+        payload: body.payload ?? {},
+      });
+      if ("error" in result) return json({ error: result.error }, 400);
+      return json({ ok: true, message: result });
     }
 
     // ---------------------------------------------------------------------
@@ -1799,6 +1946,18 @@ export class ExecutiveAgent {
     if (path === "/api/local-tasks/finish" && method === "POST") {
       const body = (await readBody<{ id?: string; status?: string; result?: string; error?: string }>(request).catch(() => ({}))) as { id?: string; status?: string; result?: string; error?: string };
       this.store.finishLocalTask(body.id ?? "", (body.status === "FAILED" ? "FAILED" : "DONE") as never, body.result, body.error);
+      // AOrgI Phase 2 — every finished local task is real evidence and a real
+      // protocol message, not theater: trust for the daemon's local-execution
+      // capability moves with measured outcomes; the COA receives a RESULT
+      // (or DEVIATION on failure) message tied to the task.
+      this.store.recordTrustEvidence("local_daemon_01", "local_execution", body.status !== "FAILED");
+      this.store.sendOrgMessage({
+        fromRole: "role_software_engineering",
+        toRole: "role_coa",
+        type: body.status === "FAILED" ? "DEVIATION" : "RESULT",
+        taskId: body.id ?? undefined,
+        payload: { status: body.status === "FAILED" ? "FAILED" : "DONE", error: body.error ?? null },
+      });
       return json({ ok: true });
     }
     if (path === "/api/local-tasks/requeue" && method === "POST") {

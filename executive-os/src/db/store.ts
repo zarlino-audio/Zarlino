@@ -39,7 +39,11 @@ import type {
   OptimizationEvent,
   Organization,
   OrgAgent,
+  OrgMemory,
+  OrgMessage,
+  OrgMessageType,
   OrgRole,
+  OrgTrust,
   PerceptualEvaluator,
   PerceptualKnowledge,
   PerceptualResult,
@@ -49,6 +53,7 @@ import type {
   Policy,
   Product,
   ProductValidation,
+  PostObjectiveRecord,
   ProductivityAssignment,
   ProductivityMetric,
   ProductStatusRecord,
@@ -66,6 +71,7 @@ import type {
   FailureAnalysis,
 } from "../types";
 import { retrieve, scoreMemory } from "../core/memory/retrieval";
+import { applyTrustEvidence, decayedTrust, TRUST_INITIAL } from "../core/org/trust";
 import type { ModelCallRecord } from "../core/model/types";
 import type { CostStorage } from "../core/model/cost";
 
@@ -448,6 +454,171 @@ export class ExecutiveStore implements CostStorage {
       id,
     );
     return this.getTask(id);
+  }
+
+  // -- AOrgI Phase 2: org memory / post-objective / trust / messages (v24) --
+
+  // -- versioned organizational memory (AOrgI §14) ---------------------------
+  /** ACTIVE entries by default; includeSuperseded adds the version history. */
+  listOrgMemory(opts: { includeSuperseded?: boolean; limit?: number } = {}): OrgMemory[] {
+    let sql = "SELECT * FROM org_memory";
+    const params: SqlParam[] = [];
+    if (!opts.includeSuperseded) { sql += " WHERE status = 'ACTIVE'"; }
+    sql += " ORDER BY updated_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgMemory>(r));
+  }
+  getOrgMemory(id: string): OrgMemory | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_memory WHERE id = ?", id);
+    return rows[0] ? rowTo<OrgMemory>(rows[0]) : null;
+  }
+
+  /**
+   * Write a NEW organizational memory entry (version 1), optionally
+   * superseding an existing ACTIVE entry (the old entry is marked
+   * SUPERSEDED and linked via supersedes — history is never destroyed).
+   */
+  writeOrgMemory(input: { key: string; value: unknown; author?: string; taskId?: string; supersedes?: string }): OrgMemory {
+    const now = new Date().toISOString();
+    const id = newId("orgm");
+    this.insert("org_memory", {
+      id,
+      key: input.key,
+      value_json: JSON.stringify(input.value),
+      version: 1,
+      author: input.author ?? "executive",
+      task_id: input.taskId ?? null,
+      supersedes: input.supersedes ?? null,
+      status: "ACTIVE",
+      source: "system",
+      created_at: now,
+      updated_at: now,
+    });
+    if (input.supersedes) {
+      this.sql.run(
+        "UPDATE org_memory SET status = 'SUPERSEDED', updated_at = ? WHERE id = ? AND status = 'ACTIVE'",
+        now, input.supersedes,
+      );
+    }
+    return this.getOrgMemory(id)!;
+  }
+
+  /**
+   * Update an organizational memory entry with optimistic concurrency (§14:
+   * READ VERSION → MODIFY → WRITE WITH VERSION → CONFLICT). Never silently
+   * overwrites a version the caller has not read.
+   */
+  updateOrgMemory(
+    id: string,
+    input: { value: unknown; expectedVersion: number; author?: string },
+  ): { status: "updated" | "not_found" | "conflict"; record?: OrgMemory } {
+    const existing = this.getOrgMemory(id);
+    if (!existing) return { status: "not_found" };
+    if (existing.version !== input.expectedVersion) {
+      return { status: "conflict", record: existing };
+    }
+    const now = new Date().toISOString();
+    this.sql.run(
+      "UPDATE org_memory SET value_json = ?, version = ?, author = ?, updated_at = ? WHERE id = ? AND version = ?",
+      JSON.stringify(input.value),
+      existing.version + 1,
+      input.author ?? existing.author ?? "executive",
+      now,
+      id,
+      input.expectedVersion,
+    );
+    return { status: "updated", record: this.getOrgMemory(id) ?? undefined };
+  }
+
+  // -- PostObjectiveRecord (AOrgI §38) ---------------------------------------
+  createPostObjectiveRecord(r: PostObjectiveRecord): void {
+    this.insert("post_objective_records", r);
+  }
+  listPostObjectiveRecords(limit = 50): PostObjectiveRecord[] {
+    return this.sql
+      .all<Row>("SELECT * FROM post_objective_records ORDER BY created_at DESC LIMIT ?", limit)
+      .map((row) => rowTo<PostObjectiveRecord>(row));
+  }
+  getPostObjectiveRecord(id: string): PostObjectiveRecord | null {
+    const rows = this.sql.all<Row>("SELECT * FROM post_objective_records WHERE id = ?", id);
+    return rows[0] ? rowTo<PostObjectiveRecord>(rows[0]) : null;
+  }
+  hasPostObjectiveRecord(objectiveId: string): boolean {
+    const rows = this.sql.all<Row>("SELECT id FROM post_objective_records WHERE objective_id = ? LIMIT 1", objectiveId);
+    return rows.length > 0;
+  }
+
+  // -- trust per agent × capability (AOrgI §21) ------------------------------
+  /** Record one measured outcome (true/false) as trust evidence. */
+  recordTrustEvidence(agentId: string, capability: string, ok: boolean): void {
+    const now = new Date().toISOString();
+    const rows = this.sql.all<Row>("SELECT * FROM org_trust WHERE agent_id = ? AND capability = ?", agentId, capability);
+    if (rows.length === 0) {
+      const initial = applyTrustEvidence(TRUST_INITIAL, now, ok ? 1 : 0, now);
+      this.insert("org_trust", {
+        id: newId("trust"),
+        agent_id: agentId,
+        capability,
+        value: initial.value,
+        evidence_count: 1,
+        last_updated: now,
+        source: "system",
+        created_at: now,
+        updated_at: now,
+      });
+      return;
+    }
+    const cur = rows[0]!;
+    const next = applyTrustEvidence(Number(cur.value), String(cur.last_updated), ok ? 1 : 0, now);
+    this.sql.run(
+      "UPDATE org_trust SET value = ?, evidence_count = evidence_count + 1, last_updated = ?, updated_at = ? WHERE agent_id = ? AND capability = ?",
+      next.value, now, now, agentId, capability,
+    );
+  }
+  /** Stored value + effective (decayed) value, per agent × capability. */
+  listOrgTrust(): Array<OrgTrust & { effective_value: number }> {
+    const now = new Date().toISOString();
+    return this.sql
+      .all<Row>("SELECT * FROM org_trust ORDER BY agent_id ASC, capability ASC")
+      .map((r) => ({ ...rowTo<OrgTrust>(r), effective_value: decayedTrust(Number(r.value), String(r.last_updated), now) }));
+  }
+
+  // -- inter-agent message protocol (AOrgI §16) -------------------------------
+  /** Send a structured message; type is validated against the core set. */
+  sendOrgMessage(input: {
+    fromRole: string;
+    toRole: string;
+    type: OrgMessageType | string;
+    taskId?: string;
+    payload?: unknown;
+  }): OrgMessage | { error: string } {
+    const CORE_TYPES: string[] = ["STATUS", "REQUEST", "RESULT", "DEVIATION", "ESCALATION"];
+    if (!CORE_TYPES.includes(input.type)) {
+      return { error: `type must be one of ${CORE_TYPES.join(" | ")}` };
+    }
+    if (!input.fromRole.trim() || !input.toRole.trim()) {
+      return { error: "from_role and to_role are required" };
+    }
+    const now = new Date().toISOString();
+    const msg: OrgMessage = {
+      id: newId("orgmsg"),
+      from_role: input.fromRole,
+      to_role: input.toRole,
+      type: input.type,
+      task_id: input.taskId ?? undefined,
+      payload_json: JSON.stringify(input.payload ?? {}),
+      created_at: now,
+    };
+    this.insert("org_messages", msg);
+    return msg;
+  }
+  listOrgMessages(opts: { type?: string; limit?: number } = {}): OrgMessage[] {
+    let sql = "SELECT * FROM org_messages";
+    const params: SqlParam[] = [];
+    if (opts.type) { sql += " WHERE type = ?"; params.push(opts.type); }
+    sql += " ORDER BY created_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgMessage>(r));
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -2017,6 +2188,7 @@ export const SNAPSHOT_TABLES = [
   "perceptual_evaluators", "perceptual_tests", "perceptual_results",
   "perceptual_knowledge", "product_validations", "failure_analyses",
   "departments", "org_roles", "org_agents",
+  "org_memory", "post_objective_records", "org_trust", "org_messages",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

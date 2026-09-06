@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1414,4 +1414,87 @@ UPDATE tasks SET
   escalation_path = 'founder (Khritical) via review_items',
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 WHERE id = 'tsk_ztame_p8';
+`;
+
+/**
+ * AOrgI Phase 2 (migration v24) — organizational memory, post-objective
+ * records, trust evidence, and the inter-agent message protocol.
+ *
+ *  - org_memory: versioned organizational knowledge (§14). Writes carry
+ *    author/timestamp/task_id; updates require the read version and CONFLICT
+ *    instead of silently overwriting; supersedes links version history.
+ *  - post_objective_records: episodic PostObjectiveRecord after every major
+ *    objective (§38) — what worked, what failed, bottlenecks, lessons,
+ *    recommended topology/policy changes.
+ *  - org_trust: trust per agent × capability (§21), evidence-counted, decays
+ *    over time (math lives in src/core/org/trust.ts).
+ *  - org_messages: structured inter-agent messages (§16) — STATUS / REQUEST /
+ *    RESULT / DEVIATION / ESCALATION, tied to task_id, never free-form chat.
+ */
+export const ORG_PHASE2_SQL = `
+CREATE TABLE IF NOT EXISTS org_memory (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL,
+  value_json TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  author TEXT NOT NULL DEFAULT 'executive',
+  task_id TEXT,
+  supersedes TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_memory_key ON org_memory(key);
+CREATE INDEX IF NOT EXISTS idx_org_memory_status ON org_memory(status);
+
+CREATE TABLE IF NOT EXISTS post_objective_records (
+  id TEXT PRIMARY KEY,
+  objective_id TEXT NOT NULL,
+  outcome TEXT NOT NULL DEFAULT '',
+  expected_outcome TEXT NOT NULL DEFAULT '',
+  actual_outcome TEXT NOT NULL DEFAULT '',
+  successful_roles_json TEXT NOT NULL DEFAULT '[]',
+  failed_roles_json TEXT NOT NULL DEFAULT '[]',
+  bottlenecks_json TEXT NOT NULL DEFAULT '[]',
+  incidents_json TEXT NOT NULL DEFAULT '[]',
+  useful_workflows_json TEXT NOT NULL DEFAULT '[]',
+  unnecessary_work_json TEXT NOT NULL DEFAULT '[]',
+  decisions_json TEXT NOT NULL DEFAULT '[]',
+  deviations_json TEXT NOT NULL DEFAULT '[]',
+  trust_updates_json TEXT NOT NULL DEFAULT '[]',
+  lessons_json TEXT NOT NULL DEFAULT '[]',
+  topology_changes_json TEXT NOT NULL DEFAULT '[]',
+  policy_changes_json TEXT NOT NULL DEFAULT '[]',
+  recorded_at TEXT,
+  source TEXT NOT NULL DEFAULT 'executive',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_por_objective ON post_objective_records(objective_id);
+
+CREATE TABLE IF NOT EXISTS org_trust (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  capability TEXT NOT NULL,
+  value REAL NOT NULL DEFAULT 0.5,
+  evidence_count INTEGER NOT NULL DEFAULT 0,
+  last_updated TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_org_trust_agent_cap ON org_trust(agent_id, capability);
+
+CREATE TABLE IF NOT EXISTS org_messages (
+  id TEXT PRIMARY KEY,
+  from_role TEXT NOT NULL,
+  to_role TEXT NOT NULL,
+  type TEXT NOT NULL,
+  task_id TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_messages_created ON org_messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_org_messages_task ON org_messages(task_id);
 `;

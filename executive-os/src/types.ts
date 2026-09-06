@@ -347,6 +347,72 @@ export interface OrgAgent {
   updated_at: string;
 }
 
+/** AOrgI (migration v24): versioned organizational memory entry (§14). */
+export interface OrgMemory {
+  id: string;
+  key: string;
+  value_json: string;
+  version: number;
+  author?: string;
+  task_id?: string;
+  supersedes?: string;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v24): PostObjectiveRecord — organizational memory after a major objective (§38). */
+export interface PostObjectiveRecord {
+  id: string;
+  objective_id: string;
+  outcome?: string;
+  expected_outcome?: string;
+  actual_outcome?: string;
+  successful_roles_json: string;
+  failed_roles_json: string;
+  bottlenecks_json: string;
+  incidents_json: string;
+  useful_workflows_json: string;
+  unnecessary_work_json: string;
+  decisions_json: string;
+  deviations_json: string;
+  trust_updates_json: string;
+  lessons_json: string;
+  topology_changes_json: string;
+  policy_changes_json: string;
+  recorded_at?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v24): trust per agent × capability, never global (§21). */
+export interface OrgTrust {
+  id: string;
+  agent_id: string;
+  capability: string;
+  value: number;
+  evidence_count: number;
+  last_updated: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v24): structured inter-agent message (§16). */
+export type OrgMessageType = "STATUS" | "REQUEST" | "RESULT" | "DEVIATION" | "ESCALATION";
+
+export interface OrgMessage {
+  id: string;
+  from_role: string;
+  to_role: string;
+  type: OrgMessageType | string;
+  task_id?: string;
+  payload_json: string;
+  created_at: string;
+}
+
 export interface Delegation {
   id: string;
   delegate_person_id?: string;
