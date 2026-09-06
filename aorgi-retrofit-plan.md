@@ -1,6 +1,6 @@
 # AOrgI Retrofit Plan — Zarlino Artificial Organization (v1)
 
-Status: **PHASE 1 + PHASE 2 OPERATIONAL (deployed 2026-09-06, versions bd9b89d4 → 0fcedfa6) → PHASE 3 NEXT** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
+Status: **PHASE 1 + 2 + 3 OPERATIONAL (deployed 2026-09-06, versions bd9b89d4 → 0fcedfa6 → 2dbacc3c) → PHASE 4 NEXT** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
 Architecture version: AOrgI-1.0 · Date: 2026-09-06 · Owner: Chief Operating Agent (COA) — first runtime instance.
 
 ---
@@ -49,7 +49,7 @@ Today exactly **two runtimes exist**: `executive_do_01` (cloud DO, performs the 
 
 - **PHASE 1 (now):** org state = registry + manifests + task contracts. `departments`, `org_roles` (12 role manifests: id, department, lineage_id, model, autonomy default, capabilities, obligations, critic_role), `org_agents` (instance registry w/ heartbeat = real liveness), task-contract columns on `tasks`. Doctor check `org.registry`. REST `/api/org/*`. Tests. → **Implementation below.**
 - **PHASE 2 (done):** versioned organizational memory writes + episodic `PostObjectiveRecord`; trust (agent×capability) evidence; critic lineage discounting; message contracts for the DO↔daemon pair.
-- **PHASE 3:** per-capability autonomy grants (CapabilityGrant over the authority engine); hierarchical plans + deviation events; negotiation/arbitration (only after ≥2 peer instances exist).
+- **PHASE 3 (done):** per-capability autonomy grants (CapabilityGrant over the authority engine); hierarchical plans + deviation events; negotiation/arbitration (protocol + engine; live arbitration only after ≥2 peer instances exist).
 - **PHASE 4:** collective-intelligence metrics (emergence/convergence/robustness/scalability/objective-achievement), chaos tests in staging, organizational analyst job.
 - **PHASE 5:** autonomous topology optimization (deferred until trust + metrics exist).
 
@@ -82,6 +82,18 @@ Honest instance registry: exactly 2 runtimes exist — `executive_do_01` (COA ro
 | Tests | 91/91 vitest (12 new in `test/org-phase2.test.ts`), tsc clean, bundle clean |
 
 Phase 2 notes: trust/message rows populate with real daemon work, not seeds (§42). PostObjectiveRecords appear when an objective actually completes — the doctor enforces the §38 obligation from then on.
+
+## 5c. Phase 3 implementation record (migration v25, deployed 2026-09-06 as `2dbacc3c`)
+
+| Component | Status |
+|---|---|
+| `org_capability_grants` — role × capability, allowed actions, L0–L3, requires_review, rate limit, data scope; 26 seeded grants across 12 roles; wildcard fallback; fail-closed (no grant = DENY, §10) | **OPERATIONAL** |
+| Enforcement in the agent tool loop (`agentLoop`): capability → governance → autonomy check before every tool call; DENY/REVIEW blocks the call, audits, and emits an ESCALATION message to governance | **OPERATIONAL** (live loop executes as `executive_do_01`/role_coa; spend/deploy remain L0 founder-gated) |
+| `org_plans` / `org_plan_steps` / `org_plan_deviations` — versions, owners, step dependencies, task links (`tasks.plan_id/plan_step_id`); every change records a PlanDeviationEvent; BLOCKED steps auto-record blockers (§19) | **OPERATIONAL** — live: real `ZTame P8 suppression-quality verification plan` (3 steps, tsk_ztame_p8 linked, 1 real blocker deviation) |
+| `org_negotiations` / `org_negotiation_rounds` / `org_arbiters` — phase-gated rounds (PROPOSAL→CRITIQUE→REVISION), hard 3-round cap → ARBITRATION, 6 explicit arbiter classes incl. human-CEO for strategic (§22/§23) | **IMPLEMENTED + TESTED** — no peer disagreement exists yet, so no live negotiation run (would be theater, §42) |
+| Doctor check `org.capability.coverage` (uncovered roles = fully blocked instances) | **OPERATIONAL** (doctor now 22 checks) |
+| REST `/api/org/capabilities|plans|plan-steps|arbiters|negotiations` + `org` bundle extended | **OPERATIONAL** |
+| Tests | 102/102 vitest (11 new in `test/org-phase3.test.ts`), tsc clean, bundle clean |
 
 ## 6. First organizational objective after Phase 1
 
