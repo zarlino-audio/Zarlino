@@ -470,6 +470,32 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "org.capability.coverage",
+    label: "Every active role has capability grants (fail-closed, §10)",
+    severity: "HIGH",
+    run: (ctx, _autoFix) => {
+      // A role with no grant rows at all — not even a wildcard — would DENY
+      // every tool for its instances. Active roles must never be uncovered.
+      const uncovered = ctx.store.listRolesWithoutCapabilityGrants();
+      if (uncovered.length > 0) {
+        return failResult(
+          "org.capability.coverage",
+          "Every active role has capability grants (fail-closed, §10)",
+          "HIGH",
+          `Active role(s) with no capability grant (their instances are fully blocked): ${uncovered.join(", ")}.`,
+          "Upsert a wildcard grant: POST /api/org/capabilities {role_id, capability:'*', autonomy_level:'L2'}.",
+        );
+      }
+      const agents = ctx.store.listOrgAgents();
+      return okResult(
+        "org.capability.coverage",
+        "Every active role has capability grants (fail-closed, §10)",
+        "HIGH",
+        `All active roles covered by capability grants; ${agents.length} registered instance(s) checked.`,
+      );
+    },
+  },
+  {
     id: "kv.health",
     label: "KV namespace reachable",
     severity: "LOW",

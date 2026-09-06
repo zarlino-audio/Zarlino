@@ -257,6 +257,28 @@ async function agentLoop(opts: {
         toolsCalled++;
         // Map the provider-sanitized name back to the real tool before running.
         const realName = opts.registry.resolveName(call.function.name);
+        // AOrgI §10 capability governance: agent → capability check →
+        // governance check → autonomy check → tool. This loop is executed by
+        // the registered `executive_do_01` instance (role_coa); DENY/REVIEW
+        // blocks the tool and is reported back to the model + governance.
+        const toolDef = opts.registry.getTool(realName);
+        const capability = toolDef?.requiredPermission ?? "execute";
+        const gate = store.capabilityVerdictForAgent("executive_do_01", capability, realName);
+        if (gate.verdict !== "ALLOW") {
+          const message =
+            gate.verdict === "DENY"
+              ? `CAPABILITY_DENIED: ${gate.reason}`
+              : `REVIEW_REQUIRED: ${gate.reason} Request founder approval before retrying.`;
+          store.sendOrgMessage({
+            fromRole: "role_coa",
+            toRole: "role_finance_governance",
+            type: "ESCALATION",
+            taskId: opts.runId ? store.getAgentRun(opts.runId)?.task_id ?? undefined : undefined,
+            payload: { tool: realName, capability, verdict: gate.verdict, reason: gate.reason },
+          });
+          messages.push({ role: "tool", tool_call_id: call.id, content: message });
+          continue;
+        }
         const result = await opts.registry.run(realName, safeParseArgs(call.function.arguments), {
           env: opts.env as unknown as Record<string, string | undefined>,
           store,
@@ -765,6 +787,11 @@ export class ExecutiveAgent {
         postObjectives: s.listPostObjectiveRecords(10),
         trust: s.listOrgTrust(),
         messages: s.listOrgMessages({ limit: 20 }),
+        capabilities: s.listCapabilityGrants(),
+        plans: s.listOrgPlans(10),
+        planDeviations: s.listOrgPlanDeviations(undefined, 10),
+        negotiations: s.listOrgNegotiations(10),
+        arbiters: s.listOrgArbiters(),
       },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
@@ -1332,6 +1359,165 @@ export class ExecutiveAgent {
       });
       if ("error" in result) return json({ error: result.error }, 400);
       return json({ ok: true, message: result });
+    }
+
+    // -- AOrgI Phase 3: capability grants / plans / negotiations ---------------
+    if (path === "/api/org/capabilities" && method === "GET") {
+      const roleId = url.searchParams.get("role_id") ?? undefined;
+      return json({ grants: this.store.listCapabilityGrants({ roleId }) });
+    }
+    if (path === "/api/org/capabilities" && method === "POST") {
+      const body = (await readBody<{
+        role_id?: string;
+        capability?: string;
+        allowed_actions?: string[];
+        autonomy_level?: string;
+        requires_review?: boolean;
+        rate_limit_per_hour?: number;
+        data_scope?: string;
+      }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.role_id || typeof body.role_id !== "string") return json({ error: "role_id required" }, 400);
+      if (!body.capability || typeof body.capability !== "string") return json({ error: "capability required" }, 400);
+      if (!["L0", "L1", "L2", "L3"].includes(String(body.autonomy_level ?? ""))) return json({ error: "autonomy_level must be L0 | L1 | L2 | L3" }, 400);
+      try {
+        const grant = this.store.upsertCapabilityGrant({
+          roleId: body.role_id,
+          capability: body.capability,
+          allowedActions: Array.isArray(body.allowed_actions) ? body.allowed_actions.map(String) : undefined,
+          autonomyLevel: String(body.autonomy_level),
+          requiresReview: body.requires_review === true,
+          rateLimitPerHour: typeof body.rate_limit_per_hour === "number" ? body.rate_limit_per_hour : undefined,
+          dataScope: body.data_scope as string | undefined,
+        });
+        this.store.insertAudit({
+          id: newId("aud"), actor: "founder", action: "org.capability_grant.upsert",
+          entity_type: "org_capability_grants", entity_id: grant.id,
+          detail_json: JSON.stringify({ role_id: grant.role_id, capability: grant.capability, autonomy_level: grant.autonomy_level }),
+          source: "api", created_at: nowIso(), updated_at: nowIso(),
+        });
+        return json({ ok: true, grant });
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 400);
+      }
+    }
+    if (path === "/api/org/plans" && method === "GET") {
+      return json({ plans: this.store.listOrgPlans() });
+    }
+    if (path === "/api/org/plans" && method === "POST") {
+      const body = (await readBody<{ objective_id?: string; title?: string; owner_role?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.title || typeof body.title !== "string" || !body.title.trim()) return json({ error: "title required" }, 400);
+      if (!body.owner_role || typeof body.owner_role !== "string") return json({ error: "owner_role required" }, 400);
+      if (!this.store.getOrgRole(body.owner_role)) return json({ error: "Unknown owner_role" }, 400);
+      const plan = this.store.createOrgPlan({
+        objectiveId: body.objective_id as string | undefined,
+        title: body.title.trim(),
+        ownerRole: body.owner_role,
+      });
+      return json({ ok: true, plan });
+    }
+    const planDetail = /^\/api\/org\/plans\/([^/]+)$/.exec(path);
+    if (planDetail && method === "GET") {
+      const id = decodeURIComponent(planDetail[1]!);
+      const plan = this.store.getOrgPlan(id);
+      if (!plan) return json({ error: "Plan not found" }, 404);
+      return json({
+        plan,
+        steps: this.store.listOrgPlanSteps(id),
+        deviations: this.store.listOrgPlanDeviations(id),
+        tasks: this.store.listTasks({ limit: 200 }).filter((t) => t.plan_id === id),
+      });
+    }
+    const planRevise = /^\/api\/org\/plans\/([^/]+)\/revise$/.exec(path);
+    if (planRevise && method === "POST") {
+      const id = decodeURIComponent(planRevise[1]!);
+      const body = (await readBody<{ title?: string; owner_role?: string; status?: string; description?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      const plan = this.store.reviseOrgPlan(id, {
+        title: body.title as string | undefined,
+        ownerRole: body.owner_role as string | undefined,
+        status: body.status as string | undefined,
+        description: body.description as string | undefined,
+      });
+      if (!plan) return json({ error: "Plan not found" }, 404);
+      return json({ ok: true, plan });
+    }
+    const planSteps = /^\/api\/org\/plans\/([^/]+)\/steps$/.exec(path);
+    if (planSteps && method === "POST") {
+      const id = decodeURIComponent(planSteps[1]!);
+      const body = (await readBody<{ title?: string; owner_role?: string; dependencies?: string[]; seq?: number }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.title || typeof body.title !== "string") return json({ error: "title required" }, 400);
+      if (!body.owner_role || typeof body.owner_role !== "string") return json({ error: "owner_role required" }, 400);
+      const step = this.store.addOrgPlanStep(id, {
+        title: body.title,
+        ownerRole: body.owner_role,
+        dependencies: Array.isArray(body.dependencies) ? body.dependencies.map(String) : undefined,
+        seq: typeof body.seq === "number" ? body.seq : undefined,
+      });
+      if (!step) return json({ error: "Plan not found" }, 404);
+      return json({ ok: true, step });
+    }
+    const planLink = /^\/api\/org\/plans\/([^/]+)\/link-task$/.exec(path);
+    if (planLink && method === "POST") {
+      const planId = decodeURIComponent(planLink[1]!);
+      const body = (await readBody<{ task_id?: string; step_id?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.task_id || typeof body.task_id !== "string") return json({ error: "task_id required" }, 400);
+      if (!body.step_id || typeof body.step_id !== "string") return json({ error: "step_id required" }, 400);
+      const task = this.store.linkTaskToPlanStep(body.task_id, planId, body.step_id);
+      if (!task) return json({ error: "Task, plan, or step not found" }, 404);
+      return json({ ok: true, task });
+    }
+    const stepStatus = /^\/api\/org\/plan-steps\/([^/]+)\/status$/.exec(path);
+    if (stepStatus && method === "POST") {
+      const id = decodeURIComponent(stepStatus[1]!);
+      const body = (await readBody<{ status?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!["PENDING", "IN_PROGRESS", "DONE", "BLOCKED"].includes(String(body.status ?? ""))) return json({ error: "status must be PENDING | IN_PROGRESS | DONE | BLOCKED" }, 400);
+      const step = this.store.updateOrgPlanStepStatus(id, String(body.status));
+      if (!step) return json({ error: "Step not found" }, 404);
+      return json({ ok: true, step });
+    }
+    if (path === "/api/org/arbiters" && method === "GET") {
+      return json({ arbiters: this.store.listOrgArbiters() });
+    }
+    if (path === "/api/org/negotiations" && method === "GET") {
+      return json({ negotiations: this.store.listOrgNegotiations() });
+    }
+    if (path === "/api/org/negotiations" && method === "POST") {
+      const body = (await readBody<{ topic?: string; task_id?: string; disagreement_class?: string; max_rounds?: number }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.topic || typeof body.topic !== "string" || !body.topic.trim()) return json({ error: "topic required" }, 400);
+      let arbiterRole: string | undefined;
+      if (body.disagreement_class && typeof body.disagreement_class === "string") {
+        const rule = this.store.getOrgArbiter(body.disagreement_class);
+        if (!rule) return json({ error: `Unknown disagreement_class '${body.disagreement_class}'` }, 400);
+        arbiterRole = rule.arbiter_role_id ?? rule.fallback_role_id ?? undefined;
+      }
+      const negotiation = this.store.createOrgNegotiation({
+        topic: body.topic.trim(),
+        taskId: body.task_id as string | undefined,
+        maxRounds: typeof body.max_rounds === "number" ? body.max_rounds : undefined,
+        arbiterRole,
+      });
+      return json({ ok: true, negotiation });
+    }
+    const negRound = /^\/api\/org\/negotiations\/([^/]+)\/round$/.exec(path);
+    if (negRound && method === "POST") {
+      const id = decodeURIComponent(negRound[1]!);
+      const body = (await readBody<{ kind?: string; role?: string; content?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.content || typeof body.content !== "string") return json({ error: "content required" }, 400);
+      const result = this.store.addNegotiationRound(id, {
+        kind: String(body.kind ?? ""),
+        role: String(body.role ?? "role_coa"),
+        content: body.content,
+      });
+      if (!result.ok) return json({ error: result.error }, 400);
+      return json({ ok: true, negotiation: result.negotiation, round: result.round });
+    }
+    const negArbitrate = /^\/api\/org\/negotiations\/([^/]+)\/arbitrate$/.exec(path);
+    if (negArbitrate && method === "POST") {
+      const id = decodeURIComponent(negArbitrate[1]!);
+      const body = (await readBody<{ verdict?: string; by_role?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.verdict || typeof body.verdict !== "string") return json({ error: "verdict required" }, 400);
+      const negotiation = this.store.arbitrateNegotiation(id, body.verdict, String(body.by_role ?? "role_coa"));
+      if (!negotiation) return json({ error: "Negotiation not found or already resolved" }, 404);
+      return json({ ok: true, negotiation });
     }
 
     // ---------------------------------------------------------------------

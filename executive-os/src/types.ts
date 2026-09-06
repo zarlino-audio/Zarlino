@@ -114,6 +114,10 @@ export interface Task {
   autonomy_level?: string;
   deadline_at?: string;
   escalation_path?: string;
+  // Hierarchical planning (AOrgI migration v25): the plan + step this task
+  // executes (§19).
+  plan_id?: string;
+  plan_step_id?: string;
 }
 
 export interface Decision {
@@ -411,6 +415,99 @@ export interface OrgMessage {
   task_id?: string;
   payload_json: string;
   created_at: string;
+}
+
+/** AOrgI (migration v25): CapabilityGrant — role × capability with autonomy (§10, §12). */
+export interface OrgCapabilityGrant {
+  id: string;
+  role_id: string;
+  capability: string;
+  allowed_actions_json: string;
+  autonomy_level: string;
+  requires_review: number;
+  rate_limit_per_hour?: number;
+  data_scope?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v25): hierarchical plan with version + owner (§19). */
+export interface OrgPlan {
+  id: string;
+  objective_id?: string;
+  title: string;
+  version: number;
+  owner_role: string;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrgPlanStep {
+  id: string;
+  plan_id: string;
+  seq: number;
+  title: string;
+  owner_role: string;
+  dependencies_json: string;
+  status: string;
+  started_at?: string;
+  completed_at?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** PlanDeviationEvent — no silent plan changes (§19). */
+export interface OrgPlanDeviation {
+  id: string;
+  plan_id: string;
+  kind: string;
+  description: string;
+  resolution?: string;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v25): bounded negotiation with hard round cap (§22). */
+export interface OrgNegotiation {
+  id: string;
+  topic: string;
+  task_id?: string;
+  status: string;
+  round: number;
+  max_rounds: number;
+  arbiter_role?: string;
+  verdict?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrgNegotiationRound {
+  id: string;
+  negotiation_id: string;
+  round: number;
+  kind: string;
+  role: string;
+  content: string;
+  created_at: string;
+}
+
+/** AOrgI (migration v25): explicit arbiter per disagreement class (§23). */
+export interface OrgArbiter {
+  id: string;
+  disagreement_class: string;
+  arbiter_role_id?: string;
+  fallback_role_id?: string;
+  arbiter_kind: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Delegation {

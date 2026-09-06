@@ -39,9 +39,16 @@ import type {
   OptimizationEvent,
   Organization,
   OrgAgent,
+  OrgArbiter,
+  OrgCapabilityGrant,
   OrgMemory,
   OrgMessage,
   OrgMessageType,
+  OrgNegotiation,
+  OrgNegotiationRound,
+  OrgPlan,
+  OrgPlanDeviation,
+  OrgPlanStep,
   OrgRole,
   OrgTrust,
   PerceptualEvaluator,
@@ -72,6 +79,8 @@ import type {
 } from "../types";
 import { retrieve, scoreMemory } from "../core/memory/retrieval";
 import { applyTrustEvidence, decayedTrust, TRUST_INITIAL } from "../core/org/trust";
+import { capabilityVerdictForRole, type CapabilityDecision } from "../core/org/governance";
+import { allowedRoundKinds, negotiationPhase } from "../core/org/negotiation";
 import type { ModelCallRecord } from "../core/model/types";
 import type { CostStorage } from "../core/model/cost";
 
@@ -619,6 +628,291 @@ export class ExecutiveStore implements CostStorage {
     sql += " ORDER BY created_at DESC";
     if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
     return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgMessage>(r));
+  }
+
+  // -- AOrgI Phase 3: capability grants / plans / negotiations (v25) ---------
+
+  // -- CapabilityGrants (§10, §12) -------------------------------------------
+  listCapabilityGrants(opts: { roleId?: string } = {}): OrgCapabilityGrant[] {
+    const sql = opts.roleId
+      ? "SELECT * FROM org_capability_grants WHERE role_id = ? ORDER BY capability ASC"
+      : "SELECT * FROM org_capability_grants ORDER BY role_id ASC, capability ASC";
+    const params: SqlParam[] = opts.roleId ? [opts.roleId] : [];
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgCapabilityGrant>(r));
+  }
+  upsertCapabilityGrant(input: {
+    id?: string;
+    roleId: string;
+    capability: string;
+    allowedActions?: string[];
+    autonomyLevel: string;
+    requiresReview?: boolean;
+    rateLimitPerHour?: number;
+    dataScope?: string;
+  }): OrgCapabilityGrant {
+    if (!["L0", "L1", "L2", "L3"].includes(input.autonomyLevel)) {
+      throw new Error(`autonomy_level must be L0-L3, got '${input.autonomyLevel}'`);
+    }
+    const existing = input.id
+      ? this.sql.all<Row>("SELECT * FROM org_capability_grants WHERE id = ?", input.id)
+      : this.sql.all<Row>("SELECT * FROM org_capability_grants WHERE role_id = ? AND capability = ?", input.roleId, input.capability);
+    const now = new Date().toISOString();
+    if (existing.length > 0) {
+      const id = String(existing[0]!.id);
+      this.sql.run(
+        `UPDATE org_capability_grants SET
+           allowed_actions_json = COALESCE(?, allowed_actions_json),
+           autonomy_level = COALESCE(?, autonomy_level),
+           requires_review = COALESCE(?, requires_review),
+           rate_limit_per_hour = COALESCE(?, rate_limit_per_hour),
+           data_scope = COALESCE(?, data_scope),
+           updated_at = ?
+         WHERE id = ?`,
+        input.allowedActions ? JSON.stringify(input.allowedActions) : null,
+        input.autonomyLevel,
+        input.requiresReview === undefined ? null : input.requiresReview ? 1 : 0,
+        input.rateLimitPerHour ?? null,
+        input.dataScope ?? null,
+        now,
+        id,
+      );
+      return this.sql.all<Row>("SELECT * FROM org_capability_grants WHERE id = ?", id).map((r) => rowTo<OrgCapabilityGrant>(r))[0]!;
+    }
+    const grant: OrgCapabilityGrant = {
+      id: input.id ?? newId("grant"),
+      role_id: input.roleId,
+      capability: input.capability,
+      allowed_actions_json: JSON.stringify(input.allowedActions ?? ["*"]),
+      autonomy_level: input.autonomyLevel,
+      requires_review: input.requiresReview ? 1 : 0,
+      rate_limit_per_hour: input.rateLimitPerHour ?? undefined,
+      data_scope: input.dataScope ?? "",
+      source: "founder",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_capability_grants", grant);
+    return grant;
+  }
+
+  /** Roles with NO grant rows at all (not even a wildcard) — fail-closed gap. */
+  listRolesWithoutCapabilityGrants(): string[] {
+    const rows = this.sql.all<Row>(
+      `SELECT r.id FROM org_roles r
+        WHERE r.status = 'ACTIVE'
+          AND NOT EXISTS (SELECT 1 FROM org_capability_grants g WHERE g.role_id = r.id)`,
+    );
+    return rows.map((r) => String(r.id));
+  }
+
+  /** The capability decision for a registered agent instance (§10 chain). */
+  capabilityVerdictForAgent(agentId: string, capability: string, action: string): CapabilityDecision | { verdict: "DENY"; grantId: null; reason: string; agentId: string } {
+    const agent = this.getOrgAgent(agentId);
+    if (!agent) return { verdict: "DENY", grantId: null, reason: `Unknown agent instance '${agentId}'.`, agentId };
+    const grants = this.listCapabilityGrants({ roleId: agent.role_id });
+    return capabilityVerdictForRole(grants, capability, action);
+  }
+
+  // -- hierarchical plans (§19) ----------------------------------------------
+  createOrgPlan(input: { objectiveId?: string; title: string; ownerRole: string }): OrgPlan {
+    const now = new Date().toISOString();
+    const plan: OrgPlan = {
+      id: newId("plan"),
+      objective_id: input.objectiveId ?? undefined,
+      title: input.title,
+      version: 1,
+      owner_role: input.ownerRole,
+      status: "DRAFT",
+      source: "system",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_plans", plan);
+    return plan;
+  }
+  getOrgPlan(id: string): OrgPlan | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_plans WHERE id = ?", id);
+    return rows[0] ? rowTo<OrgPlan>(rows[0]) : null;
+  }
+  listOrgPlans(limit = 50): OrgPlan[] {
+    return this.sql.all<Row>("SELECT * FROM org_plans ORDER BY updated_at DESC LIMIT ?", limit).map((r) => rowTo<OrgPlan>(r));
+  }
+
+  /** Bump a plan's version; every change records a PlanDeviationEvent (§19). */
+  reviseOrgPlan(id: string, patch: { title?: string; ownerRole?: string; status?: string; description?: string }): OrgPlan | null {
+    const plan = this.getOrgPlan(id);
+    if (!plan) return null;
+    const now = new Date().toISOString();
+    this.sql.run(
+      "UPDATE org_plans SET title = COALESCE(?, title), owner_role = COALESCE(?, owner_role), status = COALESCE(?, status), version = version + 1, updated_at = ? WHERE id = ?",
+      patch.title ?? null,
+      patch.ownerRole ?? null,
+      patch.status ?? null,
+      now,
+      id,
+    );
+    this.insert("org_plan_deviations", {
+      id: newId("pdev"),
+      plan_id: id,
+      kind: "revision",
+      description: patch.description ?? `Plan v${plan.version} → v${plan.version + 1}: ${Object.keys(patch).join(", ")}`,
+      resolution: null,
+      status: "OPEN",
+      source: "system",
+      created_at: now,
+      updated_at: now,
+    });
+    return this.getOrgPlan(id);
+  }
+
+  addOrgPlanStep(planId: string, input: { title: string; ownerRole: string; dependencies?: string[]; seq?: number }): OrgPlanStep | null {
+    const plan = this.getOrgPlan(planId);
+    if (!plan) return null;
+    const now = new Date().toISOString();
+    const seq = input.seq ?? this.sql.all<Row>("SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM org_plan_steps WHERE plan_id = ?", planId)[0]!.n as number;
+    const step: OrgPlanStep = {
+      id: newId("pstep"),
+      plan_id: planId,
+      seq: Number(seq),
+      title: input.title,
+      owner_role: input.ownerRole,
+      dependencies_json: JSON.stringify(input.dependencies ?? []),
+      status: "PENDING",
+      started_at: undefined,
+      completed_at: undefined,
+      source: "system",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_plan_steps", step);
+    return step;
+  }
+  listOrgPlanSteps(planId: string): OrgPlanStep[] {
+    return this.sql.all<Row>("SELECT * FROM org_plan_steps WHERE plan_id = ? ORDER BY seq ASC", planId).map((r) => rowTo<OrgPlanStep>(r));
+  }
+
+  /** Status transition; a BLOCKED step records a deviation event automatically. */
+  updateOrgPlanStepStatus(stepId: string, status: string): OrgPlanStep | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_plan_steps WHERE id = ?", stepId);
+    if (rows.length === 0) return null;
+    const step = rowTo<OrgPlanStep>(rows[0]);
+    const now = new Date().toISOString();
+    this.sql.run(
+      `UPDATE org_plan_steps SET status = ?,
+         started_at = CASE WHEN ? = 'IN_PROGRESS' THEN COALESCE(started_at, ?) ELSE started_at END,
+         completed_at = CASE WHEN ? = 'DONE' THEN ? ELSE completed_at END,
+         updated_at = ? WHERE id = ?`,
+      status, status, now, status, now, now, stepId,
+    );
+    if (status === "BLOCKED") {
+      this.insert("org_plan_deviations", {
+        id: newId("pdev"),
+        plan_id: step.plan_id,
+        kind: "blocker",
+        description: `Step '${step.title}' (${stepId}) is BLOCKED.`,
+        resolution: null,
+        status: "OPEN",
+        source: "system",
+        created_at: now,
+        updated_at: now,
+      });
+    }
+    return this.sql.all<Row>("SELECT * FROM org_plan_steps WHERE id = ?", stepId).map((r) => rowTo<OrgPlanStep>(r))[0]!;
+  }
+
+  linkTaskToPlanStep(taskId: string, planId: string, stepId: string): Task | null {
+    const task = this.getTask(taskId);
+    const plan = this.getOrgPlan(planId);
+    if (!task || !plan) return null;
+    const stepRows = this.sql.all<Row>("SELECT id FROM org_plan_steps WHERE id = ? AND plan_id = ?", stepId, planId);
+    if (stepRows.length === 0) return null;
+    this.sql.run("UPDATE tasks SET plan_id = ?, plan_step_id = ?, updated_at = ? WHERE id = ?", planId, stepId, new Date().toISOString(), taskId);
+    return this.getTask(taskId);
+  }
+  listOrgPlanDeviations(planId?: string, limit = 50): OrgPlanDeviation[] {
+    const sql = planId
+      ? "SELECT * FROM org_plan_deviations WHERE plan_id = ? ORDER BY created_at DESC LIMIT ?"
+      : "SELECT * FROM org_plan_deviations ORDER BY created_at DESC LIMIT ?";
+    const params: SqlParam[] = planId ? [planId, limit] : [limit];
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgPlanDeviation>(r));
+  }
+
+  // -- negotiation + arbitration (§22, §23) ------------------------------------
+  createOrgNegotiation(input: { topic: string; taskId?: string; maxRounds?: number; arbiterRole?: string }): OrgNegotiation {
+    const now = new Date().toISOString();
+    const n: OrgNegotiation = {
+      id: newId("neg"),
+      topic: input.topic,
+      task_id: input.taskId ?? undefined,
+      status: "OPEN",
+      round: 0,
+      max_rounds: input.maxRounds ?? 3,
+      arbiter_role: input.arbiterRole ?? undefined,
+      verdict: undefined,
+      source: "system",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_negotiations", n);
+    return n;
+  }
+  getOrgNegotiation(id: string): OrgNegotiation | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_negotiations WHERE id = ?", id);
+    return rows[0] ? rowTo<OrgNegotiation>(rows[0]) : null;
+  }
+  listOrgNegotiations(limit = 50): OrgNegotiation[] {
+    return this.sql.all<Row>("SELECT * FROM org_negotiations ORDER BY created_at DESC LIMIT ?", limit).map((r) => rowTo<OrgNegotiation>(r));
+  }
+  listNegotiationRounds(negotiationId: string): OrgNegotiationRound[] {
+    return this.sql
+      .all<Row>("SELECT * FROM org_negotiation_rounds WHERE negotiation_id = ? ORDER BY round ASC, created_at ASC", negotiationId)
+      .map((r) => rowTo<OrgNegotiationRound>(r));
+  }
+
+  /** Record one round; hard cap enforced — reaching it forces ARBITRATION. */
+  addNegotiationRound(negotiationId: string, input: { kind: string; role: string; content: string }): { ok: true; negotiation: OrgNegotiation; round: OrgNegotiationRound } | { ok: false; error: string } {
+    const n = this.getOrgNegotiation(negotiationId);
+    if (!n) return { ok: false, error: "Negotiation not found" };
+    if (n.status !== "OPEN") return { ok: false, error: `Negotiation is ${n.status} — no further rounds.` };
+    const phase = negotiationPhase(n.round, n.max_rounds);
+    if (!allowedRoundKinds(phase).includes(input.kind)) {
+      return { ok: false, error: `Phase ${phase} accepts rounds of kind ${allowedRoundKinds(phase).join(" | ")} — got '${input.kind}'.` };
+    }
+    const now = new Date().toISOString();
+    const round = n.round + 1;
+    const rec: OrgNegotiationRound = {
+      id: newId("negrd"),
+      negotiation_id: negotiationId,
+      round,
+      kind: input.kind,
+      role: input.role,
+      content: input.content,
+      created_at: now,
+    };
+    this.insert("org_negotiation_rounds", rec);
+    const newStatus = round >= n.max_rounds ? "ARBITRATED" : "OPEN";
+    this.sql.run("UPDATE org_negotiations SET round = ?, status = ?, updated_at = ? WHERE id = ?", round, newStatus, now, negotiationId);
+    return { ok: true, negotiation: this.getOrgNegotiation(negotiationId)!, round: rec };
+  }
+
+  /** The arbiter resolves the negotiation — recorded, never silent. */
+  arbitrateNegotiation(id: string, verdict: string, byRole: string): OrgNegotiation | null {
+    const n = this.getOrgNegotiation(id);
+    if (!n || n.status === "RESOLVED") return null;
+    const now = new Date().toISOString();
+    this.sql.run(
+      "UPDATE org_negotiations SET status = 'RESOLVED', verdict = ?, arbiter_role = COALESCE(?, arbiter_role), updated_at = ? WHERE id = ?",
+      verdict, byRole, now, id,
+    );
+    return this.getOrgNegotiation(id);
+  }
+
+  listOrgArbiters(): OrgArbiter[] {
+    return this.sql.all<Row>("SELECT * FROM org_arbiters ORDER BY disagreement_class ASC").map((r) => rowTo<OrgArbiter>(r));
+  }
+  getOrgArbiter(disagreementClass: string): OrgArbiter | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_arbiters WHERE disagreement_class = ?", disagreementClass);
+    return rows[0] ? rowTo<OrgArbiter>(rows[0]) : null;
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -2189,6 +2483,8 @@ export const SNAPSHOT_TABLES = [
   "perceptual_knowledge", "product_validations", "failure_analyses",
   "departments", "org_roles", "org_agents",
   "org_memory", "post_objective_records", "org_trust", "org_messages",
+  "org_capability_grants", "org_plans", "org_plan_steps", "org_plan_deviations",
+  "org_negotiations", "org_negotiation_rounds", "org_arbiters",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

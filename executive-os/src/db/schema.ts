@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1497,4 +1497,167 @@ CREATE TABLE IF NOT EXISTS org_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_org_messages_created ON org_messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_org_messages_task ON org_messages(task_id);
+`;
+
+/**
+ * AOrgI Phase 3 (migration v25) — capability governance, hierarchical plans
+ * with deviation events, and negotiation/arbitration.
+ *
+ *  - org_capability_grants: CapabilityGrant rows (§10) — role × capability,
+ *    allowed actions, autonomy L0–L3 (§12), requires_review, rate limit, data
+ *    scope. A `*` capability row is that role's fallback grant. NO grant and
+ *    no wildcard = DENY (an agent never inherits unrestricted tool access).
+ *  - org_plans / org_plan_steps / org_plan_deviations: hierarchical planning
+ *    (§19) — plans have version + owner; tasks link to plan steps; every plan
+ *    change creates a PlanDeviationEvent (no silent plan changes).
+ *  - org_negotiations / org_negotiation_rounds / org_arbiters: bounded debate
+ *    (§22) — hard max rounds (default 3), then ARBITRATE by the explicit
+ *    arbiter for the disagreement class (§23); strategic disagreements belong
+ *    to the human CEO.
+ *
+ * Also links tasks into plans (plan_id / plan_step_id).
+ */
+export const ORG_PHASE3_SQL = `
+CREATE TABLE IF NOT EXISTS org_capability_grants (
+  id TEXT PRIMARY KEY,
+  role_id TEXT NOT NULL,
+  capability TEXT NOT NULL,
+  allowed_actions_json TEXT NOT NULL DEFAULT '["*"]',
+  autonomy_level TEXT NOT NULL DEFAULT 'L1',
+  requires_review INTEGER NOT NULL DEFAULT 0,
+  rate_limit_per_hour INTEGER,
+  data_scope TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'seed',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_cap_grants_role ON org_capability_grants(role_id);
+CREATE INDEX IF NOT EXISTS idx_org_cap_grants_cap ON org_capability_grants(capability);
+
+CREATE TABLE IF NOT EXISTS org_plans (
+  id TEXT PRIMARY KEY,
+  objective_id TEXT,
+  title TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  owner_role TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'DRAFT',
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_plans_objective ON org_plans(objective_id);
+
+CREATE TABLE IF NOT EXISTS org_plan_steps (
+  id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  seq INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,
+  owner_role TEXT NOT NULL,
+  dependencies_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  started_at TEXT,
+  completed_at TEXT,
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_plan_steps_plan ON org_plan_steps(plan_id);
+
+CREATE TABLE IF NOT EXISTS org_plan_deviations (
+  id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  description TEXT NOT NULL,
+  resolution TEXT,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_plan_dev_plan ON org_plan_deviations(plan_id);
+
+CREATE TABLE IF NOT EXISTS org_negotiations (
+  id TEXT PRIMARY KEY,
+  topic TEXT NOT NULL,
+  task_id TEXT,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  round INTEGER NOT NULL DEFAULT 0,
+  max_rounds INTEGER NOT NULL DEFAULT 3,
+  arbiter_role TEXT,
+  verdict TEXT,
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_neg_status ON org_negotiations(status);
+
+CREATE TABLE IF NOT EXISTS org_negotiation_rounds (
+  id TEXT PRIMARY KEY,
+  negotiation_id TEXT NOT NULL,
+  round INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_neg_rounds_neg ON org_negotiation_rounds(negotiation_id);
+
+CREATE TABLE IF NOT EXISTS org_arbiters (
+  id TEXT PRIMARY KEY,
+  disagreement_class TEXT NOT NULL UNIQUE,
+  arbiter_role_id TEXT,
+  fallback_role_id TEXT,
+  arbiter_kind TEXT NOT NULL DEFAULT 'role',
+  source TEXT NOT NULL DEFAULT 'seed',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+ALTER TABLE tasks ADD COLUMN plan_id TEXT;
+ALTER TABLE tasks ADD COLUMN plan_step_id TEXT;
+
+-- Capability grants (AOrgI §10, §12). Every role gets a wildcard fallback at
+-- its default autonomy; spend and deploy are hard-restricted across the org
+-- (L0 = suggest only / founder-gated), and external communication starts at
+-- L1 (reviewed). Fail-closed: no grant + no wildcard = DENY.
+INSERT OR IGNORE INTO org_capability_grants
+ (id, role_id, capability, allowed_actions_json, autonomy_level, requires_review,
+  rate_limit_per_hour, data_scope, source, created_at, updated_at) VALUES
+ ('gr_coa_wild', 'role_coa', '*', '["*"]', 'L2', 0, NULL, 'all', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_coa_spend', 'role_coa', 'spend', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_coa_deploy', 'role_coa', 'deploy', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_coa_external', 'role_coa', 'external', '["*"]', 'L1', 0, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_sw_wild', 'role_software_engineering', '*', '["*"]', 'L2', 0, NULL, 'local execution', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_sw_spend', 'role_software_engineering', 'spend', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_sw_deploy', 'role_software_engineering', 'deploy', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_sw_external', 'role_software_engineering', 'external', '["*"]', 'L1', 0, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_qa_wild', 'role_qa_verification', '*', '["*"]', 'L2', 0, NULL, 'verification', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_qa_spend', 'role_qa_verification', 'spend', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_qa_deploy', 'role_qa_verification', 'deploy', '["*"]', 'L1', 0, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_dsp_wild', 'role_dsp_engineering', '*', '["*"]', 'L2', 0, NULL, 'code', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_dsp_spend', 'role_dsp_engineering', 'spend', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_dsp_deploy', 'role_dsp_engineering', 'deploy', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_strat_wild', 'role_strategy_intelligence', '*', '["*"]', 'L2', 0, NULL, 'research', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_strat_external', 'role_strategy_intelligence', 'external', '["*"]', 'L1', 0, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_pa_wild', 'role_product_architect', '*', '["*"]', 'L2', 0, NULL, 'product', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_pm_wild', 'role_product_manager', '*', '["*"]', 'L2', 0, NULL, 'product', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_ux_wild', 'role_design_ux', '*', '["*"]', 'L2', 0, NULL, 'design', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_growth_wild', 'role_growth_intelligence', '*', '["*"]', 'L1', 0, NULL, 'commercial', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_growth_spend', 'role_growth_intelligence', 'spend', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_sales_wild', 'role_sales_partnerships', '*', '["*"]', 'L1', 0, NULL, 'commercial', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_sales_external', 'role_sales_partnerships', 'external', '["*"]', 'L1', 0, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_cust_wild', 'role_customer_intelligence', '*', '["*"]', 'L2', 0, NULL, 'commercial', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_fin_wild', 'role_finance_governance', '*', '["*"]', 'L1', 0, NULL, 'control', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('gr_fin_deploy', 'role_finance_governance', 'deploy', '["*"]', 'L0', 1, NULL, '', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- Explicit arbiters (AOrgI §23). Strategic disagreements stay with the human
+-- CEO; everything else has a named organizational arbiter.
+INSERT OR IGNORE INTO org_arbiters
+ (id, disagreement_class, arbiter_role_id, fallback_role_id, arbiter_kind, source, created_at, updated_at) VALUES
+ ('arb_technical', 'technical', 'role_product_architect', 'role_dsp_engineering', 'role', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('arb_product', 'product', 'role_product_manager', 'role_strategy_intelligence', 'role', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('arb_quality', 'quality', 'role_qa_verification', NULL, 'role', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('arb_governance', 'governance', 'role_finance_governance', NULL, 'role', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('arb_cross_functional', 'cross_functional', 'role_coa', NULL, 'role', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('arb_strategic', 'strategic', NULL, NULL, 'human_ceo', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;
