@@ -1,6 +1,6 @@
 # AOrgI Retrofit Plan — Zarlino Artificial Organization (v1)
 
-Status: **PHASE 1 OPERATIONAL (deployed 2026-09-06, version bd9b89d4) → PHASE 2 EXECUTING** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
+Status: **PHASE 1 + PHASE 2 OPERATIONAL (deployed 2026-09-06, versions bd9b89d4 → 0fcedfa6) → PHASE 3 NEXT** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
 Architecture version: AOrgI-1.0 · Date: 2026-09-06 · Owner: Chief Operating Agent (COA) — first runtime instance.
 
 ---
@@ -48,7 +48,7 @@ Today exactly **two runtimes exist**: `executive_do_01` (cloud DO, performs the 
 ## 4. Phases (from §39, adapted to existing infra)
 
 - **PHASE 1 (now):** org state = registry + manifests + task contracts. `departments`, `org_roles` (12 role manifests: id, department, lineage_id, model, autonomy default, capabilities, obligations, critic_role), `org_agents` (instance registry w/ heartbeat = real liveness), task-contract columns on `tasks`. Doctor check `org.registry`. REST `/api/org/*`. Tests. → **Implementation below.**
-- **PHASE 2:** versioned organizational memory writes + episodic `PostObjectiveRecord`; trust (agent×capability) evidence; critic lineage discounting; message contracts for the DO↔daemon pair.
+- **PHASE 2 (done):** versioned organizational memory writes + episodic `PostObjectiveRecord`; trust (agent×capability) evidence; critic lineage discounting; message contracts for the DO↔daemon pair.
 - **PHASE 3:** per-capability autonomy grants (CapabilityGrant over the authority engine); hierarchical plans + deviation events; negotiation/arbitration (only after ≥2 peer instances exist).
 - **PHASE 4:** collective-intelligence metrics (emergence/convergence/robustness/scalability/objective-achievement), chaos tests in staging, organizational analyst job.
 - **PHASE 5:** autonomous topology optimization (deferred until trust + metrics exist).
@@ -68,6 +68,20 @@ Today exactly **two runtimes exist**: `executive_do_01` (cloud DO, performs the 
 Nothing is marked OPERATIONAL until it runs in production (§41).
 
 Honest instance registry: exactly 2 runtimes exist — `executive_do_01` (COA role, cloud DO) and `local_daemon_01` (software-engineering role, local execution capability; flag: the daemon is a capability executor rather than a pure software-engineering instance — its role split is a future topology decision, not a hidden role invention, §2/§5). The 12 role manifests are templates; no fake agents are instantiated (§42).
+
+## 5b. Phase 2 implementation record (migration v24, deployed 2026-09-06 as `0fcedfa6`)
+
+| Component | Status |
+|---|---|
+| `org_memory` — versioned organizational memory, optimistic concurrency (READ→WRITE-WITH-VERSION→CONFLICT), supersedes version links | **OPERATIONAL** — live-verified: stale write rejected 409 `ORG_MEMORY_CONFLICT`, real `aorgi_deploy_log` entry at v3 |
+| `post_objective_records` + doctor obligation check `org.post_objective` | **OPERATIONAL** (doctor runs 21 checks; no completed objectives yet, so no WARN) |
+| `org_trust` — per agent × capability, evidence-counted, 30-day half-life decay (`src/core/org/trust.ts`) | **OPERATIONAL** — real feed wired: every local-task finish is trust evidence for `local_daemon_01.local_execution` |
+| `org_messages` — STATUS/REQUEST/RESULT/DEVIATION/ESCALATION contracts | **OPERATIONAL** — real feed wired: every local-task finish emits RESULT (or DEVIATION on failure) from software-engineering → COA |
+| Critic-lineage vote discounting (`src/core/org/voting.ts`, root-n per lineage) | **IMPLEMENTED + TESTED** — no peer critic votes exist yet, so no live consumption (would be theater) |
+| REST `/api/org/memory|post-objectives|trust|messages` + `org` key in data bundle | **OPERATIONAL** |
+| Tests | 91/91 vitest (12 new in `test/org-phase2.test.ts`), tsc clean, bundle clean |
+
+Phase 2 notes: trust/message rows populate with real daemon work, not seeds (§42). PostObjectiveRecords appear when an objective actually completes — the doctor enforces the §38 obligation from then on.
 
 ## 6. First organizational objective after Phase 1
 
