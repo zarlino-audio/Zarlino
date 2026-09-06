@@ -24,6 +24,7 @@ import type {
   Contradiction,
   ContradictionStatus,
   Decision,
+  Department,
   DoctrineRule,
   DoctorLog,
   EngineeringIssue,
@@ -37,6 +38,8 @@ import type {
   Objective,
   OptimizationEvent,
   Organization,
+  OrgAgent,
+  OrgRole,
   PerceptualEvaluator,
   PerceptualKnowledge,
   PerceptualResult,
@@ -305,6 +308,146 @@ export class ExecutiveStore implements CostStorage {
       "UPDATE review_items SET status = ?, note = ?, decided_at = ?, decided_by = ?, updated_at = ? WHERE id = ?",
       status, note, new Date().toISOString(), by, new Date().toISOString(), id,
     );
+  }
+
+  // -- AOrgI org registry (migration v23) ----------------------------------
+  // Departments, role manifests and the agent-instance registry (AOrgI §5, §9,
+  // §24). Instances are NOT roles: rows here appear only when a real runtime
+  // registers with a heartbeat.
+  listDepartments(): Department[] {
+    return this.sql.all<Row>("SELECT * FROM departments ORDER BY name ASC").map((r) => rowTo<Department>(r));
+  }
+  getDepartment(id: string): Department | null {
+    const rows = this.sql.all<Row>("SELECT * FROM departments WHERE id = ?", id);
+    return rows[0] ? rowTo<Department>(rows[0]) : null;
+  }
+
+  listOrgRoles(opts: { departmentId?: string; status?: string } = {}): OrgRole[] {
+    let sql = "SELECT * FROM org_roles WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.departmentId) { sql += " AND department_id = ?"; params.push(opts.departmentId); }
+    if (opts.status) { sql += " AND status = ?"; params.push(opts.status); }
+    sql += " ORDER BY department_id ASC, name ASC";
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgRole>(r));
+  }
+  getOrgRole(id: string): OrgRole | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_roles WHERE id = ?", id);
+    return rows[0] ? rowTo<OrgRole>(rows[0]) : null;
+  }
+
+  listOrgAgents(opts: { roleId?: string; limit?: number } = {}): OrgAgent[] {
+    let sql = "SELECT * FROM org_agents WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.roleId) { sql += " AND role_id = ?"; params.push(opts.roleId); }
+    sql += " ORDER BY last_seen DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgAgent>(r));
+  }
+  getOrgAgent(id: string): OrgAgent | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_agents WHERE id = ?", id);
+    return rows[0] ? rowTo<OrgAgent>(rows[0]) : null;
+  }
+
+  /**
+   * Register or heartbeat an agent instance. First sighting inserts the row
+   * (status REGISTERED, started_at set); later heartbeats refresh last_seen
+   * and re-mark ACTIVE. Preserves the original started_at.
+   */
+  upsertOrgAgent(input: {
+    id: string;
+    roleId: string;
+    kind?: string;
+    model?: string;
+    status?: string;
+    host?: string;
+    version?: string;
+    capabilitiesJson?: string;
+    autonomyJson?: string;
+  }): void {
+    const now = new Date().toISOString();
+    const existing = this.sql.all<Row>("SELECT id FROM org_agents WHERE id = ?", input.id);
+    if (existing.length === 0) {
+      this.insert("org_agents", {
+        id: input.id,
+        role_id: input.roleId,
+        kind: input.kind ?? "cloud",
+        model: input.model ?? "",
+        status: input.status ?? "ACTIVE",
+        host: input.host ?? null,
+        version: input.version ?? null,
+        last_seen: now,
+        capabilities_json: input.capabilitiesJson ?? "[]",
+        autonomy_json: input.autonomyJson ?? "{}",
+        started_at: now,
+        source: "runtime",
+        created_at: now,
+        updated_at: now,
+      });
+      return;
+    }
+    const sets = ["last_seen = ?", "updated_at = ?", "status = ?"];
+    const params: SqlParam[] = [now, now, input.status ?? "ACTIVE"];
+    if (input.host) { sets.push("host = ?"); params.push(input.host); }
+    if (input.version) { sets.push("version = ?"); params.push(input.version); }
+    if (input.model) { sets.push("model = ?"); params.push(input.model); }
+    if (input.capabilitiesJson) { sets.push("capabilities_json = ?"); params.push(input.capabilitiesJson); }
+    if (input.autonomyJson) { sets.push("autonomy_json = ?"); params.push(input.autonomyJson); }
+    params.push(input.id);
+    this.sql.run(`UPDATE org_agents SET ${sets.join(", ")} WHERE id = ?`, ...params);
+  }
+
+  /** Agent instances not seen since the given ISO time (for the Doctor). */
+  countStaleOrgAgents(staleBeforeIso: string): number {
+    const rows = this.sql.all<Row>(
+      "SELECT COUNT(*) AS c FROM org_agents WHERE last_seen IS NULL OR last_seen < ?",
+      staleBeforeIso,
+    );
+    return Number(rows[0]?.c ?? 0);
+  }
+
+  // -- task contracts (AOrgI §18) -------------------------------------------
+  /** Tasks that carry an explicit contract (acceptance criteria + verifier). */
+  listTaskContracts(opts: { limit?: number } = {}): Task[] {
+    let sql =
+      "SELECT * FROM tasks WHERE acceptance_criteria IS NOT NULL OR verification_role_id IS NOT NULL ORDER BY updated_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; return this.sql.all<Row>(sql, opts.limit).map((r) => rowTo<Task>(r)); }
+    return this.sql.all<Row>(sql).map((r) => rowTo<Task>(r));
+  }
+  getTaskContract(id: string): Task | null {
+    const t = this.getTask(id);
+    if (!t || (t.acceptance_criteria === undefined && t.verification_role_id === undefined)) return null;
+    return t;
+  }
+  setTaskContract(
+    id: string,
+    patch: {
+      acceptance_criteria?: string;
+      verification_role_id?: string | null;
+      autonomy_level?: string;
+      deadline_at?: string | null;
+      escalation_path?: string | null;
+    },
+  ): Task | null {
+    const existing = this.getTask(id);
+    if (!existing) return null;
+    this.sql.run(
+      `UPDATE tasks SET
+         acceptance_criteria = COALESCE(?, acceptance_criteria),
+         verification_role_id = COALESCE(?, verification_role_id),
+         autonomy_level = COALESCE(?, autonomy_level),
+         deadline_at = COALESCE(?, deadline_at),
+         escalation_path = COALESCE(?, escalation_path),
+         updated_at = ?
+       WHERE id = ?`,
+      patch.acceptance_criteria ?? null,
+      patch.verification_role_id ?? null,
+      patch.autonomy_level ?? null,
+      patch.deadline_at ?? null,
+      patch.escalation_path ?? null,
+      new Date().toISOString(),
+      id,
+    );
+    return this.getTask(id);
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -1873,6 +2016,7 @@ export const SNAPSHOT_TABLES = [
   "calendar_events", "notes", "reminders", "contacts",
   "perceptual_evaluators", "perceptual_tests", "perceptual_results",
   "perceptual_knowledge", "product_validations", "failure_analyses",
+  "departments", "org_roles", "org_agents",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

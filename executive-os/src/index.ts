@@ -15,6 +15,7 @@
 
 import { ExecutiveStore, SNAPSHOT_TABLES } from "./db/store";
 import { createDoSql, type Sql } from "./db/sql";
+import { SCHEMA_VERSION } from "./db/schema";
 import { buildToolRegistry } from "./agent/tools";
 import type { ToolRegistry } from "./core/tools/registry";
 import { runDoctor } from "./core/doctor";
@@ -576,6 +577,18 @@ export class ExecutiveAgent {
     this.store = new ExecutiveStore(this.sql);
     this.state.blockConcurrencyWhile(async () => {
       this.store.migrate();
+      // AOrgI registry: the DO runtime registers itself as the real instance
+      // behind the Chief Operating Agent role (AOrgI §5, §7 — instances exist
+      // only when a runtime actually runs). Refreshed on every wake.
+      this.store.upsertOrgAgent({
+        id: "executive_do_01",
+        roleId: "role_coa",
+        kind: "cloud",
+        model: "deepseek-v4",
+        host: "cloudflare-do",
+        version: SCHEMA_VERSION.toString(),
+        capabilitiesJson: JSON.stringify(["planning", "task_assignment", "bottleneck_detection", "executive_reporting"]),
+      });
       // Fast local maintenance on wake: doctor + productivity + start/resume
       // auto-runnable jobs (executed non-blocking via state.waitUntil) +
       // schedule the next alarm.
@@ -1126,6 +1139,52 @@ export class ExecutiveAgent {
         updated_at: nowIso(),
       });
       return json({ ok: true, id, status });
+    }
+
+    // -- AOrgI org registry (migration v23) -----------------------------------
+    if (path === "/api/org/departments" && method === "GET") {
+      return json({ departments: this.store.listDepartments() });
+    }
+    if (path === "/api/org/roles" && method === "GET") {
+      const departmentId = url.searchParams.get("department_id") ?? undefined;
+      return json({ roles: this.store.listOrgRoles({ departmentId }) });
+    }
+    if (path === "/api/org/agents" && method === "GET") {
+      return json({ agents: this.store.listOrgAgents() });
+    }
+    if (path === "/api/org/task-contracts" && method === "GET") {
+      return json({ contracts: this.store.listTaskContracts({ limit: 100 }) });
+    }
+    const contractPatch = /^\/api\/org\/task-contracts\/([^/]+)$/.exec(path);
+    if (contractPatch && method === "POST") {
+      const id = decodeURIComponent(contractPatch[1]!);
+      const body = (await readBody<{
+        acceptance_criteria?: string;
+        verification_role_id?: string | null;
+        autonomy_level?: string;
+        deadline_at?: string | null;
+        escalation_path?: string | null;
+      }>(request).catch(() => ({}))) as Record<string, unknown>;
+      const updated = this.store.setTaskContract(id, {
+        acceptance_criteria: body.acceptance_criteria as string | undefined,
+        verification_role_id: (body.verification_role_id as string | null) ?? undefined,
+        autonomy_level: body.autonomy_level as string | undefined,
+        deadline_at: (body.deadline_at as string | null) ?? undefined,
+        escalation_path: (body.escalation_path as string | null) ?? undefined,
+      });
+      if (!updated) return json({ error: "Task not found" }, 404);
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "org.task_contract.update",
+        entity_type: "tasks",
+        entity_id: id,
+        detail_json: JSON.stringify({ fields: Object.keys(body) }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, task: updated });
     }
 
     // ---------------------------------------------------------------------
@@ -1708,6 +1767,18 @@ export class ExecutiveAgent {
     if (path === "/api/local-agent/heartbeat" && method === "POST") {
       const body = (await readBody<{ host?: string; version?: string; pid?: string; claimed?: boolean }>(request).catch(() => ({}))) as { host?: string; version?: string; pid?: string; claimed?: boolean };
       this.store.upsertLocalAgentHeartbeat({ host: body.host, version: body.version, pid: body.pid, claimed: body.claimed });
+      // AOrgI registry: the daemon is a real runtime instance — register it
+      // (software-engineering role: it executes local build/render/tooling
+      // capability) with the same heartbeat so org liveness is honest.
+      this.store.upsertOrgAgent({
+        id: "local_daemon_01",
+        roleId: "role_software_engineering",
+        kind: "local",
+        model: "deepseek-v4",
+        host: body.host ?? "local",
+        version: body.version,
+        capabilitiesJson: JSON.stringify(["local_execution", "build", "render", "automation"]),
+      });
       return json({ ok: true, lastSeen: nowIso() });
     }
 

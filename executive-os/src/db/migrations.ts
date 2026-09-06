@@ -35,6 +35,7 @@ import {
   LOCAL_AGENT_STATUS_SQL,
   REVIEW_ITEMS_SQL,
   PERCEPTUAL_SQL,
+  ORG_MANIFESTS_SQL,
 } from "./schema";
 import type { Sql } from "./sql";
 
@@ -136,6 +137,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 20, name: "local_agent_status", sql: [LOCAL_AGENT_STATUS_SQL] },
   { version: 21, name: "review_queue", sql: [REVIEW_ITEMS_SQL] },
   { version: 22, name: "perceptual_intelligence", sql: [PERCEPTUAL_SQL] },
+  { version: 23, name: "org_manifests", sql: [ORG_MANIFESTS_SQL] },
 ];
 
 /** Latest schema version this code knows how to migrate to. */

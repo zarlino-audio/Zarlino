@@ -374,6 +374,72 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "org.registry",
+    label: "AOrgI registry is coherent (roles, departments, agent instances)",
+    severity: "HIGH",
+    run: (ctx, _autoFix) => {
+      // Rows exist only through migration v23; a missing table/seed means the
+      // migration never ran on this store.
+      const departments = ctx.store.listDepartments();
+      const roles = ctx.store.listOrgRoles();
+      if (departments.length === 0 || roles.length === 0) {
+        return failResult(
+          "org.registry",
+          "AOrgI registry is coherent (roles, departments, agent instances)",
+          "HIGH",
+          `Registry empty: ${departments.length} department(s), ${roles.length} role manifest(s).`,
+          "Run migrations (auto on DO wake).",
+        );
+      }
+      // Every role must reference an existing department and every active
+      // agent an existing role — dangling references break assignment.
+      const deptIds = new Set(departments.map((d) => d.id));
+      const orphanRoles = roles.filter((r) => !deptIds.has(r.department_id)).map((r) => r.id);
+      if (orphanRoles.length > 0) {
+        return failResult(
+          "org.registry",
+          "AOrgI registry is coherent (roles, departments, agent instances)",
+          "HIGH",
+          `Role manifest(s) reference missing department(s): ${orphanRoles.join(", ")}.`,
+          "Repair the org_roles.department_id references.",
+        );
+      }
+      const roleIds = new Set(roles.map((r) => r.id));
+      const agents = ctx.store.listOrgAgents();
+      const orphanAgents = agents.filter((a) => !roleIds.has(a.role_id)).map((a) => a.id);
+      if (orphanAgents.length > 0) {
+        return failResult(
+          "org.registry",
+          "AOrgI registry is coherent (roles, departments, agent instances)",
+          "HIGH",
+          `Agent instance(s) reference missing role(s): ${orphanAgents.join(", ")}.`,
+          "Repair the org_agents.role_id references.",
+        );
+      }
+      // Registered instances must keep heartbeating. The local daemon pings
+      // every ~30s; the cloud DO re-registers on every wake. Two days without
+      // a heartbeat means the instance is gone or its registration is broken.
+      const stale = agents.filter(
+        (a) => !a.last_seen || Date.parse(a.last_seen) < Date.now() - 2 * 24 * 60 * 60 * 1000,
+      );
+      if (stale.length > 0) {
+        return warnResult(
+          "org.registry",
+          "AOrgI registry is coherent (roles, departments, agent instances)",
+          "HIGH",
+          `${stale.length} registered agent instance(s) have no heartbeat for 2+ days: ${stale.map((a) => a.id).join(", ")}.`,
+          "Restart the runtime, or deregister the instance if it no longer exists.",
+        );
+      }
+      return okResult(
+        "org.registry",
+        "AOrgI registry is coherent (roles, departments, agent instances)",
+        "HIGH",
+        `${departments.length} departments, ${roles.length} role manifests, ${agents.length} live agent instance(s) — registry coherent.`,
+      );
+    },
+  },
+  {
     id: "kv.health",
     label: "KV namespace reachable",
     severity: "LOW",

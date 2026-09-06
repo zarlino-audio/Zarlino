@@ -107,6 +107,13 @@ export interface Task {
   created_at: string;
   updated_at: string;
   completed_at?: string;
+  // Task contract (AOrgI migration v23): acceptance criteria, independent
+  // verification owner, autonomy level (L0-L3), deadline, escalation path.
+  acceptance_criteria?: string;
+  verification_role_id?: string;
+  autonomy_level?: string;
+  deadline_at?: string;
+  escalation_path?: string;
 }
 
 export interface Decision {
@@ -285,6 +292,56 @@ export interface Person {
   name: string;
   role?: string;
   email?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v23): organizational department (coordination silo). */
+export interface Department {
+  id: string;
+  name: string;
+  description?: string;
+  purpose?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v23): machine-readable role manifest (§9 of the AOrgI instruction). */
+export interface OrgRole {
+  id: string;
+  name: string;
+  department_id: string;
+  lineage_id: string;
+  model?: string;
+  scope?: string;
+  responsibilities_json: string;
+  obligations_json: string;
+  capabilities_json: string;
+  default_autonomy?: string;
+  critic_role_id?: string;
+  escalation_threshold?: string;
+  version: number;
+  status: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v23): agent instance registry — instances are NOT roles (§7). */
+export interface OrgAgent {
+  id: string;
+  role_id: string;
+  kind?: string;
+  model?: string;
+  status: string;
+  host?: string;
+  version?: string;
+  last_seen?: string;
+  capabilities_json: string;
+  autonomy_json: string;
+  started_at?: string;
   source: string;
   created_at: string;
   updated_at: string;

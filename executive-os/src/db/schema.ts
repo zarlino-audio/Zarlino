@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1207,4 +1207,211 @@ VALUES
  ('prod_ztame', 'ship', 'PASS', 'PASS', 'INCONCLUSIVE', 'INCONCLUSIVE', 'PASS', 'PASS',
   'SHIP', 'founder', 'Shipped 1.0.0; P8 suppression-quality A/B listening test still BLOCKED.',
   1, '[]', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+/**
+ * AOrgI organizational manifests (migration v23) — the artificial organization
+ * registry behind the Executive OS (AOrgI master instruction §5, §9, §24).
+ *
+ * Three layers, matching the instruction's ROLE ≠ INSTANCE ≠ HUMAN rule:
+ *  - departments: coordination silos (EXECUTIVE/PRODUCT/ENGINEERING/
+ *    VERIFICATION/COMMERCIAL/CONTROL). QA sits in its own VERIFICATION
+ *    department (not under ENGINEERING) per §24 — independence required.
+ *  - org_roles: machine-readable role MANIFESTS (§9) — id, department,
+ *    lineage_id, model, scope, responsibilities, obligations, capabilities,
+ *    default autonomy (L0-L3), critic_role_id for independent verification.
+ *  - org_agents: agent INSTANCE registry — real runtimes register themselves
+ *    with heartbeats; no instance row exists until a runtime actually runs
+ *    (§42: no theater). The cloud DO registers executive_do_01 on wake;
+ *    the local daemon's existing /api/local-agent/heartbeat upserts
+ *    local_daemon_01.
+ *
+ * Also adds the task-contract columns to `tasks` (§18): acceptance criteria,
+ * independent verification owner, autonomy level, deadline, escalation path —
+ * and writes the first real contract (tsk_ztame_p8, the blocking ZTame A/B
+ * listening test) through the new mechanism.
+ */
+export const ORG_MANIFESTS_SQL = `
+CREATE TABLE IF NOT EXISTS departments (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  purpose TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'seed',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS org_roles (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  department_id TEXT NOT NULL,
+  lineage_id TEXT NOT NULL,
+  model TEXT NOT NULL DEFAULT '',
+  scope TEXT NOT NULL DEFAULT '',
+  responsibilities_json TEXT NOT NULL DEFAULT '[]',
+  obligations_json TEXT NOT NULL DEFAULT '[]',
+  capabilities_json TEXT NOT NULL DEFAULT '[]',
+  default_autonomy TEXT NOT NULL DEFAULT 'L1',
+  critic_role_id TEXT,
+  escalation_threshold TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  source TEXT NOT NULL DEFAULT 'seed',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_roles_dept ON org_roles(department_id);
+
+CREATE TABLE IF NOT EXISTS org_agents (
+  id TEXT PRIMARY KEY,
+  role_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'cloud',
+  model TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'REGISTERED',
+  host TEXT,
+  version TEXT,
+  last_seen TEXT,
+  capabilities_json TEXT NOT NULL DEFAULT '[]',
+  autonomy_json TEXT NOT NULL DEFAULT '{}',
+  started_at TEXT,
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_agents_role ON org_agents(role_id);
+CREATE INDEX IF NOT EXISTS idx_org_agents_seen ON org_agents(last_seen);
+
+-- Task contract (AOrgI §18): every substantial task gets acceptance criteria,
+-- an independent verification owner, an autonomy level, a deadline and an
+-- escalation path instead of living as informal conversation.
+ALTER TABLE tasks ADD COLUMN acceptance_criteria TEXT;
+ALTER TABLE tasks ADD COLUMN verification_role_id TEXT;
+ALTER TABLE tasks ADD COLUMN autonomy_level TEXT NOT NULL DEFAULT 'L2';
+ALTER TABLE tasks ADD COLUMN deadline_at TEXT;
+ALTER TABLE tasks ADD COLUMN escalation_path TEXT;
+
+-- Departments (5 initial per §24 + VERIFICATION as the independent QA silo).
+INSERT OR IGNORE INTO departments (id, name, description, purpose, source, created_at, updated_at) VALUES
+ ('dept_executive', 'Executive', 'Objective decomposition, planning, coordination, strategy, CEO reporting.', 'Convert CEO objectives into coordinated organizational action.', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('dept_product', 'Product', 'Product architecture, planning, and user experience.', 'Turn objectives into product plans and specifications.', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('dept_engineering', 'Engineering', 'DSP, application code, and build/release tooling.', 'Implement product specifications as shipped software.', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('dept_verification', 'Verification', 'Independent QA and adversarial testing.', 'Verify engineering work independently of engineering incentives.', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('dept_commercial', 'Commercial', 'Growth, sales, partnerships, and customer intelligence.', 'Convert shipped products into revenue and retention.', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('dept_control', 'Control', 'Finance, governance, audit, and policy enforcement.', 'Constrain organizational action to authorized and audited bounds.', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- 12 role manifests (AOrgI §6). Responsibilities/obligations are JSON arrays;
+-- capabilities are descriptive for Phase 1 (enforcement lands with Phase 3
+-- CapabilityGrants over the authority engine). critic_role_id encodes the
+-- independent-verification relationship where it is materially valuable.
+INSERT OR IGNORE INTO org_roles
+ (id, name, department_id, lineage_id, model, scope, responsibilities_json, obligations_json,
+  capabilities_json, default_autonomy, critic_role_id, escalation_threshold, version, status,
+  source, created_at, updated_at) VALUES
+ ('role_coa', 'Chief Operating Agent', 'dept_executive', 'lineage_coa', 'deepseek-v4',
+  'Organizational orchestration: decompose objectives, plan, assign, monitor, escalate, report to the human CEO.',
+  '["Receive organizational objectives","Decompose objectives into plans and tasks","Assign work to role instances","Monitor execution and detect bottlenecks","Manage escalation","Synthesize organizational state","Report compressed executive state to the CEO"]',
+  '["Emit ESCALATION when a hard constraint is violated","Report status after every major objective phase"]',
+  '["planning","task_assignment","bottleneck_detection","executive_reporting"]',
+  'L2', 'role_finance_governance', 'Hard-constraint violation or 3 failed arbitration rounds', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_strategy_intelligence', 'Strategy & Intelligence Agent', 'dept_executive', 'lineage_strategy', 'deepseek-v4',
+  'Market research, competitive intelligence, opportunity discovery, strategic risk detection.',
+  '["Market research","Competitive intelligence","Opportunity discovery","Strategic analysis","External information gathering","Strategic risk detection"]',
+  '["Emit RESULT after every research request","Flag strategic risks explicitly"]',
+  '["web_research","competitive_analysis","opportunity_evaluation"]',
+  'L2', NULL, 'Materially new strategic risk', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_product_architect', 'Product Architect', 'dept_product', 'lineage_product_architect', 'deepseek-v4',
+  'Product architecture, specifications, trade-offs, differentiation, acceptance criteria. Challenges weak concepts.',
+  '["Product architecture","Product specifications","Technical/product trade-offs","Product differentiation","Acceptance criteria"]',
+  '["Challenge weak product concepts","Emit RESULT for every product decision reviewed"]',
+  '["product_specification","tradeoff_analysis","differentiation_analysis"]',
+  'L2', 'role_product_manager', 'Product concept with no measurable differentiator', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_product_manager', 'Product Manager', 'dept_product', 'lineage_product_manager', 'deepseek-v4',
+  'Convert objectives into executable product plans; prioritize, manage scope, prevent scope explosion.',
+  '["Convert objectives into executable product plans","Prioritize work","Manage scope","Coordinate product work","Maintain product plans","Prevent scope explosion"]',
+  '["Emit DEVIATION when scope changes materially","Maintain plan versions"]',
+  '["roadmapping","prioritization","scope_control","plan_maintenance"]',
+  'L2', 'role_strategy_intelligence', 'Scope expansion beyond agreed acceptance criteria', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_design_ux', 'Design / UX Agent', 'dept_product', 'lineage_design_ux', 'deepseek-v4',
+  'UI/UX, product interaction, visual system, user workflow, design specifications.',
+  '["UI/UX design","Product interaction","Visual system","User workflow","Design specifications"]',
+  '["Emit RESULT for every design review","Validate workflows against real user tasks"]',
+  '["ui_design","ux_review","workflow_design","visual_system"]',
+  'L2', 'role_qa_verification', 'Design change that breaks a shipped workflow', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_dsp_engineering', 'DSP / Core Engineering Agent', 'dept_engineering', 'lineage_dsp_engineering', 'deepseek-v4',
+  'DSP algorithms, signal processing, sonic architecture, core plugin technology, performance.',
+  '["DSP implementation","Audio algorithms","Signal processing","Sonic architecture","Performance engineering"]',
+  '["Emit RESULT after every implementation pass","Emit ESCALATION for real-time-safety violations"]',
+  '["dsp_design","cpp_implementation","rt_safety_audit","performance_profiling"]',
+  'L2', 'role_qa_verification', 'Denormals/NaN in the audio path or a failed null test', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_software_engineering', 'Software Engineering Agent', 'dept_engineering', 'lineage_software_engineering', 'deepseek-v4',
+  'Application code, plugin infrastructure, backend, integrations, APIs, automation, tooling.',
+  '["Application code","Plugin infrastructure","Backend","Integrations","APIs","Automation","Tooling"]',
+  '["Emit RESULT after every implementation pass","Emit ESCALATION for production-facing changes needing approval"]',
+  '["backend","api_design","automation","tooling","integration"]',
+  'L2', 'role_qa_verification', 'Production-affecting change without approval path', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_qa_verification', 'QA / Verification Agent', 'dept_verification', 'lineage_qa_verification', 'deepseek-v4',
+  'Automated tests, regression, functional verification, build verification, release gating. Independent of engineering.',
+  '["Automated tests","Regression testing","Functional verification","Acceptance-criteria verification","Build verification","Release gating"]',
+  '["Emit RESULT after every review","Emit ESCALATION for blocking defects","Never let engineering self-approve gated work"]',
+  '["test_design","regression","build_verification","release_gating","adversarial_review"]',
+  'L2', NULL, 'Blocking defect at release gate', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_growth_intelligence', 'Growth Intelligence Agent', 'dept_commercial', 'lineage_growth_intelligence', 'deepseek-v4',
+  'Market positioning, SEO, content, advertising, acquisition, campaign analysis, conversion optimization.',
+  '["Market positioning","SEO","Content","Advertising","Acquisition","Campaign analysis","Conversion optimization"]',
+  '["Emit RESULT with measured campaign data","Emit DEVIATION when spend exceeds approved budget"]',
+  '["seo","content","campaign_analysis","conversion_optimization"]',
+  'L1', NULL, 'Campaign spend approaching approved budget', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_sales_partnerships', 'Sales / Partnerships Agent', 'dept_commercial', 'lineage_sales_partnerships', 'deepseek-v4',
+  'Affiliates, partnerships, distribution, commercial opportunities, outreach, sales operations.',
+  '["Affiliates","Partnerships","Distribution","Commercial opportunities","Outreach","Sales operations"]',
+  '["Emit RESULT for every outreach batch","Emit ESCALATION before any binding external commitment"]',
+  '["affiliate_management","partnership_outreach","distribution"]',
+  'L1', NULL, 'Binding external commitment without founder approval', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_customer_intelligence', 'Customer Intelligence Agent', 'dept_commercial', 'lineage_customer_intelligence', 'deepseek-v4',
+  'Customer feedback, support intelligence, user behavior, reviews, retention, complaints, product feedback loops.',
+  '["Customer feedback","Support intelligence","User behavior","Reviews","Retention","Complaints","Product feedback loops"]',
+  '["Emit RESULT for every feedback synthesis","Emit ESCALATION for recurring complaints affecting retention"]',
+  '["feedback_analysis","support_intelligence","retention_analysis"]',
+  'L2', NULL, 'Recurring complaint class affecting retention', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+
+ ('role_finance_governance', 'Finance / Governance Agent', 'dept_control', 'lineage_finance_governance', 'deepseek-v4',
+  'Budget monitoring, financial analysis, governance, authorization, audit, licensing/compliance, risk, policy enforcement. Not subordinate to engineering or commercial incentives.',
+  '["Budget monitoring","Financial analysis","Governance","Authorization","Audit","Licensing/compliance operations","Risk","Policy enforcement"]',
+  '["BLOCK + LOG + ESCALATE on hard-constraint violations (never WARN + CONTINUE)","Emit RESULT for every audit"]',
+  '["budget_monitoring","audit","policy_enforcement","risk_assessment","compliance"]',
+  'L1', NULL, 'Any hard-constraint violation', 1, 'ACTIVE',
+  'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- First real task contract through the registry (AOrgI §18, §45 STEP 14): the
+-- blocking ZTame P8 A/B listening test gets acceptance criteria, an independent
+-- QA verification owner, and a founder escalation path.
+UPDATE tasks SET
+  acceptance_criteria = 'A/B listening protocol from pipeline/ZTame/STATUS.md executed (sustained tone + resonant ringing, piano/plucked string, drums + pad; 100% wet, sensitivity 50 to 90, range -12 dB). Outcome is one documented symptom: (a) pumping/warbling on transients or (b) Selectivity inaudible — with the corresponding rework stage identified.',
+  verification_role_id = 'role_qa_verification',
+  autonomy_level = 'L2',
+  escalation_path = 'founder (Khritical) via review_items',
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+WHERE id = 'tsk_ztame_p8';
 `;
