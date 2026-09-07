@@ -65,6 +65,7 @@ import type {
   ProductivityMetric,
   ProductStatusRecord,
   Project,
+  ReasoningTrace,
   Reminder,
   ReviewItem,
   Risk,
@@ -524,6 +525,20 @@ export class ExecutiveStore implements CostStorage {
     const existing = this.getOrgMemory(id);
     if (!existing) return { status: "not_found" };
     if (existing.version !== input.expectedVersion) {
+      // §14: VERSION MISMATCH → ARBITRATE. The conflict is escalated to the
+      // governance arbiter as a protocol message — it is never silent.
+      this.sendOrgMessage({
+        fromRole: input.author ?? "role_coa",
+        toRole: "role_finance_governance",
+        type: "ESCALATION",
+        taskId: existing.task_id,
+        payload: {
+          memoryId: id,
+          key: existing.key,
+          expectedVersion: input.expectedVersion,
+          currentVersion: existing.version,
+        },
+      });
       return { status: "conflict", record: existing };
     }
     const now = new Date().toISOString();
@@ -904,6 +919,19 @@ export class ExecutiveStore implements CostStorage {
       "UPDATE org_negotiations SET status = 'RESOLVED', verdict = ?, arbiter_role = COALESCE(?, arbiter_role), updated_at = ? WHERE id = ?",
       verdict, byRole, now, id,
     );
+    // §13: the arbiter's decision is a consequential one — record a reasoning
+    // trace with the actual evidence (the recorded rounds), never chain-of-thought.
+    const rounds = this.listNegotiationRounds(id).map((r) => ({ round: r.round, kind: r.kind, role: r.role, content: r.content }));
+    this.createReasoningTrace({
+      agentId: byRole || n.arbiter_role || "role_coa",
+      taskId: n.task_id,
+      mode: "arbitration",
+      evidence: rounds,
+      hypothesis: `Negotiation '${n.topic}' exhausted ${n.max_rounds} rounds.`,
+      confidence: null,
+      finalAction: verdict,
+      visibility: "internal",
+    });
     return this.getOrgNegotiation(id);
   }
 
@@ -913,6 +941,45 @@ export class ExecutiveStore implements CostStorage {
   getOrgArbiter(disagreementClass: string): OrgArbiter | null {
     const rows = this.sql.all<Row>("SELECT * FROM org_arbiters WHERE disagreement_class = ?", disagreementClass);
     return rows[0] ? rowTo<OrgArbiter>(rows[0]) : null;
+  }
+
+  // -- reasoning traces (AOrgI §13) -------------------------------------------
+  createReasoningTrace(input: {
+    agentId: string;
+    taskId?: string;
+    mode?: string;
+    evidence?: unknown;
+    hypothesis?: string;
+    confidence?: number | null;
+    finalAction?: string;
+    visibility?: "internal" | "reviewer" | "public";
+  }): ReasoningTrace {
+    const now = new Date().toISOString();
+    const trace: ReasoningTrace = {
+      id: newId("rt"),
+      agent_id: input.agentId,
+      task_id: input.taskId ?? undefined,
+      mode: input.mode ?? "decision",
+      evidence_json: JSON.stringify(input.evidence ?? []),
+      hypothesis: input.hypothesis ?? "",
+      confidence: input.confidence ?? undefined,
+      final_action: input.finalAction ?? "",
+      trace_visibility: input.visibility ?? "internal",
+      source: "system",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("reasoning_traces", trace);
+    return trace;
+  }
+  listReasoningTraces(opts: { agentId?: string; taskId?: string; limit?: number } = {}): ReasoningTrace[] {
+    let sql = "SELECT * FROM reasoning_traces WHERE 1=1";
+    const params: SqlParam[] = [];
+    if (opts.agentId) { sql += " AND agent_id = ?"; params.push(opts.agentId); }
+    if (opts.taskId) { sql += " AND task_id = ?"; params.push(opts.taskId); }
+    sql += " ORDER BY created_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<ReasoningTrace>(r));
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -2485,6 +2552,7 @@ export const SNAPSHOT_TABLES = [
   "org_memory", "post_objective_records", "org_trust", "org_messages",
   "org_capability_grants", "org_plans", "org_plan_steps", "org_plan_deviations",
   "org_negotiations", "org_negotiation_rounds", "org_arbiters",
+  "reasoning_traces",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

@@ -496,6 +496,61 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "org.task_contracts",
+    label: "Substantial tasks carry a contract (acceptance + verifier, §18)",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      // §18: no substantial task should live as informal conversation. P0/P1
+      // or BLOCKED tasks without acceptance criteria or a verification owner
+      // are exactly that — surface them; the fix is a founder/COA decision,
+      // not an auto-write.
+      const substantial = ctx.store
+        .listTasks({ limit: 500 })
+        .filter((t) => t.status !== "DONE" && (t.status === "BLOCKED" || t.priority === "P0" || t.priority === "P1"));
+      const uncovered = substantial.filter((t) => !t.acceptance_criteria || !t.verification_role_id);
+      if (uncovered.length > 0) {
+        return warnResult(
+          "org.task_contracts",
+          "Substantial tasks carry a contract (acceptance + verifier, §18)",
+          "MEDIUM",
+          `${uncovered.length} substantial task(s) without a full contract: ${uncovered.map((t) => t.id).join(", ")}.`,
+          "Set acceptance criteria + verification role via POST /api/org/task-contracts/:id.",
+        );
+      }
+      return okResult(
+        "org.task_contracts",
+        "Substantial tasks carry a contract (acceptance + verifier, §18)",
+        "MEDIUM",
+        `${substantial.length} substantial task(s) checked — all contracted.`,
+      );
+    },
+  },
+  {
+    id: "org.negotiations_stale",
+    label: "No stalled negotiations awaiting arbitration",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      // §23: after rounds are exhausted the arbiter must resolve. A verdict
+      // pending for 24h+ (or a 72h+ silent OPEN negotiation) is a stall.
+      const now = Date.now();
+      const negotiations = ctx.store.listOrgNegotiations(100);
+      const stalled = negotiations.filter((n) => {
+        const age = now - Date.parse(n.updated_at);
+        return (n.status === "ARBITRATED" && age > 24 * 60 * 60 * 1000) || (n.status === "OPEN" && age > 72 * 60 * 60 * 1000);
+      });
+      if (stalled.length > 0) {
+        return warnResult(
+          "org.negotiations_stale",
+          "No stalled negotiations awaiting arbitration",
+          "MEDIUM",
+          `${stalled.length} negotiation(s) stalled: ${stalled.map((n) => n.id).join(", ")}.`,
+          "Arbitrate via POST /api/org/negotiations/:id/arbitrate (or resolve the rounds).",
+        );
+      }
+      return okResult("org.negotiations_stale", "No stalled negotiations awaiting arbitration", "MEDIUM", `${negotiations.length} negotiation(s) checked — none stalled.`);
+    },
+  },
+  {
     id: "kv.health",
     label: "KV namespace reachable",
     severity: "LOW",

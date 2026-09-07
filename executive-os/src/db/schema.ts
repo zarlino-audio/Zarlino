@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 25;
+export const SCHEMA_VERSION = 26;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1660,4 +1660,35 @@ INSERT OR IGNORE INTO org_arbiters
  ('arb_governance', 'governance', 'role_finance_governance', NULL, 'role', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
  ('arb_cross_functional', 'cross_functional', 'role_coa', NULL, 'role', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
  ('arb_strategic', 'strategic', NULL, NULL, 'human_ceo', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+/**
+ * AOrgI Phases 1–3 audit fixes (migration v26).
+ *
+ *  - reasoning_traces: structured decision records (§13) — agent, task, mode,
+ *    evidence, hypothesis, confidence, final action, visibility. Private
+ *    chain-of-thought is never stored; only inspectable evidence + rationale.
+ *  - org_roles.prompt_lineage_id: the manifest field §9 requires alongside
+ *    lineage_id (§20 tracks both for critic independence).
+ */
+export const ORG_AUDIT_FIXES_SQL = `
+CREATE TABLE IF NOT EXISTS reasoning_traces (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  task_id TEXT,
+  mode TEXT NOT NULL DEFAULT 'decision',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  hypothesis TEXT NOT NULL DEFAULT '',
+  confidence REAL,
+  final_action TEXT NOT NULL DEFAULT '',
+  trace_visibility TEXT NOT NULL DEFAULT 'internal',
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reasoning_agent ON reasoning_traces(agent_id);
+CREATE INDEX IF NOT EXISTS idx_reasoning_task ON reasoning_traces(task_id);
+
+ALTER TABLE org_roles ADD COLUMN prompt_lineage_id TEXT;
+UPDATE org_roles SET prompt_lineage_id = lineage_id WHERE prompt_lineage_id IS NULL;
 `;

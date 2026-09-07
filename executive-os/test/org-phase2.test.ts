@@ -131,9 +131,12 @@ describe("AOrgI Phase 2 (migration v24)", () => {
 
     it("lists and filters by type", () => {
       store.sendOrgMessage({ fromRole: "role_coa", toRole: "role_dsp_engineering", type: "REQUEST", taskId: "tsk_a" });
-      const escalations = store.listOrgMessages({ type: "ESCALATION", limit: 10 });
-      expect(escalations.length).toBe(1);
-      expect(escalations[0]!.task_id).toBe("tsk_ztame_p8");
+      // Filter to the P8 escalation specifically — the memory-conflict test
+      // above also emits a (governance) ESCALATION, by design (§14).
+      const escalations = store.listOrgMessages({ type: "ESCALATION", limit: 20 });
+      const p8 = escalations.filter((m) => m.task_id === "tsk_ztame_p8");
+      expect(p8.length).toBe(1);
+      expect(p8[0]!.task_id).toBe("tsk_ztame_p8");
       const all = store.listOrgMessages({ limit: 50 });
       expect(all.length).toBeGreaterThanOrEqual(2);
     });

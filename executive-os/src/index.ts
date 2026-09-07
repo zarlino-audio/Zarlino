@@ -265,10 +265,23 @@ async function agentLoop(opts: {
         const capability = toolDef?.requiredPermission ?? "execute";
         const gate = store.capabilityVerdictForAgent("executive_do_01", capability, realName);
         if (gate.verdict !== "ALLOW") {
+          // §11 hard-constraint handling: BLOCK → LOG → ESCALATE. The call is
+          // blocked here; the audit row is the LOG; the message is the ESCALATE.
           const message =
             gate.verdict === "DENY"
               ? `CAPABILITY_DENIED: ${gate.reason}`
               : `REVIEW_REQUIRED: ${gate.reason} Request founder approval before retrying.`;
+          store.insertAudit({
+            id: newId("aud"),
+            actor: "executive_do_01",
+            action: gate.verdict === "DENY" ? "capability.denied" : "capability.review_required",
+            entity_type: "tool_calls",
+            entity_id: realName,
+            detail_json: JSON.stringify({ capability, reason: gate.reason, grantId: gate.grantId }),
+            source: "executive",
+            created_at: nowIso(),
+            updated_at: nowIso(),
+          });
           store.sendOrgMessage({
             fromRole: "role_coa",
             toRole: "role_finance_governance",
@@ -792,6 +805,7 @@ export class ExecutiveAgent {
         planDeviations: s.listOrgPlanDeviations(undefined, 10),
         negotiations: s.listOrgNegotiations(10),
         arbiters: s.listOrgArbiters(),
+        reasoningTraces: s.listReasoningTraces({ limit: 20 }),
       },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
@@ -1476,6 +1490,38 @@ export class ExecutiveAgent {
     }
     if (path === "/api/org/arbiters" && method === "GET") {
       return json({ arbiters: this.store.listOrgArbiters() });
+    }
+    if (path === "/api/org/reasoning-traces" && method === "GET") {
+      const agentId = url.searchParams.get("agent_id") ?? undefined;
+      const taskId = url.searchParams.get("task_id") ?? undefined;
+      return json({ traces: this.store.listReasoningTraces({ agentId, taskId, limit: 100 }) });
+    }
+    if (path === "/api/org/reasoning-traces" && method === "POST") {
+      const body = (await readBody<{
+        agent_id?: string;
+        task_id?: string;
+        mode?: string;
+        evidence?: unknown;
+        hypothesis?: string;
+        confidence?: number | null;
+        final_action?: string;
+        visibility?: "internal" | "reviewer" | "public";
+      }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.agent_id || typeof body.agent_id !== "string") return json({ error: "agent_id required" }, 400);
+      if (body.visibility !== undefined && !["internal", "reviewer", "public"].includes(String(body.visibility))) {
+        return json({ error: "visibility must be internal | reviewer | public" }, 400);
+      }
+      const trace = this.store.createReasoningTrace({
+        agentId: body.agent_id,
+        taskId: body.task_id as string | undefined,
+        mode: body.mode as string | undefined,
+        evidence: body.evidence ?? [],
+        hypothesis: body.hypothesis as string | undefined,
+        confidence: typeof body.confidence === "number" ? body.confidence : null,
+        finalAction: body.final_action as string | undefined,
+        visibility: body.visibility as "internal" | "reviewer" | "public" | undefined,
+      });
+      return json({ ok: true, trace });
     }
     if (path === "/api/org/negotiations" && method === "GET") {
       return json({ negotiations: this.store.listOrgNegotiations() });

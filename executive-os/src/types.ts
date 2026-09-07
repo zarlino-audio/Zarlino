@@ -318,6 +318,7 @@ export interface OrgRole {
   name: string;
   department_id: string;
   lineage_id: string;
+  prompt_lineage_id?: string;
   model?: string;
   scope?: string;
   responsibilities_json: string;
@@ -505,6 +506,25 @@ export interface OrgArbiter {
   arbiter_role_id?: string;
   fallback_role_id?: string;
   arbiter_kind: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * AOrgI (migration v26): structured reasoning record (§13) — inspectable
+ * decision evidence + rationale, never private chain-of-thought.
+ */
+export interface ReasoningTrace {
+  id: string;
+  agent_id: string;
+  task_id?: string;
+  mode: string;
+  evidence_json: string;
+  hypothesis?: string;
+  confidence?: number;
+  final_action?: string;
+  trace_visibility: string;
   source: string;
   created_at: string;
   updated_at: string;
