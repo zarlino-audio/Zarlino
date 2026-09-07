@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 26;
+export const SCHEMA_VERSION = 27;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1691,4 +1691,44 @@ CREATE INDEX IF NOT EXISTS idx_reasoning_task ON reasoning_traces(task_id);
 
 ALTER TABLE org_roles ADD COLUMN prompt_lineage_id TEXT;
 UPDATE org_roles SET prompt_lineage_id = lineage_id WHERE prompt_lineage_id IS NULL;
+`;
+
+/**
+ * AOrgI Phase 4 (migration v27) — collective intelligence measurement and the
+ * organizational analyst (§35, §36).
+ *
+ *  - org_analyst_reports: periodic self-observation runs — metrics over the
+ *    five system-level properties (emergence, convergence, robustness,
+ *    scalability, objective achievement) + observations + recommendations.
+ *  - org_chaos_tests: robustness drills (§35) — simulated agent kills and
+ *    grant degradations. Production instances are NEVER targeted; probes are
+ *    marked source='chaos' and cleaned up after each drill.
+ */
+export const ORG_PHASE4_SQL = `
+CREATE TABLE IF NOT EXISTS org_analyst_reports (
+  id TEXT PRIMARY KEY,
+  generated_at TEXT NOT NULL,
+  trigger TEXT NOT NULL DEFAULT 'manual',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  observations_json TEXT NOT NULL DEFAULT '[]',
+  recommendations_json TEXT NOT NULL DEFAULT '[]',
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_analyst_generated ON org_analyst_reports(generated_at);
+
+CREATE TABLE IF NOT EXISTS org_chaos_tests (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  target TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'SCHEDULED',
+  result_json TEXT NOT NULL DEFAULT '{}',
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_chaos_kind ON org_chaos_tests(kind);
 `;

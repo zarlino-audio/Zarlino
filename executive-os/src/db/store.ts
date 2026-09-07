@@ -40,7 +40,9 @@ import type {
   Organization,
   OrgAgent,
   OrgArbiter,
+  OrgAnalystReport,
   OrgCapabilityGrant,
+  OrgChaosTest,
   OrgMemory,
   OrgMessage,
   OrgMessageType,
@@ -379,6 +381,7 @@ export class ExecutiveStore implements CostStorage {
     version?: string;
     capabilitiesJson?: string;
     autonomyJson?: string;
+    source?: string;
   }): void {
     const now = new Date().toISOString();
     const existing = this.sql.all<Row>("SELECT id FROM org_agents WHERE id = ?", input.id);
@@ -395,7 +398,7 @@ export class ExecutiveStore implements CostStorage {
         capabilities_json: input.capabilitiesJson ?? "[]",
         autonomy_json: input.autonomyJson ?? "{}",
         started_at: now,
-        source: "runtime",
+        source: input.source ?? "runtime",
         created_at: now,
         updated_at: now,
       });
@@ -980,6 +983,76 @@ export class ExecutiveStore implements CostStorage {
     sql += " ORDER BY created_at DESC";
     if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
     return this.sql.all<Row>(sql, ...params).map((r) => rowTo<ReasoningTrace>(r));
+  }
+
+  // -- AOrgI Phase 4: analyst reports + chaos tests (v27) ---------------------
+  createAnalystReport(input: {
+    generatedAt: string;
+    trigger: string;
+    metrics: unknown;
+    observations: unknown[];
+    recommendations: unknown[];
+  }): OrgAnalystReport {
+    const now = new Date().toISOString();
+    const report: OrgAnalystReport = {
+      id: newId("oar"),
+      generated_at: input.generatedAt,
+      trigger: input.trigger,
+      metrics_json: JSON.stringify(input.metrics),
+      observations_json: JSON.stringify(input.observations),
+      recommendations_json: JSON.stringify(input.recommendations),
+      source: "system",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_analyst_reports", report);
+    return report;
+  }
+  listAnalystReports(limit = 20): OrgAnalystReport[] {
+    return this.sql.all<Row>("SELECT * FROM org_analyst_reports ORDER BY generated_at DESC LIMIT ?", limit).map((r) => rowTo<OrgAnalystReport>(r));
+  }
+  latestAnalystReport(): OrgAnalystReport | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_analyst_reports ORDER BY generated_at DESC LIMIT 1");
+    return rows[0] ? rowTo<OrgAnalystReport>(rows[0]) : null;
+  }
+
+  createChaosTest(input: { kind: string; target: string; source?: string }): OrgChaosTest {
+    const now = new Date().toISOString();
+    const t: OrgChaosTest = {
+      id: newId("chaos"),
+      kind: input.kind,
+      target: input.target,
+      status: "RUNNING",
+      result_json: "{}",
+      started_at: now,
+      finished_at: undefined,
+      source: input.source ?? "system",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_chaos_tests", t);
+    return t;
+  }
+  finishChaosTest(id: string, status: "PASSED" | "FAILED" | "REFUSED", result: unknown): void {
+    const now = new Date().toISOString();
+    this.sql.run(
+      "UPDATE org_chaos_tests SET status = ?, result_json = ?, finished_at = ?, updated_at = ? WHERE id = ?",
+      status, JSON.stringify(result), now, now, id,
+    );
+  }
+  listChaosTests(limit = 50): OrgChaosTest[] {
+    return this.sql.all<Row>("SELECT * FROM org_chaos_tests ORDER BY started_at DESC LIMIT ?", limit).map((r) => rowTo<OrgChaosTest>(r));
+  }
+
+  /** Chaos primitives (guarded at the module level — never called raw). */
+  setOrgAgentLastSeen(id: string, iso: string): void {
+    this.sql.run("UPDATE org_agents SET last_seen = ?, updated_at = ? WHERE id = ?", iso, new Date().toISOString(), id);
+  }
+  deleteOrgAgent(id: string): void {
+    this.sql.run("DELETE FROM org_agents WHERE id = ?", id);
+  }
+  deleteCapabilityGrant(id: string): void {
+    this.sql.run("DELETE FROM org_capability_grants WHERE id = ?", id);
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -2553,6 +2626,7 @@ export const SNAPSHOT_TABLES = [
   "org_capability_grants", "org_plans", "org_plan_steps", "org_plan_deviations",
   "org_negotiations", "org_negotiation_rounds", "org_arbiters",
   "reasoning_traces",
+  "org_analyst_reports", "org_chaos_tests",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

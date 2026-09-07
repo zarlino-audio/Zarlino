@@ -551,6 +551,41 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "org.analyst.fresh",
+    label: "Organizational analyst has observed the org recently (§36)",
+    severity: "LOW",
+    run: (ctx, _autoFix) => {
+      // The analyst runs on every maintenance sweep (wake/cron). A missing or
+      // stale report means self-observation stopped — the org is flying blind.
+      const latest = ctx.store.latestAnalystReport();
+      if (!latest) {
+        return warnResult(
+          "org.analyst.fresh",
+          "Organizational analyst has observed the org recently (§36)",
+          "LOW",
+          "No organizational analyst report yet.",
+          "Run POST /api/org/analyst/run (also runs automatically on each maintenance sweep).",
+        );
+      }
+      const age = Date.now() - Date.parse(latest.generated_at);
+      if (age > 26 * 60 * 60 * 1000) {
+        return warnResult(
+          "org.analyst.fresh",
+          "Organizational analyst has observed the org recently (§36)",
+          "LOW",
+          `Latest analyst report is ${Math.round(age / 3_600_000)}h old.`,
+          "Run POST /api/org/analyst/run.",
+        );
+      }
+      return okResult(
+        "org.analyst.fresh",
+        "Organizational analyst has observed the org recently (§36)",
+        "LOW",
+        `Latest analyst report ${Math.round(age / 60_000)}min old (trigger: ${latest.trigger}).`,
+      );
+    },
+  },
+  {
     id: "kv.health",
     label: "KV namespace reachable",
     severity: "LOW",

@@ -530,6 +530,33 @@ export interface ReasoningTrace {
   updated_at: string;
 }
 
+/** AOrgI (migration v27): organizational analyst self-observation report (§36). */
+export interface OrgAnalystReport {
+  id: string;
+  generated_at: string;
+  trigger: string;
+  metrics_json: string;
+  observations_json: string;
+  recommendations_json: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v27): robustness drill record (§35). */
+export interface OrgChaosTest {
+  id: string;
+  kind: string;
+  target: string;
+  status: string;
+  result_json: string;
+  started_at: string;
+  finished_at?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Delegation {
   id: string;
   delegate_person_id?: string;

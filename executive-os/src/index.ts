@@ -19,6 +19,7 @@ import { SCHEMA_VERSION } from "./db/schema";
 import { buildToolRegistry } from "./agent/tools";
 import type { ToolRegistry } from "./core/tools/registry";
 import { runDoctor } from "./core/doctor";
+import { collectiveMetrics, runChaosTest, runOrgAnalyst } from "./core/org/intelligence";
 import { createTask } from "./core/tasks/model";
 import { hashPassword, timingSafeEqual, verifyPassword } from "./core/auth/passwords";
 import {
@@ -658,6 +659,13 @@ export class ExecutiveAgent {
     } catch {
       /* productivity maintenance must never break wake */
     }
+    // Organizational analyst (AOrgI §36): self-observation on every sweep —
+    // pure SQL computation, no model calls, cheap and safe.
+    try {
+      runOrgAnalyst(this.store, trigger);
+    } catch {
+      /* analyst must never break wake */
+    }
     // Start + resume long-horizon runs (bounded, "automate fixing"). Runs are
     // executed on EVERY maintenance sweep — on wake via state.waitUntil (keeps
     // the DO alive without blocking the request) so a run can never sit as a
@@ -806,6 +814,7 @@ export class ExecutiveAgent {
         negotiations: s.listOrgNegotiations(10),
         arbiters: s.listOrgArbiters(),
         reasoningTraces: s.listReasoningTraces({ limit: 20 }),
+        intelligence: collectiveMetrics(s),
       },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
@@ -1564,6 +1573,40 @@ export class ExecutiveAgent {
       const negotiation = this.store.arbitrateNegotiation(id, body.verdict, String(body.by_role ?? "role_coa"));
       if (!negotiation) return json({ error: "Negotiation not found or already resolved" }, 404);
       return json({ ok: true, negotiation });
+    }
+
+    // -- AOrgI Phase 4: collective intelligence + analyst + chaos drills --------
+    if (path === "/api/org/intelligence" && method === "GET") {
+      return json({
+        metrics: collectiveMetrics(this.store),
+        latestReport: this.store.latestAnalystReport(),
+        reports: this.store.listAnalystReports(20),
+      });
+    }
+    if (path === "/api/org/analyst/run" && method === "POST") {
+      const report = runOrgAnalyst(this.store, "manual");
+      return json({ ok: true, report });
+    }
+    if (path === "/api/org/chaos-tests" && method === "GET") {
+      return json({ tests: this.store.listChaosTests(50) });
+    }
+    if (path === "/api/org/chaos-tests/run" && method === "POST") {
+      const body = (await readBody<{ kind?: string; target?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.kind || typeof body.kind !== "string") return json({ error: "kind required (agent_kill_sim | grant_degrade)" }, 400);
+      if (!body.target || typeof body.target !== "string") return json({ error: "target agent id required" }, 400);
+      const outcome = runChaosTest(this.store, body.kind, body.target);
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: "org.chaos_test.run",
+        entity_type: "org_chaos_tests",
+        entity_id: body.target,
+        detail_json: JSON.stringify({ kind: body.kind, outcome }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, outcome });
     }
 
     // ---------------------------------------------------------------------
