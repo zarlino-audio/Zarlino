@@ -1,7 +1,7 @@
 # AOrgI Retrofit Plan — Zarlino Artificial Organization (v1)
 
-Status: **PHASE 1 + 2 + 3 OPERATIONAL (deployed 2026-09-06, versions bd9b89d4 → 0fcedfa6 → 2dbacc3c) → PHASE 4 NEXT** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
-Architecture version: AOrgI-1.0 · Date: 2026-09-06 · Owner: Chief Operating Agent (COA) — first runtime instance.
+Status: **PHASE 1–4 OPERATIONAL (deployed 2026-09-06/07/08: bd9b89d4 → 0fcedfa6 → 2dbacc3c → c6a1ec99 → b932a4a7 → 2cf580cf) + PHASES 1–3 AUDIT FIXED → PHASE 5 NEXT** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
+Architecture version: AOrgI-1.0 · Date: 2026-09-08 · Owner: Chief Operating Agent (COA) — first runtime instance.
 
 ---
 
@@ -50,7 +50,7 @@ Today exactly **two runtimes exist**: `executive_do_01` (cloud DO, performs the 
 - **PHASE 1 (now):** org state = registry + manifests + task contracts. `departments`, `org_roles` (12 role manifests: id, department, lineage_id, model, autonomy default, capabilities, obligations, critic_role), `org_agents` (instance registry w/ heartbeat = real liveness), task-contract columns on `tasks`. Doctor check `org.registry`. REST `/api/org/*`. Tests. → **Implementation below.**
 - **PHASE 2 (done):** versioned organizational memory writes + episodic `PostObjectiveRecord`; trust (agent×capability) evidence; critic lineage discounting; message contracts for the DO↔daemon pair.
 - **PHASE 3 (done):** per-capability autonomy grants (CapabilityGrant over the authority engine); hierarchical plans + deviation events; negotiation/arbitration (protocol + engine; live arbitration only after ≥2 peer instances exist).
-- **PHASE 4:** collective-intelligence metrics (emergence/convergence/robustness/scalability/objective-achievement), chaos tests in staging, organizational analyst job.
+- **PHASE 4 (done):** collective-intelligence metrics (emergence/convergence/robustness/scalability/objective-achievement), chaos tests in staging, organizational analyst job.
 - **PHASE 5:** autonomous topology optimization (deferred until trust + metrics exist).
 
 ## 5. Phase 1 implementation record
@@ -94,6 +94,34 @@ Phase 2 notes: trust/message rows populate with real daemon work, not seeds (§4
 | Doctor check `org.capability.coverage` (uncovered roles = fully blocked instances) | **OPERATIONAL** (doctor now 22 checks) |
 | REST `/api/org/capabilities|plans|plan-steps|arbiters|negotiations` + `org` bundle extended | **OPERATIONAL** |
 | Tests | 102/102 vitest (11 new in `test/org-phase3.test.ts`), tsc clean, bundle clean |
+
+## 5d. Phases 1–3 audit + fixes (migration v26, deployed 2026-09-07 as `c6a1ec99`)
+
+Found and fixed before Phase 4 (user-mandated review):
+
+| Gap found | Fix |
+|---|---|
+| §13 reasoning trace promised but never built | `reasoning_traces` table + REST + real emission: every arbitration records a trace with the actual rounds as evidence (never chain-of-thought) |
+| §11 BLOCK→LOG→ESCALATE incomplete (gate escalated but did not log) | Capability gate now audits every DENY/REVIEW before the ESCALATION message |
+| §14 version mismatch ended at 409, never routed to arbitration | Memory conflicts now emit an ESCALATION message to the governance arbiter |
+| §9/§20 `prompt_lineage_id` missing from manifests | Column added + backfilled on all 12 roles |
+| §18 substantial tasks with no contract unenforced | Doctor `org.task_contracts` (WARN; live: flags `tsk_zscorch_gate10`, `tsk_ztame_signing`) |
+| §23 arbitration stalls with no alert | Doctor `org.negotiations_stale` (ARBITRATED >24h or OPEN >72h → WARN) |
+| Daemon-side capability enforcement | Documented limitation: the daemon loop consults grants only for its registered role; local-tool enforcement is a future daemon rework |
+
+Tests: 107/107 (5 new in `test/org-audit-fixes.test.ts`).
+
+## 5e. Phase 4 implementation record (migration v27, deployed 2026-09-07/08 as `b932a4a7` + `2cf580cf`)
+
+| Component | Status |
+|---|---|
+| `collectiveMetrics()` — convergence (rounds/caps/stalls), scalability (messages per completed task), robustness (drills/doctor health/agent liveness), objective achievement (records vs completed), emergence (analyst observations); proxy divergence honestly null until per-objective proxy pairs exist | **OPERATIONAL** (live via `/api/org/intelligence`) |
+| Organizational analyst — runs on every maintenance sweep (wake/cron), writes `org_analyst_reports` with observations + recommendations; doctor `org.analyst.fresh` enforces self-observation | **OPERATIONAL** — live report (trigger `wake`) recommended the chaos drill that was then run |
+| Chaos drills — `agent_kill_sim` + `grant_degrade`, guarded: production instances REFUSED (§35), probes (`source=chaos`) auto-cleaned, results recorded | **OPERATIONAL** — live: `agent_kill_sim` on `local_daemon_01` REFUSED (guard works); on `chaos_probe_live_01` PASSED with fallback detection verified + cleanup |
+| `POST /api/org/agents` — explicit instance registration (probes + non-heartbeat instances) | **OPERATIONAL** |
+| Tests | 114/114 vitest (7 new in `test/org-phase4.test.ts`), tsc clean, bundle clean |
+
+Known limitation (honest): chaos drills are simulation-level (liveness + fail-closed checks) — full tool-degradation/monitoring-suppression drills need a staging environment that does not exist yet.
 
 ## 6. First organizational objective after Phase 1
 
