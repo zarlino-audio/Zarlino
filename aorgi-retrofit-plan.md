@@ -1,6 +1,6 @@
 # AOrgI Retrofit Plan — Zarlino Artificial Organization (v1)
 
-Status: **PHASE 1–4 OPERATIONAL (deployed 2026-09-06/07/08: bd9b89d4 → 0fcedfa6 → 2dbacc3c → c6a1ec99 → b932a4a7 → 2cf580cf) + PHASES 1–3 AUDIT FIXED → PHASE 5 NEXT** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
+Status: **ALL PHASES 1–5 OPERATIONAL (final: 0f2ec577, 2026-09-08) — AOrgI-1.0 retrofit COMPLETE** · Source of truth: `aoi-technical-spec.md` + AOrgI Master System Instruction.
 Architecture version: AOrgI-1.0 · Date: 2026-09-08 · Owner: Chief Operating Agent (COA) — first runtime instance.
 
 ---
@@ -51,7 +51,7 @@ Today exactly **two runtimes exist**: `executive_do_01` (cloud DO, performs the 
 - **PHASE 2 (done):** versioned organizational memory writes + episodic `PostObjectiveRecord`; trust (agent×capability) evidence; critic lineage discounting; message contracts for the DO↔daemon pair.
 - **PHASE 3 (done):** per-capability autonomy grants (CapabilityGrant over the authority engine); hierarchical plans + deviation events; negotiation/arbitration (protocol + engine; live arbitration only after ≥2 peer instances exist).
 - **PHASE 4 (done):** collective-intelligence metrics (emergence/convergence/robustness/scalability/objective-achievement), chaos tests in staging, organizational analyst job.
-- **PHASE 5:** autonomous topology optimization (deferred until trust + metrics exist).
+- **PHASE 5 (done):** autonomous topology optimization — evidence-backed proposals, founder decisions, runtime-confirmed APPLICATION.
 
 ## 5. Phase 1 implementation record
 
@@ -122,6 +122,23 @@ Tests: 107/107 (5 new in `test/org-audit-fixes.test.ts`).
 | Tests | 114/114 vitest (7 new in `test/org-phase4.test.ts`), tsc clean, bundle clean |
 
 Known limitation (honest): chaos drills are simulation-level (liveness + fail-closed checks) — full tool-degradation/monitoring-suppression drills need a staging environment that does not exist yet.
+
+## 5f. Round-2 audit (1–4 before 5, migration v28) + Phase 5 (v29) — deployed 2026-09-08 (`499a0fda`, `0f2ec577`)
+
+Round-2 gaps found and fixed:
+
+| Gap | Fix |
+|---|---|
+| §30 DefinitionOfDone was never an explicit artifact | Seeded as versioned `org_memory` entry + `/api/org/definition-of-done` + doctor `org.dod` |
+| §15/§31 incidents absent from the blackboard | `org_incidents` + response-loop statuses (OPEN→CONTAINED→RESOLVED with timestamps) + doctor `org.incidents_open` + REST; seeded with the 2 REAL open failures |
+| §32 bottleneck detection not measured | Analyst now measures arrival/throughput/queue depth/decision latency/verification latency and flags queue growth |
+| §35 convergence decision-quality not measured | `decisionsRendered` + `avgResolutionHours` added |
+
+Phase 5 — autonomous topology optimization:
+
+- `org_topology_proposals`: instantiate/replicate proposals from MEASURED demand (pending work by role with zero instances; local queue depth), idempotent, founder-decided (approve/reject), and APPLIED only when a real runtime registers (§33 — never a silent headcount change).
+- Live: the analyst immediately generated two REAL proposals — `instantiate role_qa_verification` (P8 verification pending, no instance) and `instantiate role_dsp_engineering` (P8 rework step owned, no instance). Both await founder decision.
+- Tests: 125/125 vitest (6 new in `test/org-phase5.test.ts`), tsc clean, bundle clean.
 
 ## 6. First organizational objective after Phase 1
 
