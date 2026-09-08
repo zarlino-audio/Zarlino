@@ -1211,6 +1211,23 @@ export class ExecutiveAgent {
     if (path === "/api/org/agents" && method === "GET") {
       return json({ agents: this.store.listOrgAgents() });
     }
+    if (path === "/api/org/agents" && method === "POST") {
+      // Register an agent instance explicitly. Runtime heartbeats register
+      // themselves; this route exists for chaos probes and future instances
+      // that cannot heartbeat (e.g., one-shot workers).
+      const body = (await readBody<{ id?: string; role_id?: string; kind?: string; model?: string; source?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.id || typeof body.id !== "string") return json({ error: "id required" }, 400);
+      if (!body.role_id || typeof body.role_id !== "string") return json({ error: "role_id required" }, 400);
+      if (!this.store.getOrgRole(body.role_id)) return json({ error: "Unknown role_id" }, 400);
+      this.store.upsertOrgAgent({
+        id: body.id,
+        roleId: body.role_id,
+        kind: body.kind as string | undefined,
+        model: body.model as string | undefined,
+        source: body.source as string | undefined,
+      });
+      return json({ ok: true, agent: this.store.getOrgAgent(body.id) });
+    }
     if (path === "/api/org/task-contracts" && method === "GET") {
       return json({ contracts: this.store.listTaskContracts({ limit: 100 }) });
     }
