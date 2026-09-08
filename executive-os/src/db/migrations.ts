@@ -41,6 +41,7 @@ import {
   ORG_AUDIT_FIXES_SQL,
   ORG_PHASE4_SQL,
   ORG_PHASE_GAPS_SQL,
+  ORG_PHASE5_SQL,
 } from "./schema";
 import type { Sql } from "./sql";
 
@@ -148,6 +149,7 @@ export const MIGRATIONS: Migration[] = [
   { version: 26, name: "org_audit_fixes", sql: [ORG_AUDIT_FIXES_SQL] },
   { version: 27, name: "org_phase4", sql: [ORG_PHASE4_SQL] },
   { version: 28, name: "org_phase_gaps", sql: [ORG_PHASE_GAPS_SQL] },
+  { version: 29, name: "org_phase5", sql: [ORG_PHASE5_SQL] },
 ];
 
 /** Latest schema version this code knows how to migrate to. */

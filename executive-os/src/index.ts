@@ -817,6 +817,7 @@ export class ExecutiveAgent {
         intelligence: collectiveMetrics(s),
         incidents: s.listOrgIncidents({ limit: 50 }),
         definitionOfDone: s.getDefinitionOfDone(),
+        topology: s.listTopologyProposals({ limit: 20 }),
       },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
@@ -1656,6 +1657,36 @@ export class ExecutiveAgent {
     if (path === "/api/org/definition-of-done" && method === "GET") {
       const dod = this.store.getDefinitionOfDone();
       return dod ? json({ ok: true, dod }) : json({ ok: false, error: "No DefinitionOfDone in org memory" }, 404);
+    }
+
+    // -- AOrgI Phase 5: topology proposals -------------------------------------
+    if (path === "/api/org/topology" && method === "GET") {
+      const status = url.searchParams.get("status") ?? undefined;
+      return json({ proposals: this.store.listTopologyProposals({ status: status ?? undefined, limit: 100 }) });
+    }
+    const topologyDecide = /^\/api\/org\/topology\/([^/]+)\/decide$/.exec(path);
+    if (topologyDecide && method === "POST") {
+      const id = decodeURIComponent(topologyDecide[1]!);
+      const body = (await readBody<{ decision?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      const decision = String(body.decision ?? "").toLowerCase();
+      if (!["approve", "reject"].includes(decision)) return json({ error: "decision must be approve | reject" }, 400);
+      const proposal = this.store.updateTopologyProposal(id, {
+        status: decision === "approve" ? "APPROVED" : "REJECTED",
+        decidedBy: "founder",
+      });
+      if (!proposal) return json({ error: "Proposal not found" }, 404);
+      this.store.insertAudit({
+        id: newId("aud"),
+        actor: "founder",
+        action: `org.topology.${decision}`,
+        entity_type: "org_topology_proposals",
+        entity_id: id,
+        detail_json: JSON.stringify({ kind: proposal.kind, role_id: proposal.role_id }),
+        source: "api",
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      });
+      return json({ ok: true, proposal });
     }
 
     // ---------------------------------------------------------------------

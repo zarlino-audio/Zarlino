@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 29;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1777,4 +1777,31 @@ INSERT OR IGNORE INTO org_memory
 VALUES ('orgm_dod_seed_v1', 'definition_of_done',
  '{"functional_requirements":"pass","acceptance_tests":"pass","regression":"pass","critical_defects":0,"blocking_defects":0,"governance":"pass","deployment":"verified","documentation":"complete","commercial_requirements":"complete","rule":"Do not extend work merely because something could theoretically be improved; remaining non-material issues are recorded for a future version."}',
  1, 'migration', NULL, NULL, 'ACTIVE', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+`;
+
+/**
+ * AOrgI Phase 5 (migration v29) — autonomous topology optimization (§33).
+ *
+ * org_topology_proposals: evidence-backed topology changes proposed by the
+ * organizational analyst — instantiate / replicate / merge. Proposals are
+ * DECISIONS FOR THE FOUNDER: the system proposes with evidence, a human
+ * approves/rejects, and APPLIED is only recorded when reality confirms it
+ * (a real runtime registers for the role). Never a silent headcount change.
+ */
+export const ORG_PHASE5_SQL = `
+CREATE TABLE IF NOT EXISTS org_topology_proposals (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  role_id TEXT,
+  rationale TEXT NOT NULL,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'PROPOSED',
+  decided_by TEXT,
+  decided_at TEXT,
+  source TEXT NOT NULL DEFAULT 'analyst',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_topology_status ON org_topology_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_org_topology_role ON org_topology_proposals(role_id);
 `;

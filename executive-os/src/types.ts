@@ -573,6 +573,21 @@ export interface OrgIncident {
   updated_at: string;
 }
 
+/** AOrgI (migration v29): evidence-backed topology proposal (§33). */
+export interface OrgTopologyProposal {
+  id: string;
+  kind: string;
+  role_id?: string;
+  rationale: string;
+  evidence_json: string;
+  status: string;
+  decided_by?: string;
+  decided_at?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Delegation {
   id: string;
   delegate_person_id?: string;

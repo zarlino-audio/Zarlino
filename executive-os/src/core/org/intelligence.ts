@@ -16,6 +16,7 @@
 
 import type { ExecutiveStore } from "../../db/store";
 import type { OrgAnalystReport } from "../../types";
+import { applyTopologyDetection, proposeTopology } from "./topology";
 
 export interface CollectiveMetrics {
   generatedAt: string;
@@ -241,6 +242,24 @@ export function runOrgAnalyst(store: ExecutiveStore, trigger: string): OrgAnalys
   }
   if (c.decisionsRendered > 0 && c.avgResolutionHours !== null && c.avgResolutionHours > 48) {
     recommendations.push(`Negotiation→arbitration averages ${c.avgResolutionHours.toFixed(1)}h — check arbitration turnaround (§35 decision quality).`);
+  }
+
+  // Phase 5: topology optimization from measured demand — proposals only,
+  // never silent changes; APPLIED is confirmed by real runtime registration.
+  try {
+    const proposed = proposeTopology(store);
+    const applied = applyTopologyDetection(store);
+    if (proposed.length > 0) {
+      observations.push(
+        `Topology (§33): ${proposed.length} evidence-backed proposal(s) generated — ${proposed.map((p) => `${p.kind}:${p.role_id ?? "n/a"}`).join(", ")}.`,
+      );
+      recommendations.push("Review topology proposals via /api/org/topology — approve only if the measured demand justifies it (§8, §33).");
+    }
+    if (applied.length > 0) {
+      observations.push(`Topology (§33): ${applied.length} approved proposal(s) confirmed APPLIED by real runtime registration.`);
+    }
+  } catch {
+    /* topology proposal generation must never break the analyst */
   }
 
   return store.createAnalystReport({

@@ -53,6 +53,7 @@ import type {
   OrgPlanDeviation,
   OrgPlanStep,
   OrgRole,
+  OrgTopologyProposal,
   OrgTrust,
   PerceptualEvaluator,
   PerceptualKnowledge,
@@ -1119,6 +1120,54 @@ export class ExecutiveStore implements CostStorage {
     } catch {
       return null;
     }
+  }
+
+  // -- AOrgI Phase 5: topology proposals (v29) ---------------------------------
+  createTopologyProposal(input: {
+    kind: string;
+    roleId?: string;
+    rationale: string;
+    evidence?: unknown;
+    source?: string;
+  }): OrgTopologyProposal {
+    const now = new Date().toISOString();
+    const p: OrgTopologyProposal = {
+      id: newId("topo"),
+      kind: input.kind,
+      role_id: input.roleId ?? undefined,
+      rationale: input.rationale,
+      evidence_json: JSON.stringify(input.evidence ?? []),
+      status: "PROPOSED",
+      decided_by: undefined,
+      decided_at: undefined,
+      source: input.source ?? "analyst",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_topology_proposals", p);
+    return p;
+  }
+  listTopologyProposals(opts: { status?: string; limit?: number } = {}): OrgTopologyProposal[] {
+    let sql = "SELECT * FROM org_topology_proposals";
+    const params: SqlParam[] = [];
+    if (opts.status) { sql += " WHERE status = ?"; params.push(opts.status); }
+    sql += " ORDER BY created_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgTopologyProposal>(r));
+  }
+  getTopologyProposal(id: string): OrgTopologyProposal | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_topology_proposals WHERE id = ?", id);
+    return rows[0] ? rowTo<OrgTopologyProposal>(rows[0]) : null;
+  }
+  updateTopologyProposal(id: string, patch: { status: string; decidedBy?: string }): OrgTopologyProposal | null {
+    const existing = this.getTopologyProposal(id);
+    if (!existing) return null;
+    const now = new Date().toISOString();
+    this.sql.run(
+      "UPDATE org_topology_proposals SET status = ?, decided_by = COALESCE(?, decided_by), decided_at = ?, updated_at = ? WHERE id = ?",
+      patch.status, patch.decidedBy ?? null, now, now, id,
+    );
+    return this.getTopologyProposal(id);
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -2694,6 +2743,7 @@ export const SNAPSHOT_TABLES = [
   "reasoning_traces",
   "org_analyst_reports", "org_chaos_tests",
   "org_incidents",
+  "org_topology_proposals",
 ];
 
 function rowTo<T>(row: Row | undefined): T {
