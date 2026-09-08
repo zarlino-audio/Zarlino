@@ -25,6 +25,18 @@ export interface CollectiveMetrics {
     avgRoundsToResolve: number | null;
     cappedDebates: number;
     stalled: number;
+    decisionsRendered: number;
+    avgResolutionHours: number | null;
+  };
+  bottlenecks: {
+    openTasks: number;
+    pendingLocalTasks: number;
+    tasksCreated7d: number;
+    tasksDone7d: number;
+    queueGrowth7d: number;
+    decisionLatencyAvgDays: number | null;
+    verificationPending: number;
+    verificationAgeAvgHours: number | null;
   };
   scalability: {
     messagesTotal: number;
@@ -70,6 +82,8 @@ export function collectiveMetrics(store: ExecutiveStore): CollectiveMetrics {
   const avgRounds = resolved.length > 0 ? rounds.reduce((a, b) => a + b, 0) / resolved.length : null;
   const capped = resolved.filter((n) => n.round >= n.max_rounds).length;
   const stalled = negotiations.filter((n) => n.status === "ARBITRATED" || n.status === "OPEN").length;
+  const resolutionHours = resolved.map((n) => (Date.parse(n.updated_at) - Date.parse(n.created_at)) / 3_600_000);
+  const avgResolutionHours = resolutionHours.length > 0 ? resolutionHours.reduce((a, b) => a + b, 0) / resolutionHours.length : null;
 
   const messages = store.listOrgMessages({ limit: 2000 });
   const tasks = store.listTasks({ limit: 1000 });
@@ -77,6 +91,20 @@ export function collectiveMetrics(store: ExecutiveStore): CollectiveMetrics {
   const doneIds = new Set(done.map((t) => t.id));
   const completedWithMessages = done.filter((t) => messages.some((m) => m.task_id === t.id)).length;
   void doneIds; // reserved for future per-task coordination analysis
+
+  // §32 bottleneck measurement: arrival, throughput, queue depth, latencies.
+  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const openTasks = tasks.filter((t) => t.status !== "DONE").length;
+  const pendingLocalTasks = store.listLocalTasks(500).filter((t) => t.status === "PENDING").length;
+  const tasksCreated7d = tasks.filter((t) => Date.parse(t.created_at) >= weekAgo).length;
+  const done7d = done.filter((t) => t.completed_at && Date.parse(t.completed_at) >= weekAgo);
+  const latencyDays = done
+    .filter((t) => t.completed_at)
+    .map((t) => (Date.parse(t.completed_at!) - Date.parse(t.created_at)) / 86_400_000);
+  const decisionLatencyAvg = latencyDays.length > 0 ? latencyDays.reduce((a, b) => a + b, 0) / latencyDays.length : null;
+  const pendingReviews = store.listReviewItems({ status: "PENDING", limit: 200 });
+  const reviewAges = pendingReviews.map((r) => (now - Date.parse(r.created_at)) / 3_600_000);
+  const verificationAgeAvg = reviewAges.length > 0 ? reviewAges.reduce((a, b) => a + b, 0) / reviewAges.length : null;
 
   const chaos = store.listChaosTests(500);
   const doctor = store.latestDoctorLog();
@@ -109,6 +137,18 @@ export function collectiveMetrics(store: ExecutiveStore): CollectiveMetrics {
       avgRoundsToResolve: avgRounds,
       cappedDebates: capped,
       stalled,
+      decisionsRendered: resolved.length,
+      avgResolutionHours,
+    },
+    bottlenecks: {
+      openTasks,
+      pendingLocalTasks,
+      tasksCreated7d,
+      tasksDone7d: done7d.length,
+      queueGrowth7d: tasksCreated7d - done7d.length,
+      decisionLatencyAvgDays: decisionLatencyAvg,
+      verificationPending: pendingReviews.length,
+      verificationAgeAvgHours: verificationAgeAvg,
     },
     scalability: {
       messagesTotal: messages.length,
@@ -177,6 +217,31 @@ export function runOrgAnalyst(store: ExecutiveStore, trigger: string): OrgAnalys
     `Objective achievement: ${o.completedWithRecord}/${o.completed || 0} completed objectives recorded. Proxy divergence: not yet measurable (no per-objective proxy/true metric pairs defined — honest null, §35).`,
   );
   observations.push(`Emergence: ${metrics.emergence.observationsRecorded} observation(s) recorded across analyst reports.`);
+
+  // §32 bottleneck observation: arrival > throughput means the queue grows.
+  const b = metrics.bottlenecks;
+  if (b.queueGrowth7d > 0) {
+    observations.push(
+      `Bottleneck (§32): task arrival exceeds throughput (${b.tasksCreated7d} created vs ${b.tasksDone7d} done in 7d; ${b.openTasks} open).`,
+    );
+    recommendations.push(
+      "Consider the §32 options in order: parallelize, delegate, reduce scope, change workflow, increase capability, then instantiate another role instance.",
+    );
+  }
+  if (b.pendingLocalTasks > 0) {
+    observations.push(`Bottleneck (§32): ${b.pendingLocalTasks} local task(s) queued for the on-machine daemon.`);
+  }
+  if (b.verificationPending > 0) {
+    observations.push(
+      `Verification latency: ${b.verificationPending} review item(s) pending${b.verificationAgeAvgHours !== null ? `, avg age ${b.verificationAgeAvgHours.toFixed(1)}h` : ""}.`,
+    );
+  }
+  if (b.decisionLatencyAvgDays !== null && b.decisionLatencyAvgDays > 3) {
+    recommendations.push(`Decision latency averages ${b.decisionLatencyAvgDays.toFixed(1)} days — review the decision paths (§32).`);
+  }
+  if (c.decisionsRendered > 0 && c.avgResolutionHours !== null && c.avgResolutionHours > 48) {
+    recommendations.push(`Negotiation→arbitration averages ${c.avgResolutionHours.toFixed(1)}h — check arbitration turnaround (§35 decision quality).`);
+  }
 
   return store.createAnalystReport({
     generatedAt: metrics.generatedAt,

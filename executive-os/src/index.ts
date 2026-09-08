@@ -815,6 +815,8 @@ export class ExecutiveAgent {
         arbiters: s.listOrgArbiters(),
         reasoningTraces: s.listReasoningTraces({ limit: 20 }),
         intelligence: collectiveMetrics(s),
+        incidents: s.listOrgIncidents({ limit: 50 }),
+        definitionOfDone: s.getDefinitionOfDone(),
       },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
@@ -1624,6 +1626,36 @@ export class ExecutiveAgent {
         updated_at: nowIso(),
       });
       return json({ ok: true, outcome });
+    }
+
+    // -- AOrgI round-2 fixes: incidents + DefinitionOfDone ---------------------
+    if (path === "/api/org/incidents" && method === "GET") {
+      const status = url.searchParams.get("status") ?? undefined;
+      return json({ incidents: this.store.listOrgIncidents({ status: status ?? undefined, limit: 100 }) });
+    }
+    if (path === "/api/org/incidents" && method === "POST") {
+      const body = (await readBody<{ title?: string; severity?: string; description?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!body.title || typeof body.title !== "string" || !body.title.trim()) return json({ error: "title required" }, 400);
+      const incident = this.store.createOrgIncident({
+        title: body.title.trim(),
+        severity: body.severity as string | undefined,
+        description: body.description as string | undefined,
+        source: "founder",
+      });
+      return json({ ok: true, incident });
+    }
+    const incidentStatus = /^\/api\/org\/incidents\/([^/]+)\/status$/.exec(path);
+    if (incidentStatus && method === "POST") {
+      const id = decodeURIComponent(incidentStatus[1]!);
+      const body = (await readBody<{ status?: string; resolution?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
+      if (!["OPEN", "CONTAINED", "RESOLVED"].includes(String(body.status ?? ""))) return json({ error: "status must be OPEN | CONTAINED | RESOLVED" }, 400);
+      const incident = this.store.updateOrgIncidentStatus(id, String(body.status) as never, body.resolution as string | undefined);
+      if (!incident) return json({ error: "Incident not found" }, 404);
+      return json({ ok: true, incident });
+    }
+    if (path === "/api/org/definition-of-done" && method === "GET") {
+      const dod = this.store.getDefinitionOfDone();
+      return dod ? json({ ok: true, dod }) : json({ ok: false, error: "No DefinitionOfDone in org memory" }, 404);
     }
 
     // ---------------------------------------------------------------------

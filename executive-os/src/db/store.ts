@@ -43,6 +43,7 @@ import type {
   OrgAnalystReport,
   OrgCapabilityGrant,
   OrgChaosTest,
+  OrgIncident,
   OrgMemory,
   OrgMessage,
   OrgMessageType,
@@ -1053,6 +1054,71 @@ export class ExecutiveStore implements CostStorage {
   }
   deleteCapabilityGrant(id: string): void {
     this.sql.run("DELETE FROM org_capability_grants WHERE id = ?", id);
+  }
+
+  // -- AOrgI Phase 1–4 round-2 fixes: incidents (v28) --------------------------
+  createOrgIncident(input: {
+    title: string;
+    severity?: string;
+    description?: string;
+    source?: string;
+  }): OrgIncident {
+    const now = new Date().toISOString();
+    const incident: OrgIncident = {
+      id: newId("inc"),
+      title: input.title,
+      severity: input.severity ?? "MEDIUM",
+      status: "OPEN",
+      description: input.description ?? "",
+      resolution: undefined,
+      detected_at: now,
+      contained_at: undefined,
+      resolved_at: undefined,
+      source: input.source ?? "system",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("org_incidents", incident);
+    return incident;
+  }
+  listOrgIncidents(opts: { status?: string; limit?: number } = {}): OrgIncident[] {
+    let sql = "SELECT * FROM org_incidents";
+    const params: SqlParam[] = [];
+    if (opts.status) { sql += " WHERE status = ?"; params.push(opts.status); }
+    sql += " ORDER BY created_at DESC";
+    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
+    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgIncident>(r));
+  }
+  getOrgIncident(id: string): OrgIncident | null {
+    const rows = this.sql.all<Row>("SELECT * FROM org_incidents WHERE id = ?", id);
+    return rows[0] ? rowTo<OrgIncident>(rows[0]) : null;
+  }
+
+  /** Status transition — timestamps track the response loop (§31). */
+  updateOrgIncidentStatus(id: string, status: "OPEN" | "CONTAINED" | "RESOLVED", resolution?: string): OrgIncident | null {
+    const existing = this.getOrgIncident(id);
+    if (!existing) return null;
+    const now = new Date().toISOString();
+    this.sql.run(
+      `UPDATE org_incidents SET status = ?,
+         contained_at = CASE WHEN ? = 'CONTAINED' THEN COALESCE(contained_at, ?) ELSE contained_at END,
+         resolved_at = CASE WHEN ? = 'RESOLVED' THEN ? ELSE resolved_at END,
+         resolution = COALESCE(?, resolution),
+         updated_at = ? WHERE id = ?`,
+      status, status, now, status, now, resolution ?? null, now, id,
+    );
+    return this.getOrgIncident(id);
+  }
+
+  /** The explicit DefinitionOfDone (§30), from versioned org memory. */
+  getDefinitionOfDone(): { id: string; value: Record<string, unknown>; version: number } | null {
+    const entry = this.listOrgMemory({ limit: 500 }).find((m) => m.key === "definition_of_done" && m.status === "ACTIVE");
+    if (!entry) return null;
+    try {
+      return { id: entry.id, value: JSON.parse(entry.value_json) as Record<string, unknown>, version: entry.version };
+    } catch {
+      return null;
+    }
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -2627,6 +2693,7 @@ export const SNAPSHOT_TABLES = [
   "org_negotiations", "org_negotiation_rounds", "org_arbiters",
   "reasoning_traces",
   "org_analyst_reports", "org_chaos_tests",
+  "org_incidents",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

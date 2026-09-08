@@ -557,6 +557,22 @@ export interface OrgChaosTest {
   updated_at: string;
 }
 
+/** AOrgI (migration v28): incident record for the blackboard + response loop (§15, §31). */
+export interface OrgIncident {
+  id: string;
+  title: string;
+  severity: string;
+  status: string;
+  description?: string;
+  resolution?: string;
+  detected_at: string;
+  contained_at?: string;
+  resolved_at?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Delegation {
   id: string;
   delegate_person_id?: string;

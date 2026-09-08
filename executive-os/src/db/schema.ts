@@ -11,7 +11,7 @@
  *   - tests (node:sqlite).
  */
 
-export const SCHEMA_VERSION = 27;
+export const SCHEMA_VERSION = 28;
 
 /**
  * System Doctor (migration v17): persistent log of every Doctor run — what
@@ -1731,4 +1731,50 @@ CREATE TABLE IF NOT EXISTS org_chaos_tests (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_org_chaos_kind ON org_chaos_tests(kind);
+`;
+
+/**
+ * AOrgI Phases 1–4 audit (round 2) fixes (migration v28).
+ *
+ *  - org_incidents: the blackboard's `incidents` field (§15) and the incident
+ *    response record (§31: detect→classify→contain→…→restore→document). Seeded
+ *    with the two REAL open failures so the record matches reality.
+ *  - definition_of_done: the explicit organizational DefinitionOfDone (§30),
+ *    stored as versioned org_memory — a policy artifact, not a code constant.
+ */
+export const ORG_PHASE_GAPS_SQL = `
+CREATE TABLE IF NOT EXISTS org_incidents (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'MEDIUM',
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  description TEXT NOT NULL DEFAULT '',
+  resolution TEXT,
+  detected_at TEXT NOT NULL,
+  contained_at TEXT,
+  resolved_at TEXT,
+  source TEXT NOT NULL DEFAULT 'system',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_org_incidents_status ON org_incidents(status);
+
+-- Real, currently-open failures — recorded as incidents, not invented (§42).
+INSERT OR IGNORE INTO org_incidents
+ (id, title, severity, status, description, detected_at, source, created_at, updated_at) VALUES
+ ('inc_provider_balance', 'DeepSeek provider balance exhausted (HTTP 402)', 'HIGH', 'OPEN',
+  'Model calls fail with Insufficient-Balance; surfaced by doctor check provider.balance. Owner action: top up the DeepSeek account.',
+  strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'doctor', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+ ('inc_interrupted_runs', 'Interrupted long-horizon agent runs (restart orphans)', 'HIGH', 'OPEN',
+  'RUNNING agent jobs reaped as restart orphans accumulate; the maintenance sweep auto-resumes them, but the pile keeps recurring. Surfaced by doctor check jobs.interrupted_runs.',
+  strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'doctor', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+-- Explicit DefinitionOfDone (§30): functional requirements, acceptance tests,
+-- regression, zero critical/blocking defects, governance, verified deployment,
+-- complete documentation, commercial requirements.
+INSERT OR IGNORE INTO org_memory
+ (id, key, value_json, version, author, task_id, supersedes, status, source, created_at, updated_at)
+VALUES ('orgm_dod_seed_v1', 'definition_of_done',
+ '{"functional_requirements":"pass","acceptance_tests":"pass","regression":"pass","critical_defects":0,"blocking_defects":0,"governance":"pass","deployment":"verified","documentation":"complete","commercial_requirements":"complete","rule":"Do not extend work merely because something could theoretically be improved; remaining non-material issues are recorded for a future version."}',
+ 1, 'migration', NULL, NULL, 'ACTIVE', 'seed', strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'));
 `;
