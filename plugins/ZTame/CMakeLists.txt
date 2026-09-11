@@ -31,7 +31,7 @@ target_compile_definitions(ZTame
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
-        ZTAME_VERSION="1.0.0"
+        ZTAME_VERSION="1.1.0"
 )
 
 target_link_libraries(ZTame
@@ -186,6 +186,109 @@ target_compile_definitions(ZTame_Tests
 )
 
 target_link_libraries(ZTame_Tests
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+#==============================================================================
+# Offline A/B render lab: writes dry / processed / removed WAVs for a set of
+# demo sources so the before-after difference can be judged by ear.
+juce_add_console_app(ZTame_RenderLab)
+
+target_sources(ZTame_RenderLab
+    PRIVATE
+        Source/PluginProcessor.cpp
+        Source/PluginEditor.cpp
+        Tests/RenderLab.cpp
+)
+
+juce_generate_juce_header(ZTame_RenderLab)
+
+target_include_directories(ZTame_RenderLab
+    PRIVATE
+        Source
+        Tests
+        "${CMAKE_CURRENT_BINARY_DIR}/ZTame_artefacts/JuceLibraryCode"
+)
+
+target_compile_definitions(ZTame_RenderLab
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        ZTAME_VERSION="1.1.0"
+        JucePlugin_Name="ZTame"
+        JucePlugin_Desc="ZTame"
+        JucePlugin_Manufacturer="Zarlino Audio"
+        JucePlugin_ManufacturerCode=0x4b687269
+        JucePlugin_PluginCode=0x5a546d31
+        JucePlugin_IsSynth=0
+        JucePlugin_Build_VST3=0
+        JucePlugin_Build_Standalone=0
+        JucePlugin_Build_AU=0
+        JucePlugin_Build_AAX=0
+        JucePlugin_Build_LV2=0
+        JucePlugin_Build_Unity=0
+        JucePlugin_Build_VST=0
+        JUCE_SHARED_CODE=1
+)
+
+target_link_libraries(ZTame_RenderLab
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
+#==============================================================================
+# Offscreen editor snapshot: renders the real editor to a PNG for layout review.
+juce_add_console_app(ZTame_UiShot)
+
+target_sources(ZTame_UiShot
+    PRIVATE
+        Source/PluginProcessor.cpp
+        Source/PluginEditor.cpp
+        Tests/UiShot.cpp
+)
+
+juce_generate_juce_header(ZTame_UiShot)
+
+target_include_directories(ZTame_UiShot
+    PRIVATE
+        Source
+        Tests
+        "${CMAKE_CURRENT_BINARY_DIR}/ZTame_artefacts/JuceLibraryCode"
+)
+
+target_compile_definitions(ZTame_UiShot
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+        ZTAME_VERSION="1.1.0"
+        JucePlugin_Name="ZTame"
+        JucePlugin_Desc="ZTame"
+        JucePlugin_Manufacturer="Zarlino Audio"
+        JucePlugin_ManufacturerCode=0x4b687269
+        JucePlugin_PluginCode=0x5a546d31
+        JucePlugin_IsSynth=0
+        JucePlugin_Build_VST3=0
+        JucePlugin_Build_Standalone=0
+        JucePlugin_Build_AU=0
+        JucePlugin_Build_AAX=0
+        JucePlugin_Build_LV2=0
+        JucePlugin_Build_Unity=0
+        JucePlugin_Build_VST=0
+        JUCE_SHARED_CODE=1
+)
+
+target_link_libraries(ZTame_UiShot
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
