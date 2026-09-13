@@ -700,6 +700,17 @@ export interface ChatMessage {
   role: string;
   content: string;
   model?: string;
+  /** +1 / -1 founder feedback (migration v30); null/undefined = unrated. */
+  rating?: number | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Explicit, editable conversation title (migration v30). */
+export interface ChatSessionTitle {
+  session_id: string;
+  title: string;
   source: string;
   created_at: string;
   updated_at: string;

@@ -20,6 +20,7 @@ import type {
   AuditEvent,
   CalendarEvent,
   ChatMessage,
+  ChatSessionTitle,
   Contact,
   Contradiction,
   ContradictionStatus,
@@ -1503,31 +1504,115 @@ export class ExecutiveStore implements CostStorage {
     this.insert("chat_messages", m);
   }
   listChatMessages(sessionId: string, limit = 200): ChatMessage[] {
-    return this.sql.all<Row>("SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?", sessionId, limit).map((r) => rowTo<ChatMessage>(r));
+    return this.sql.all<Row>("SELECT * FROM chat_messages WHERE session_id = ? ORDER BY rowid ASC LIMIT ?", sessionId, limit).map((r) => rowTo<ChatMessage>(r));
+  }
+  /** The most recent `limit` messages of a session, oldest-first (model context). */
+  listChatMessagesTail(sessionId: string, limit = 40): ChatMessage[] {
+    return this.sql
+      .all<Row>("SELECT * FROM chat_messages WHERE session_id = ? ORDER BY rowid DESC LIMIT ?", sessionId, limit)
+      .map((r) => rowTo<ChatMessage>(r))
+      .reverse();
+  }
+  getChatMessage(id: string): ChatMessage | null {
+    const rows = this.sql.all<Row>("SELECT * FROM chat_messages WHERE id = ?", id);
+    return rows.length ? rowTo<ChatMessage>(rows[0]) : null;
+  }
+  /** Founder feedback on an assistant message (+1 / -1 / 0 to clear). */
+  rateChatMessage(id: string, rating: number): void {
+    this.sql.run(
+      "UPDATE chat_messages SET rating = ?, updated_at = ? WHERE id = ?",
+      rating === 0 ? null : rating, new Date().toISOString(), id,
+    );
+  }
+  /**
+   * Delete `messageId` and everything inserted after it in the same session
+   * (rowid order = insertion order). Used by edit-and-resend (gap 5) and
+   * regenerate (gap 4). Returns how many rows were removed.
+   */
+  truncateChatFrom(sessionId: string, messageId: string): number {
+    const rows = this.sql.all<Row>("SELECT rowid FROM chat_messages WHERE id = ? AND session_id = ?", messageId, sessionId);
+    if (!rows.length) return 0;
+    const from = Number(rows[0]!.rowid);
+    const target = this.sql.all<Row>("SELECT COUNT(*) AS c FROM chat_messages WHERE session_id = ? AND rowid >= ?", sessionId, from);
+    this.sql.run("DELETE FROM chat_messages WHERE session_id = ? AND rowid >= ?", sessionId, from);
+    return Number(target[0]?.c ?? 0);
+  }
+  /** The most recent assistant message in a session, if any. */
+  lastAssistantMessage(sessionId: string): ChatMessage | null {
+    const rows = this.sql.all<Row>(
+      "SELECT * FROM chat_messages WHERE session_id = ? AND role = 'assistant' ORDER BY rowid DESC LIMIT 1",
+      sessionId,
+    );
+    return rows.length ? rowTo<ChatMessage>(rows[0]) : null;
+  }
+  countChatMessages(sessionId: string): number {
+    const rows = this.sql.all<Row>("SELECT COUNT(*) AS c FROM chat_messages WHERE session_id = ?", sessionId);
+    return Number(rows[0]?.c ?? 0);
+  }
+  /**
+   * One page of a conversation, newest-last for display. `before` is an
+   * exclusive ISO cursor (return messages strictly older than it) — gap 14/23
+   * pagination, replacing the old hard 200-message cap.
+   */
+  listChatMessagesPage(sessionId: string, opts: { limit?: number; before?: string } = {}): { messages: ChatMessage[]; hasMore: boolean; total: number } {
+    const limit = Math.max(1, Math.min(300, opts.limit ?? 80));
+    const params: SqlParam[] = [sessionId];
+    let sql = "SELECT * FROM chat_messages WHERE session_id = ?";
+    if (opts.before) { sql += " AND created_at < ?"; params.push(opts.before); }
+    sql += " ORDER BY rowid DESC LIMIT ?";
+    params.push(limit + 1);
+    const rows = this.sql.all<Row>(sql, ...params).map((r) => rowTo<ChatMessage>(r));
+    const hasMore = rows.length > limit;
+    const messages = rows.slice(0, limit).reverse();
+    return { messages, hasMore, total: this.countChatMessages(sessionId) };
   }
 
-  /** Recent chat sessions (history), most recent first. */
-  listChatSessions(limit = 20): Array<{ session_id: string; message_count: number; last_at: string; last_message: string }> {
+  /** Recent chat sessions (history), most recent first, with explicit titles. */
+  listChatSessions(limit = 20, offset = 0): Array<{ session_id: string; message_count: number; last_at: string; last_message: string; title: string | null }> {
     return this.sql
       .all<Row>(
         `SELECT session_id, COUNT(*) AS message_count, MAX(created_at) AS last_at,
            (SELECT content FROM chat_messages AS inner_m
              WHERE inner_m.session_id = outer_m.session_id
-             ORDER BY inner_m.created_at DESC LIMIT 1) AS last_message
+             ORDER BY inner_m.rowid DESC LIMIT 1) AS last_message,
+           (SELECT title FROM chat_session_titles AS t
+             WHERE t.session_id = outer_m.session_id LIMIT 1) AS title
          FROM chat_messages AS outer_m
-         GROUP BY session_id ORDER BY last_at DESC LIMIT ?`,
+         GROUP BY session_id ORDER BY last_at DESC LIMIT ? OFFSET ?`,
         limit,
+        offset,
       )
       .map((r) => ({
         session_id: String(r.session_id),
         message_count: Number(r.message_count),
         last_at: String(r.last_at),
         last_message: String(r.last_message ?? ""),
+        title: r.title == null ? null : String(r.title),
       }));
+  }
+  countChatSessions(): number {
+    const rows = this.sql.all<Row>("SELECT COUNT(DISTINCT session_id) AS c FROM chat_messages");
+    return Number(rows[0]?.c ?? 0);
+  }
+
+  // -- chat session titles (migration v30) --------------------------------
+  setChatSessionTitle(sessionId: string, title: string, source = "founder"): void {
+    const now = new Date().toISOString();
+    this.sql.run(
+      `INSERT INTO chat_session_titles (session_id, title, source, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(session_id) DO UPDATE SET title = excluded.title, source = excluded.source, updated_at = excluded.updated_at`,
+      sessionId, title, source, now, now,
+    );
+  }
+  getChatSessionTitle(sessionId: string): ChatSessionTitle | null {
+    const rows = this.sql.all<Row>("SELECT * FROM chat_session_titles WHERE session_id = ?", sessionId);
+    return rows.length ? rowTo<ChatSessionTitle>(rows[0]) : null;
   }
 
   clearChat(sessionId: string): void {
     this.sql.run("DELETE FROM chat_messages WHERE session_id = ?", sessionId);
+    this.sql.run("DELETE FROM chat_session_titles WHERE session_id = ?", sessionId);
   }
 
   // -- chat streams (migration v6 — buffered SSE deltas) ------------------
@@ -1541,6 +1626,17 @@ export class ExecutiveStore implements CostStorage {
     const rows = this.sql.all<Row>("SELECT chunks_json FROM chat_streams WHERE id = ?", id);
     const chunks = rows.length ? (JSON.parse(String(rows[0]!.chunks_json ?? "[]")) as string[]) : [];
     chunks.push(text);
+    this.sql.run(
+      "UPDATE chat_streams SET chunks_json = ?, updated_at = ? WHERE id = ?",
+      JSON.stringify(chunks), new Date().toISOString(), id,
+    );
+  }
+  /** Append several frames in one write (streaming batches — avoids O(n²) writes). */
+  appendChatStreamChunks(id: string, texts: string[]): void {
+    if (texts.length === 0) return;
+    const rows = this.sql.all<Row>("SELECT chunks_json FROM chat_streams WHERE id = ?", id);
+    const chunks = rows.length ? (JSON.parse(String(rows[0]!.chunks_json ?? "[]")) as string[]) : [];
+    for (const t of texts) chunks.push(t);
     this.sql.run(
       "UPDATE chat_streams SET chunks_json = ?, updated_at = ? WHERE id = ?",
       JSON.stringify(chunks), new Date().toISOString(), id,
