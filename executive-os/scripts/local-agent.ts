@@ -21,6 +21,7 @@
 import { exec as execRaw } from "node:child_process";
 import { promisify } from "node:util";
 import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { isToolCallSequenceError, repairToolCallSequence, trimTranscript } from "../src/core/transcript.js";
 
 // Async exec (promisified) — NEVER use execSync here: a long local command
 // (build, ctest, deploy) can run up to the 10-min timeout, and a blocking
@@ -788,6 +789,12 @@ export const TOOL_SCHEMAS = TOOLS.map((t) => ({
 
 // ---- model --------------------------------------------------------------------
 export async function callDeepSeek(messages: Array<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  // Never send a structurally invalid transcript: an assistant `tool_calls`
+  // message without one `tool` response per id is an instant HTTP 400
+  // ("An assistant message with 'tool_calls' must be followed by tool messages
+  // responding to each 'tool_call_id'"). No-op when already valid.
+  const repaired = repairToolCallSequence(messages);
+  if (repaired !== messages) messages.splice(0, messages.length, ...repaired);
   const res = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${API_KEY}`, "Content-Type": "application/json" },
@@ -907,7 +914,17 @@ export async function runTurn(
     const turnCalls = Math.min(perTurn, totalBudget - total);
     for (let i = 0; i < turnCalls; i++) {
       total++;
-      const reply = await callDeepSeek(messages);
+      let reply: Record<string, unknown>;
+      try {
+        reply = await callDeepSeek(messages);
+      } catch (err) {
+        // Self-heal a broken tool-call sequence and retry once — without this,
+        // one malformed transcript kills an hours-long task outright.
+        if (!isToolCallSequenceError(err)) throw err;
+        console.log("\x1b[33m⚠ transcript repair: retrying with a rebuilt tool-call sequence\x1b[0m");
+        messages.splice(0, messages.length, ...repairToolCallSequence(messages));
+        reply = await callDeepSeek(messages);
+      }
       messages.push(reply);
       const toolCalls = reply.tool_calls as Array<{ id: string; function: { name: string; arguments: string } }> | undefined;
       if (toolCalls && toolCalls.length > 0) {
@@ -928,10 +945,12 @@ export async function runTurn(
     }
     // Keep the conversation bounded: system + history + original prompt, then
     // the most recent exchange (drop the middle once it grows very large).
+    // The trim is tool-call-group aligned — a raw `slice(0, 20)` + `slice(-60)`
+    // could keep an assistant `tool_calls` message and drop its `tool`
+    // responses (or the reverse), which DeepSeek rejects with HTTP 400
+    // ("insufficient tool messages following tool_calls message").
     if (messages.length > 100) {
-      const head = messages.slice(0, 20);
-      const tail = messages.slice(-60);
-      messages.splice(0, messages.length, ...head, ...tail);
+      messages.splice(0, messages.length, ...trimTranscript(messages, { keepHead: 20, keepTail: 60 }));
     }
     console.log(`\x1b[33m↻ turn ${turn}: ${total}/${totalBudget} calls used, continuing…\x1b[0m`);
     messages.push({

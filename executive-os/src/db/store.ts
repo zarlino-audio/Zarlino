@@ -40,10 +40,7 @@ import type {
   Organization,
   OrgAgent,
   OrgArbiter,
-  OrgAnalystReport,
   OrgCapabilityGrant,
-  OrgChaosTest,
-  OrgIncident,
   OrgMemory,
   OrgMessage,
   OrgMessageType,
@@ -53,7 +50,6 @@ import type {
   OrgPlanDeviation,
   OrgPlanStep,
   OrgRole,
-  OrgTopologyProposal,
   OrgTrust,
   PerceptualEvaluator,
   PerceptualKnowledge,
@@ -69,7 +65,6 @@ import type {
   ProductivityMetric,
   ProductStatusRecord,
   Project,
-  ReasoningTrace,
   Reminder,
   ReviewItem,
   Risk,
@@ -383,7 +378,6 @@ export class ExecutiveStore implements CostStorage {
     version?: string;
     capabilitiesJson?: string;
     autonomyJson?: string;
-    source?: string;
   }): void {
     const now = new Date().toISOString();
     const existing = this.sql.all<Row>("SELECT id FROM org_agents WHERE id = ?", input.id);
@@ -400,7 +394,7 @@ export class ExecutiveStore implements CostStorage {
         capabilities_json: input.capabilitiesJson ?? "[]",
         autonomy_json: input.autonomyJson ?? "{}",
         started_at: now,
-        source: input.source ?? "runtime",
+        source: "runtime",
         created_at: now,
         updated_at: now,
       });
@@ -530,20 +524,6 @@ export class ExecutiveStore implements CostStorage {
     const existing = this.getOrgMemory(id);
     if (!existing) return { status: "not_found" };
     if (existing.version !== input.expectedVersion) {
-      // §14: VERSION MISMATCH → ARBITRATE. The conflict is escalated to the
-      // governance arbiter as a protocol message — it is never silent.
-      this.sendOrgMessage({
-        fromRole: input.author ?? "role_coa",
-        toRole: "role_finance_governance",
-        type: "ESCALATION",
-        taskId: existing.task_id,
-        payload: {
-          memoryId: id,
-          key: existing.key,
-          expectedVersion: input.expectedVersion,
-          currentVersion: existing.version,
-        },
-      });
       return { status: "conflict", record: existing };
     }
     const now = new Date().toISOString();
@@ -924,19 +904,6 @@ export class ExecutiveStore implements CostStorage {
       "UPDATE org_negotiations SET status = 'RESOLVED', verdict = ?, arbiter_role = COALESCE(?, arbiter_role), updated_at = ? WHERE id = ?",
       verdict, byRole, now, id,
     );
-    // §13: the arbiter's decision is a consequential one — record a reasoning
-    // trace with the actual evidence (the recorded rounds), never chain-of-thought.
-    const rounds = this.listNegotiationRounds(id).map((r) => ({ round: r.round, kind: r.kind, role: r.role, content: r.content }));
-    this.createReasoningTrace({
-      agentId: byRole || n.arbiter_role || "role_coa",
-      taskId: n.task_id,
-      mode: "arbitration",
-      evidence: rounds,
-      hypothesis: `Negotiation '${n.topic}' exhausted ${n.max_rounds} rounds.`,
-      confidence: null,
-      finalAction: verdict,
-      visibility: "internal",
-    });
     return this.getOrgNegotiation(id);
   }
 
@@ -946,228 +913,6 @@ export class ExecutiveStore implements CostStorage {
   getOrgArbiter(disagreementClass: string): OrgArbiter | null {
     const rows = this.sql.all<Row>("SELECT * FROM org_arbiters WHERE disagreement_class = ?", disagreementClass);
     return rows[0] ? rowTo<OrgArbiter>(rows[0]) : null;
-  }
-
-  // -- reasoning traces (AOrgI §13) -------------------------------------------
-  createReasoningTrace(input: {
-    agentId: string;
-    taskId?: string;
-    mode?: string;
-    evidence?: unknown;
-    hypothesis?: string;
-    confidence?: number | null;
-    finalAction?: string;
-    visibility?: "internal" | "reviewer" | "public";
-  }): ReasoningTrace {
-    const now = new Date().toISOString();
-    const trace: ReasoningTrace = {
-      id: newId("rt"),
-      agent_id: input.agentId,
-      task_id: input.taskId ?? undefined,
-      mode: input.mode ?? "decision",
-      evidence_json: JSON.stringify(input.evidence ?? []),
-      hypothesis: input.hypothesis ?? "",
-      confidence: input.confidence ?? undefined,
-      final_action: input.finalAction ?? "",
-      trace_visibility: input.visibility ?? "internal",
-      source: "system",
-      created_at: now,
-      updated_at: now,
-    };
-    this.insert("reasoning_traces", trace);
-    return trace;
-  }
-  listReasoningTraces(opts: { agentId?: string; taskId?: string; limit?: number } = {}): ReasoningTrace[] {
-    let sql = "SELECT * FROM reasoning_traces WHERE 1=1";
-    const params: SqlParam[] = [];
-    if (opts.agentId) { sql += " AND agent_id = ?"; params.push(opts.agentId); }
-    if (opts.taskId) { sql += " AND task_id = ?"; params.push(opts.taskId); }
-    sql += " ORDER BY created_at DESC";
-    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
-    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<ReasoningTrace>(r));
-  }
-
-  // -- AOrgI Phase 4: analyst reports + chaos tests (v27) ---------------------
-  createAnalystReport(input: {
-    generatedAt: string;
-    trigger: string;
-    metrics: unknown;
-    observations: unknown[];
-    recommendations: unknown[];
-  }): OrgAnalystReport {
-    const now = new Date().toISOString();
-    const report: OrgAnalystReport = {
-      id: newId("oar"),
-      generated_at: input.generatedAt,
-      trigger: input.trigger,
-      metrics_json: JSON.stringify(input.metrics),
-      observations_json: JSON.stringify(input.observations),
-      recommendations_json: JSON.stringify(input.recommendations),
-      source: "system",
-      created_at: now,
-      updated_at: now,
-    };
-    this.insert("org_analyst_reports", report);
-    return report;
-  }
-  listAnalystReports(limit = 20): OrgAnalystReport[] {
-    return this.sql.all<Row>("SELECT * FROM org_analyst_reports ORDER BY generated_at DESC LIMIT ?", limit).map((r) => rowTo<OrgAnalystReport>(r));
-  }
-  latestAnalystReport(): OrgAnalystReport | null {
-    const rows = this.sql.all<Row>("SELECT * FROM org_analyst_reports ORDER BY generated_at DESC LIMIT 1");
-    return rows[0] ? rowTo<OrgAnalystReport>(rows[0]) : null;
-  }
-
-  createChaosTest(input: { kind: string; target: string; source?: string }): OrgChaosTest {
-    const now = new Date().toISOString();
-    const t: OrgChaosTest = {
-      id: newId("chaos"),
-      kind: input.kind,
-      target: input.target,
-      status: "RUNNING",
-      result_json: "{}",
-      started_at: now,
-      finished_at: undefined,
-      source: input.source ?? "system",
-      created_at: now,
-      updated_at: now,
-    };
-    this.insert("org_chaos_tests", t);
-    return t;
-  }
-  finishChaosTest(id: string, status: "PASSED" | "FAILED" | "REFUSED", result: unknown): void {
-    const now = new Date().toISOString();
-    this.sql.run(
-      "UPDATE org_chaos_tests SET status = ?, result_json = ?, finished_at = ?, updated_at = ? WHERE id = ?",
-      status, JSON.stringify(result), now, now, id,
-    );
-  }
-  listChaosTests(limit = 50): OrgChaosTest[] {
-    return this.sql.all<Row>("SELECT * FROM org_chaos_tests ORDER BY started_at DESC LIMIT ?", limit).map((r) => rowTo<OrgChaosTest>(r));
-  }
-
-  /** Chaos primitives (guarded at the module level — never called raw). */
-  setOrgAgentLastSeen(id: string, iso: string): void {
-    this.sql.run("UPDATE org_agents SET last_seen = ?, updated_at = ? WHERE id = ?", iso, new Date().toISOString(), id);
-  }
-  deleteOrgAgent(id: string): void {
-    this.sql.run("DELETE FROM org_agents WHERE id = ?", id);
-  }
-  deleteCapabilityGrant(id: string): void {
-    this.sql.run("DELETE FROM org_capability_grants WHERE id = ?", id);
-  }
-
-  // -- AOrgI Phase 1–4 round-2 fixes: incidents (v28) --------------------------
-  createOrgIncident(input: {
-    title: string;
-    severity?: string;
-    description?: string;
-    source?: string;
-  }): OrgIncident {
-    const now = new Date().toISOString();
-    const incident: OrgIncident = {
-      id: newId("inc"),
-      title: input.title,
-      severity: input.severity ?? "MEDIUM",
-      status: "OPEN",
-      description: input.description ?? "",
-      resolution: undefined,
-      detected_at: now,
-      contained_at: undefined,
-      resolved_at: undefined,
-      source: input.source ?? "system",
-      created_at: now,
-      updated_at: now,
-    };
-    this.insert("org_incidents", incident);
-    return incident;
-  }
-  listOrgIncidents(opts: { status?: string; limit?: number } = {}): OrgIncident[] {
-    let sql = "SELECT * FROM org_incidents";
-    const params: SqlParam[] = [];
-    if (opts.status) { sql += " WHERE status = ?"; params.push(opts.status); }
-    sql += " ORDER BY created_at DESC";
-    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
-    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgIncident>(r));
-  }
-  getOrgIncident(id: string): OrgIncident | null {
-    const rows = this.sql.all<Row>("SELECT * FROM org_incidents WHERE id = ?", id);
-    return rows[0] ? rowTo<OrgIncident>(rows[0]) : null;
-  }
-
-  /** Status transition — timestamps track the response loop (§31). */
-  updateOrgIncidentStatus(id: string, status: "OPEN" | "CONTAINED" | "RESOLVED", resolution?: string): OrgIncident | null {
-    const existing = this.getOrgIncident(id);
-    if (!existing) return null;
-    const now = new Date().toISOString();
-    this.sql.run(
-      `UPDATE org_incidents SET status = ?,
-         contained_at = CASE WHEN ? = 'CONTAINED' THEN COALESCE(contained_at, ?) ELSE contained_at END,
-         resolved_at = CASE WHEN ? = 'RESOLVED' THEN ? ELSE resolved_at END,
-         resolution = COALESCE(?, resolution),
-         updated_at = ? WHERE id = ?`,
-      status, status, now, status, now, resolution ?? null, now, id,
-    );
-    return this.getOrgIncident(id);
-  }
-
-  /** The explicit DefinitionOfDone (§30), from versioned org memory. */
-  getDefinitionOfDone(): { id: string; value: Record<string, unknown>; version: number } | null {
-    const entry = this.listOrgMemory({ limit: 500 }).find((m) => m.key === "definition_of_done" && m.status === "ACTIVE");
-    if (!entry) return null;
-    try {
-      return { id: entry.id, value: JSON.parse(entry.value_json) as Record<string, unknown>, version: entry.version };
-    } catch {
-      return null;
-    }
-  }
-
-  // -- AOrgI Phase 5: topology proposals (v29) ---------------------------------
-  createTopologyProposal(input: {
-    kind: string;
-    roleId?: string;
-    rationale: string;
-    evidence?: unknown;
-    source?: string;
-  }): OrgTopologyProposal {
-    const now = new Date().toISOString();
-    const p: OrgTopologyProposal = {
-      id: newId("topo"),
-      kind: input.kind,
-      role_id: input.roleId ?? undefined,
-      rationale: input.rationale,
-      evidence_json: JSON.stringify(input.evidence ?? []),
-      status: "PROPOSED",
-      decided_by: undefined,
-      decided_at: undefined,
-      source: input.source ?? "analyst",
-      created_at: now,
-      updated_at: now,
-    };
-    this.insert("org_topology_proposals", p);
-    return p;
-  }
-  listTopologyProposals(opts: { status?: string; limit?: number } = {}): OrgTopologyProposal[] {
-    let sql = "SELECT * FROM org_topology_proposals";
-    const params: SqlParam[] = [];
-    if (opts.status) { sql += " WHERE status = ?"; params.push(opts.status); }
-    sql += " ORDER BY created_at DESC";
-    if (opts.limit) { sql += " LIMIT ?"; params.push(opts.limit); }
-    return this.sql.all<Row>(sql, ...params).map((r) => rowTo<OrgTopologyProposal>(r));
-  }
-  getTopologyProposal(id: string): OrgTopologyProposal | null {
-    const rows = this.sql.all<Row>("SELECT * FROM org_topology_proposals WHERE id = ?", id);
-    return rows[0] ? rowTo<OrgTopologyProposal>(rows[0]) : null;
-  }
-  updateTopologyProposal(id: string, patch: { status: string; decidedBy?: string }): OrgTopologyProposal | null {
-    const existing = this.getTopologyProposal(id);
-    if (!existing) return null;
-    const now = new Date().toISOString();
-    this.sql.run(
-      "UPDATE org_topology_proposals SET status = ?, decided_by = COALESCE(?, decided_by), decided_at = ?, updated_at = ? WHERE id = ?",
-      patch.status, patch.decidedBy ?? null, now, now, id,
-    );
-    return this.getTopologyProposal(id);
   }
 
   // -- perceptual intelligence (migration v22, specs/zarlino-artificial-organization.md)
@@ -2740,10 +2485,6 @@ export const SNAPSHOT_TABLES = [
   "org_memory", "post_objective_records", "org_trust", "org_messages",
   "org_capability_grants", "org_plans", "org_plan_steps", "org_plan_deviations",
   "org_negotiations", "org_negotiation_rounds", "org_arbiters",
-  "reasoning_traces",
-  "org_analyst_reports", "org_chaos_tests",
-  "org_incidents",
-  "org_topology_proposals",
 ];
 
 function rowTo<T>(row: Row | undefined): T {

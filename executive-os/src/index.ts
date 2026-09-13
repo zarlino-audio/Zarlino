@@ -19,7 +19,7 @@ import { SCHEMA_VERSION } from "./db/schema";
 import { buildToolRegistry } from "./agent/tools";
 import type { ToolRegistry } from "./core/tools/registry";
 import { runDoctor } from "./core/doctor";
-import { collectiveMetrics, runChaosTest, runOrgAnalyst } from "./core/org/intelligence";
+import { isToolCallSequenceError, repairToolCallSequence, trimTranscript } from "./core/transcript";
 import { createTask } from "./core/tasks/model";
 import { hashPassword, timingSafeEqual, verifyPassword } from "./core/auth/passwords";
 import {
@@ -154,6 +154,14 @@ async function callDeepSeek(
 ): Promise<ChatMsg> {
   // Tool names are sanitized for the wire (DeepSeek forbids dots in names).
   const tools = registry.functionSchemas();
+  // Never put a structurally invalid transcript on the wire: an assistant
+  // `tool_calls` message without one `tool` response per id is an instant
+  // HTTP 400 ("An assistant message with 'tool_calls' must be followed by
+  // tool messages responding to each 'tool_call_id'"). Single pass; the same
+  // array is returned when the transcript is already valid, so this is a no-op
+  // on the hot path.
+  const repaired = repairToolCallSequence(messages);
+  if (repaired !== messages) messages.splice(0, messages.length, ...repaired);
   const started = Date.now();
   const res = await fetch(DEEPSEEK_URL, {
     method: "POST",
@@ -235,13 +243,14 @@ async function agentLoop(opts: {
   let iterations = 0;
   let toolsCalled = 0;
   // Keep the in-memory transcript bounded so very long runs don't overflow the
-  // model context window (system + prompt head, recent tail).
+  // model context window (system + prompt head, recent tail). The trim is
+  // tool-call-group aligned: a raw `slice(0, 10)` + `slice(-70)` cut used to
+  // split an assistant `tool_calls` message from its `tool` responses, and
+  // because this array is checkpointed below, that one bad cut made EVERY
+  // later auto-resume replay an invalid request (DeepSeek HTTP 400).
   const prune = () => {
-    if (messages.length > 100) {
-      const head = messages.slice(0, 10);
-      const tail = messages.slice(-70);
-      messages.splice(0, messages.length, ...head, ...tail);
-    }
+    if (messages.length <= 100) return;
+    messages.splice(0, messages.length, ...trimTranscript(messages, { keepHead: 10, keepTail: 70 }));
   };
 
   for (let i = 0; i < maxIter; i++) {
@@ -250,7 +259,16 @@ async function agentLoop(opts: {
     // this, any run executing >15min was reaped as a "restart orphan" by the
     // Doctor's maintenance sweep even though it was actively working.
     if (opts.runId) store.heartbeatAgentRun(opts.runId, iterations, toolsCalled);
-    const reply = await callDeepSeek(apiKey, messages, opts.registry, recordCost);
+    let reply: ChatMsg;
+    try {
+      reply = await callDeepSeek(apiKey, messages, opts.registry, recordCost);
+    } catch (err) {
+      // Self-heal a broken tool-call sequence (e.g. a checkpoint written by an
+      // older build) and retry once instead of failing the whole run.
+      if (!isToolCallSequenceError(err)) throw err;
+      messages.splice(0, messages.length, ...repairToolCallSequence(messages));
+      reply = await callDeepSeek(apiKey, messages, opts.registry, recordCost);
+    }
     messages.push(reply);
     const toolCalls = reply.tool_calls;
     if (toolCalls && toolCalls.length > 0) {
@@ -266,23 +284,10 @@ async function agentLoop(opts: {
         const capability = toolDef?.requiredPermission ?? "execute";
         const gate = store.capabilityVerdictForAgent("executive_do_01", capability, realName);
         if (gate.verdict !== "ALLOW") {
-          // §11 hard-constraint handling: BLOCK → LOG → ESCALATE. The call is
-          // blocked here; the audit row is the LOG; the message is the ESCALATE.
           const message =
             gate.verdict === "DENY"
               ? `CAPABILITY_DENIED: ${gate.reason}`
               : `REVIEW_REQUIRED: ${gate.reason} Request founder approval before retrying.`;
-          store.insertAudit({
-            id: newId("aud"),
-            actor: "executive_do_01",
-            action: gate.verdict === "DENY" ? "capability.denied" : "capability.review_required",
-            entity_type: "tool_calls",
-            entity_id: realName,
-            detail_json: JSON.stringify({ capability, reason: gate.reason, grantId: gate.grantId }),
-            source: "executive",
-            created_at: nowIso(),
-            updated_at: nowIso(),
-          });
           store.sendOrgMessage({
             fromRole: "role_coa",
             toRole: "role_finance_governance",
@@ -431,7 +436,12 @@ async function executeAgentRun(store: ExecutiveStore, registry: ToolRegistry, en
     if (run.checkpoint_json) {
       try {
         const parsed = JSON.parse(run.checkpoint_json) as ChatMsg[];
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.role === "system") initial = parsed;
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.role === "system") {
+          // Heal checkpoints written by builds whose trim could split a
+          // tool-call group — otherwise every resume of this run replays the
+          // same invalid request and fails with HTTP 400 forever.
+          initial = repairToolCallSequence(parsed);
+        }
       } catch {
         /* malformed checkpoint — fall back to the prompt */
       }
@@ -659,13 +669,6 @@ export class ExecutiveAgent {
     } catch {
       /* productivity maintenance must never break wake */
     }
-    // Organizational analyst (AOrgI §36): self-observation on every sweep —
-    // pure SQL computation, no model calls, cheap and safe.
-    try {
-      runOrgAnalyst(this.store, trigger);
-    } catch {
-      /* analyst must never break wake */
-    }
     // Start + resume long-horizon runs (bounded, "automate fixing"). Runs are
     // executed on EVERY maintenance sweep — on wake via state.waitUntil (keeps
     // the DO alive without blocking the request) so a run can never sit as a
@@ -813,11 +816,6 @@ export class ExecutiveAgent {
         planDeviations: s.listOrgPlanDeviations(undefined, 10),
         negotiations: s.listOrgNegotiations(10),
         arbiters: s.listOrgArbiters(),
-        reasoningTraces: s.listReasoningTraces({ limit: 20 }),
-        intelligence: collectiveMetrics(s),
-        incidents: s.listOrgIncidents({ limit: 50 }),
-        definitionOfDone: s.getDefinitionOfDone(),
-        topology: s.listTopologyProposals({ limit: 20 }),
       },
       doctorLastRun: (() => {
         const d = s.latestDoctorLog();
@@ -1214,23 +1212,6 @@ export class ExecutiveAgent {
     if (path === "/api/org/agents" && method === "GET") {
       return json({ agents: this.store.listOrgAgents() });
     }
-    if (path === "/api/org/agents" && method === "POST") {
-      // Register an agent instance explicitly. Runtime heartbeats register
-      // themselves; this route exists for chaos probes and future instances
-      // that cannot heartbeat (e.g., one-shot workers).
-      const body = (await readBody<{ id?: string; role_id?: string; kind?: string; model?: string; source?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
-      if (!body.id || typeof body.id !== "string") return json({ error: "id required" }, 400);
-      if (!body.role_id || typeof body.role_id !== "string") return json({ error: "role_id required" }, 400);
-      if (!this.store.getOrgRole(body.role_id)) return json({ error: "Unknown role_id" }, 400);
-      this.store.upsertOrgAgent({
-        id: body.id,
-        roleId: body.role_id,
-        kind: body.kind as string | undefined,
-        model: body.model as string | undefined,
-        source: body.source as string | undefined,
-      });
-      return json({ ok: true, agent: this.store.getOrgAgent(body.id) });
-    }
     if (path === "/api/org/task-contracts" && method === "GET") {
       return json({ contracts: this.store.listTaskContracts({ limit: 100 }) });
     }
@@ -1520,38 +1501,6 @@ export class ExecutiveAgent {
     if (path === "/api/org/arbiters" && method === "GET") {
       return json({ arbiters: this.store.listOrgArbiters() });
     }
-    if (path === "/api/org/reasoning-traces" && method === "GET") {
-      const agentId = url.searchParams.get("agent_id") ?? undefined;
-      const taskId = url.searchParams.get("task_id") ?? undefined;
-      return json({ traces: this.store.listReasoningTraces({ agentId, taskId, limit: 100 }) });
-    }
-    if (path === "/api/org/reasoning-traces" && method === "POST") {
-      const body = (await readBody<{
-        agent_id?: string;
-        task_id?: string;
-        mode?: string;
-        evidence?: unknown;
-        hypothesis?: string;
-        confidence?: number | null;
-        final_action?: string;
-        visibility?: "internal" | "reviewer" | "public";
-      }>(request).catch(() => ({}))) as Record<string, unknown>;
-      if (!body.agent_id || typeof body.agent_id !== "string") return json({ error: "agent_id required" }, 400);
-      if (body.visibility !== undefined && !["internal", "reviewer", "public"].includes(String(body.visibility))) {
-        return json({ error: "visibility must be internal | reviewer | public" }, 400);
-      }
-      const trace = this.store.createReasoningTrace({
-        agentId: body.agent_id,
-        taskId: body.task_id as string | undefined,
-        mode: body.mode as string | undefined,
-        evidence: body.evidence ?? [],
-        hypothesis: body.hypothesis as string | undefined,
-        confidence: typeof body.confidence === "number" ? body.confidence : null,
-        finalAction: body.final_action as string | undefined,
-        visibility: body.visibility as "internal" | "reviewer" | "public" | undefined,
-      });
-      return json({ ok: true, trace });
-    }
     if (path === "/api/org/negotiations" && method === "GET") {
       return json({ negotiations: this.store.listOrgNegotiations() });
     }
@@ -1593,100 +1542,6 @@ export class ExecutiveAgent {
       const negotiation = this.store.arbitrateNegotiation(id, body.verdict, String(body.by_role ?? "role_coa"));
       if (!negotiation) return json({ error: "Negotiation not found or already resolved" }, 404);
       return json({ ok: true, negotiation });
-    }
-
-    // -- AOrgI Phase 4: collective intelligence + analyst + chaos drills --------
-    if (path === "/api/org/intelligence" && method === "GET") {
-      return json({
-        metrics: collectiveMetrics(this.store),
-        latestReport: this.store.latestAnalystReport(),
-        reports: this.store.listAnalystReports(20),
-      });
-    }
-    if (path === "/api/org/analyst/run" && method === "POST") {
-      const report = runOrgAnalyst(this.store, "manual");
-      return json({ ok: true, report });
-    }
-    if (path === "/api/org/chaos-tests" && method === "GET") {
-      return json({ tests: this.store.listChaosTests(50) });
-    }
-    if (path === "/api/org/chaos-tests/run" && method === "POST") {
-      const body = (await readBody<{ kind?: string; target?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
-      if (!body.kind || typeof body.kind !== "string") return json({ error: "kind required (agent_kill_sim | grant_degrade)" }, 400);
-      if (!body.target || typeof body.target !== "string") return json({ error: "target agent id required" }, 400);
-      const outcome = runChaosTest(this.store, body.kind, body.target);
-      this.store.insertAudit({
-        id: newId("aud"),
-        actor: "founder",
-        action: "org.chaos_test.run",
-        entity_type: "org_chaos_tests",
-        entity_id: body.target,
-        detail_json: JSON.stringify({ kind: body.kind, outcome }),
-        source: "api",
-        created_at: nowIso(),
-        updated_at: nowIso(),
-      });
-      return json({ ok: true, outcome });
-    }
-
-    // -- AOrgI round-2 fixes: incidents + DefinitionOfDone ---------------------
-    if (path === "/api/org/incidents" && method === "GET") {
-      const status = url.searchParams.get("status") ?? undefined;
-      return json({ incidents: this.store.listOrgIncidents({ status: status ?? undefined, limit: 100 }) });
-    }
-    if (path === "/api/org/incidents" && method === "POST") {
-      const body = (await readBody<{ title?: string; severity?: string; description?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
-      if (!body.title || typeof body.title !== "string" || !body.title.trim()) return json({ error: "title required" }, 400);
-      const incident = this.store.createOrgIncident({
-        title: body.title.trim(),
-        severity: body.severity as string | undefined,
-        description: body.description as string | undefined,
-        source: "founder",
-      });
-      return json({ ok: true, incident });
-    }
-    const incidentStatus = /^\/api\/org\/incidents\/([^/]+)\/status$/.exec(path);
-    if (incidentStatus && method === "POST") {
-      const id = decodeURIComponent(incidentStatus[1]!);
-      const body = (await readBody<{ status?: string; resolution?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
-      if (!["OPEN", "CONTAINED", "RESOLVED"].includes(String(body.status ?? ""))) return json({ error: "status must be OPEN | CONTAINED | RESOLVED" }, 400);
-      const incident = this.store.updateOrgIncidentStatus(id, String(body.status) as never, body.resolution as string | undefined);
-      if (!incident) return json({ error: "Incident not found" }, 404);
-      return json({ ok: true, incident });
-    }
-    if (path === "/api/org/definition-of-done" && method === "GET") {
-      const dod = this.store.getDefinitionOfDone();
-      return dod ? json({ ok: true, dod }) : json({ ok: false, error: "No DefinitionOfDone in org memory" }, 404);
-    }
-
-    // -- AOrgI Phase 5: topology proposals -------------------------------------
-    if (path === "/api/org/topology" && method === "GET") {
-      const status = url.searchParams.get("status") ?? undefined;
-      return json({ proposals: this.store.listTopologyProposals({ status: status ?? undefined, limit: 100 }) });
-    }
-    const topologyDecide = /^\/api\/org\/topology\/([^/]+)\/decide$/.exec(path);
-    if (topologyDecide && method === "POST") {
-      const id = decodeURIComponent(topologyDecide[1]!);
-      const body = (await readBody<{ decision?: string }>(request).catch(() => ({}))) as Record<string, unknown>;
-      const decision = String(body.decision ?? "").toLowerCase();
-      if (!["approve", "reject"].includes(decision)) return json({ error: "decision must be approve | reject" }, 400);
-      const proposal = this.store.updateTopologyProposal(id, {
-        status: decision === "approve" ? "APPROVED" : "REJECTED",
-        decidedBy: "founder",
-      });
-      if (!proposal) return json({ error: "Proposal not found" }, 404);
-      this.store.insertAudit({
-        id: newId("aud"),
-        actor: "founder",
-        action: `org.topology.${decision}`,
-        entity_type: "org_topology_proposals",
-        entity_id: id,
-        detail_json: JSON.stringify({ kind: proposal.kind, role_id: proposal.role_id }),
-        source: "api",
-        created_at: nowIso(),
-        updated_at: nowIso(),
-      });
-      return json({ ok: true, proposal });
     }
 
     // ---------------------------------------------------------------------
