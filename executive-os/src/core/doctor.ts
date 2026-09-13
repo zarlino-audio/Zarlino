@@ -496,6 +496,138 @@ export const DOCTOR_CHECKS: DoctorCheck[] = [
     },
   },
   {
+    id: "org.task_contracts",
+    label: "Substantial tasks carry a contract (acceptance + verifier, §18)",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      // §18: no substantial task should live as informal conversation. P0/P1
+      // or BLOCKED tasks without acceptance criteria or a verification owner
+      // are exactly that — surface them; the fix is a founder/COA decision,
+      // not an auto-write.
+      const substantial = ctx.store
+        .listTasks({ limit: 500 })
+        .filter((t) => t.status !== "DONE" && (t.status === "BLOCKED" || t.priority === "P0" || t.priority === "P1"));
+      const uncovered = substantial.filter((t) => !t.acceptance_criteria || !t.verification_role_id);
+      if (uncovered.length > 0) {
+        return warnResult(
+          "org.task_contracts",
+          "Substantial tasks carry a contract (acceptance + verifier, §18)",
+          "MEDIUM",
+          `${uncovered.length} substantial task(s) without a full contract: ${uncovered.map((t) => t.id).join(", ")}.`,
+          "Set acceptance criteria + verification role via POST /api/org/task-contracts/:id.",
+        );
+      }
+      return okResult(
+        "org.task_contracts",
+        "Substantial tasks carry a contract (acceptance + verifier, §18)",
+        "MEDIUM",
+        `${substantial.length} substantial task(s) checked — all contracted.`,
+      );
+    },
+  },
+  {
+    id: "org.negotiations_stale",
+    label: "No stalled negotiations awaiting arbitration",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      // §23: after rounds are exhausted the arbiter must resolve. A verdict
+      // pending for 24h+ (or a 72h+ silent OPEN negotiation) is a stall.
+      const now = Date.now();
+      const negotiations = ctx.store.listOrgNegotiations(100);
+      const stalled = negotiations.filter((n) => {
+        const age = now - Date.parse(n.updated_at);
+        return (n.status === "ARBITRATED" && age > 24 * 60 * 60 * 1000) || (n.status === "OPEN" && age > 72 * 60 * 60 * 1000);
+      });
+      if (stalled.length > 0) {
+        return warnResult(
+          "org.negotiations_stale",
+          "No stalled negotiations awaiting arbitration",
+          "MEDIUM",
+          `${stalled.length} negotiation(s) stalled: ${stalled.map((n) => n.id).join(", ")}.`,
+          "Arbitrate via POST /api/org/negotiations/:id/arbitrate (or resolve the rounds).",
+        );
+      }
+      return okResult("org.negotiations_stale", "No stalled negotiations awaiting arbitration", "MEDIUM", `${negotiations.length} negotiation(s) checked — none stalled.`);
+    },
+  },
+  {
+    id: "org.analyst.fresh",
+    label: "Organizational analyst has observed the org recently (§36)",
+    severity: "LOW",
+    run: (ctx, _autoFix) => {
+      // The analyst runs on every maintenance sweep (wake/cron). A missing or
+      // stale report means self-observation stopped — the org is flying blind.
+      const latest = ctx.store.latestAnalystReport();
+      if (!latest) {
+        return warnResult(
+          "org.analyst.fresh",
+          "Organizational analyst has observed the org recently (§36)",
+          "LOW",
+          "No organizational analyst report yet.",
+          "Run POST /api/org/analyst/run (also runs automatically on each maintenance sweep).",
+        );
+      }
+      const age = Date.now() - Date.parse(latest.generated_at);
+      if (age > 26 * 60 * 60 * 1000) {
+        return warnResult(
+          "org.analyst.fresh",
+          "Organizational analyst has observed the org recently (§36)",
+          "LOW",
+          `Latest analyst report is ${Math.round(age / 3_600_000)}h old.`,
+          "Run POST /api/org/analyst/run.",
+        );
+      }
+      return okResult(
+        "org.analyst.fresh",
+        "Organizational analyst has observed the org recently (§36)",
+        "LOW",
+        `Latest analyst report ${Math.round(age / 60_000)}min old (trigger: ${latest.trigger}).`,
+      );
+    },
+  },
+  {
+    id: "org.dod",
+    label: "Explicit DefinitionOfDone exists (§30)",
+    severity: "LOW",
+    run: (ctx, _autoFix) => {
+      const dod = ctx.store.getDefinitionOfDone();
+      if (!dod) {
+        return warnResult(
+          "org.dod",
+          "Explicit DefinitionOfDone exists (§30)",
+          "LOW",
+          "No ACTIVE definition_of_done entry in organizational memory.",
+          "Restore it via POST /api/org/memory with key 'definition_of_done'.",
+        );
+      }
+      return okResult("org.dod", "Explicit DefinitionOfDone exists (§30)", "LOW", `DefinitionOfDone v${dod.version} present in org memory.`);
+    },
+  },
+  {
+    id: "org.incidents_open",
+    label: "Open incidents are tracked (never hidden, §31)",
+    severity: "MEDIUM",
+    run: (ctx, _autoFix) => {
+      const open = ctx.store.listOrgIncidents({ limit: 100 }).filter((i) => i.status !== "RESOLVED");
+      const critical = open.filter((i) => i.severity === "CRITICAL" || i.severity === "HIGH");
+      if (critical.length > 0) {
+        return warnResult(
+          "org.incidents_open",
+          "Open incidents are tracked (never hidden, §31)",
+          "MEDIUM",
+          `${critical.length} open HIGH/CRITICAL incident(s): ${critical.map((i) => i.id).join(", ")}.`,
+          "Work the response loop (§31) and resolve via POST /api/org/incidents/:id/status.",
+        );
+      }
+      return okResult(
+        "org.incidents_open",
+        "Open incidents are tracked (never hidden, §31)",
+        "MEDIUM",
+        open.length > 0 ? `${open.length} low-severity incident(s) open.` : "No open incidents.",
+      );
+    },
+  },
+  {
     id: "kv.health",
     label: "KV namespace reachable",
     severity: "LOW",

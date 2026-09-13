@@ -318,6 +318,7 @@ export interface OrgRole {
   name: string;
   department_id: string;
   lineage_id: string;
+  prompt_lineage_id?: string;
   model?: string;
   scope?: string;
   responsibilities_json: string;
@@ -505,6 +506,83 @@ export interface OrgArbiter {
   arbiter_role_id?: string;
   fallback_role_id?: string;
   arbiter_kind: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * AOrgI (migration v26): structured reasoning record (§13) — inspectable
+ * decision evidence + rationale, never private chain-of-thought.
+ */
+export interface ReasoningTrace {
+  id: string;
+  agent_id: string;
+  task_id?: string;
+  mode: string;
+  evidence_json: string;
+  hypothesis?: string;
+  confidence?: number;
+  final_action?: string;
+  trace_visibility: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v27): organizational analyst self-observation report (§36). */
+export interface OrgAnalystReport {
+  id: string;
+  generated_at: string;
+  trigger: string;
+  metrics_json: string;
+  observations_json: string;
+  recommendations_json: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v27): robustness drill record (§35). */
+export interface OrgChaosTest {
+  id: string;
+  kind: string;
+  target: string;
+  status: string;
+  result_json: string;
+  started_at: string;
+  finished_at?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v28): incident record for the blackboard + response loop (§15, §31). */
+export interface OrgIncident {
+  id: string;
+  title: string;
+  severity: string;
+  status: string;
+  description?: string;
+  resolution?: string;
+  detected_at: string;
+  contained_at?: string;
+  resolved_at?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** AOrgI (migration v29): evidence-backed topology proposal (§33). */
+export interface OrgTopologyProposal {
+  id: string;
+  kind: string;
+  role_id?: string;
+  rationale: string;
+  evidence_json: string;
+  status: string;
+  decided_by?: string;
+  decided_at?: string;
   source: string;
   created_at: string;
   updated_at: string;
