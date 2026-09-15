@@ -23,6 +23,15 @@ import { promisify } from "node:util";
 import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { isToolCallSequenceError, repairToolCallSequence, trimTranscript } from "../src/core/transcript.js";
 
+// UTF-8 byte length of a string. Do NOT use String.length for byte counts:
+// it returns UTF-16 code units, so every non-ASCII glyph understates the
+// real size (e.g. "Caf\u00e9" is 4 chars but 5 bytes; an emoji is 2 units
+// but 4-7 bytes). Reporting .length as "bytes" was the local read/write
+// path's encoding defect (sites: local_write_file, local_plugin_ui).
+function byteLen(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
 // Async exec (promisified) — NEVER use execSync here: a long local command
 // (build, ctest, deploy) can run up to the 10-min timeout, and a blocking
 // sync call freezes the event loop, which silently kills the daemon's
@@ -686,7 +695,7 @@ if ($alive) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
         const chunk = text.slice(start, start + limit);
         const hasMore = start + chunk.length < total;
         return (
-          `--- ${plugin}/Source/${rel} (${total} bytes; showing ${start}..${start + chunk.length}) ---\n` +
+          `--- ${plugin}/Source/${rel} (${byteLen(text)} bytes; showing ${start}..${start + chunk.length}) ---\n` +
           chunk +
           (hasMore ? `\n…(more — re-call local_plugin_ui action=read with offset=${start + chunk.length} for the next chunk)` : "")
         );
@@ -699,7 +708,7 @@ if ($alive) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
         for (const f of uiFiles.slice(0, 12)) {
           const p = join(srcDir, f);
           const text = readFileSync(p, "utf8");
-          parts.push(`\n===== ${f} (${text.length} bytes) =====\n${text.length > 20000 ? text.slice(0, 20000) + "\n…(truncated)" : text}`);
+          parts.push(`\n===== ${f} (${byteLen(text)} bytes) =====\n${text.length > 20000 ? text.slice(0, 20000) + "\n…(truncated)" : text}`);
         }
         return parts.join("\n");
       }
