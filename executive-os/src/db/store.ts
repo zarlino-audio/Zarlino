@@ -11,6 +11,15 @@
  */
 
 import { migrate } from "./migrations";
+import {
+  assertCanTransitionTask,
+  GovernanceError,
+  isTerminalTaskStatus,
+  validateEvidence,
+  type EvidenceInput,
+  type TaskEvidence,
+  type VerificationMode,
+} from "../core/tasks/evidence";
 import { PRODUCT_METRICS_SQL } from "./schema";
 import { newId } from "../ids";
 import type { Sql, SqlParam } from "./sql";
@@ -259,6 +268,114 @@ export class ExecutiveStore implements CostStorage {
   updateTask(id: string, patch: Partial<Task>): void {
     this.update("tasks", id, patch as Row);
   }
+  // -- closed-loop governance: task evidence (migration v31) ---------------
+  /**
+   * Move a task to a new status, REFUSING terminal transitions (DONE /
+   * CANCELLED) that carry no verifiable evidence. This is the backstop: the
+   * tool registry and the HTTP routes call it, so a task cannot be closed
+   * "without evidence" through any transport - including code paths added
+   * later that forget the check.
+   *
+   * A founder override (mode + reason) is the only other way through, and it
+   * records the reason on the task itself via `close_reason`, so an override
+   * is never indistinguishable from verified completion.
+   */
+  setTaskStatus(
+    taskId: string,
+    status: string,
+    opts: { mode?: VerificationMode; overrideReason?: string } = {},
+  ): Task {
+    const task = this.getTask(taskId);
+    if (!task) throw new GovernanceError("TASK_NOT_FOUND", `Task ${taskId} not found`, 404, { taskId });
+    const evidence = this.listTaskEvidence(taskId);
+    assertCanTransitionTask({
+      taskId,
+      status,
+      evidenceCount: evidence.length,
+      verifiedEvidenceCount: evidence.filter((e) => e.verified).length,
+      mode: opts.mode,
+      overrideReason: opts.overrideReason,
+    });
+    const patch: Partial<Task> = { status };
+    if (isTerminalTaskStatus(status)) {
+      patch.completed_at = new Date().toISOString();
+      if (opts.mode === "founder_override") patch.close_reason = (opts.overrideReason ?? "").trim();
+    }
+    this.updateTask(taskId, patch);
+    return this.getTask(taskId) as Task;
+  }
+
+  /** All evidence attached to a task (verified items first, then newest). */
+  listTaskEvidence(taskId: string): TaskEvidence[] {
+    const rows = this.sql.all<Row>(
+      "SELECT * FROM task_evidence WHERE task_id = ? ORDER BY verified DESC, created_at DESC",
+      taskId,
+    );
+    return rows.map((r) => taskEvidenceRow(r));
+  }
+
+  getTaskEvidence(id: string): TaskEvidence | null {
+    const rows = this.sql.all<Row>("SELECT * FROM task_evidence WHERE id = ?", id);
+    return rows.length ? taskEvidenceRow(rows[0]!) : null;
+  }
+
+  /** Evidence counts for many tasks at once (list rendering, no N+1 queries). */
+  countTaskEvidence(): Record<string, { total: number; verified: number }> {
+    const out: Record<string, { total: number; verified: number }> = {};
+    for (const r of this.sql.all<Row>(
+      "SELECT task_id, COUNT(*) AS total, SUM(CASE WHEN verified = 1 THEN 1 ELSE 0 END) AS verified FROM task_evidence GROUP BY task_id",
+    )) {
+      out[String(r.task_id)] = { total: Number(r.total ?? 0), verified: Number(r.verified ?? 0) };
+    }
+    return out;
+  }
+
+  /**
+   * Attach a piece of evidence to a task. Input is validated first (kind,
+   * locator, and - for command_output/review - the raw verification output),
+   * so an item that cannot prove anything is rejected before it reaches SQL
+   * and gives the caller the false impression the task is now provable.
+   */
+  addTaskEvidence(taskId: string, input: EvidenceInput & { source?: string }): TaskEvidence {
+    const task = this.getTask(taskId);
+    if (!task) throw new GovernanceError("TASK_NOT_FOUND", `Task ${taskId} not found`, 404, { taskId });
+    const check = validateEvidence(input);
+    if (!check.ok) throw new GovernanceError(check.code, check.error, 400, { taskId });
+    const now = new Date().toISOString();
+    const item: TaskEvidence = {
+      id: newId("tev"),
+      task_id: taskId,
+      kind: check.value.kind,
+      locator: check.value.locator,
+      summary: check.value.summary,
+      verification_command: check.value.verification_command,
+      verification_output: check.value.verification_output,
+      verified: check.value.verified,
+      source: typeof input.source === "string" && input.source.trim() ? input.source.trim() : "executive",
+      created_at: now,
+      updated_at: now,
+    };
+    this.insert("task_evidence", item);
+    return item;
+  }
+
+  deleteTaskEvidence(id: string): boolean {
+    const existing = this.getTaskEvidence(id);
+    if (!existing) return false;
+    this.sql.run("DELETE FROM task_evidence WHERE id = ?", id);
+    return true;
+  }
+
+  /**
+   * A task plus the evidence it was closed on - what the console renders for a
+   * DONE task. Derived, never stored: status alone can no longer imply proof.
+   */
+  getTaskWithEvidence(taskId: string): (Task & { evidence: TaskEvidence[] }) | null {
+    const task = this.getTask(taskId);
+    if (!task) return null;
+    return { ...task, evidence: this.listTaskEvidence(taskId) };
+  }
+
   countOpenTasks(): number {
     const rows = this.sql.all<Row>("SELECT COUNT(*) AS c FROM tasks WHERE status IN ('OPEN','IN_PROGRESS','BLOCKED')");
     return Number(rows[0]?.c ?? 0);
@@ -1681,6 +1798,16 @@ export class ExecutiveStore implements CostStorage {
       session_id: call.sessionId ?? null,
       run_id: call.runId ?? null,
       latency_ms: call.latencyMs,
+      // Provenance (migration v32): WITHOUT these the ledger stores only the
+      // single chosen dollar figure, so a call priced from a char fallback is
+      // indistinguishable from one the provider actually billed -- which is how
+      // recorded spend could sit at $0.068 while a "token exhausted" condition
+      // was being surfaced. `usage_reported = 0` now marks an UNMEASURED call
+      // instead of letting it look like a free one.
+      provider_cost: call.providerCost ?? null,
+      meter_cost: call.meterCost ?? null,
+      usage_reported: call.usageReported ? 1 : 0,
+      meter_source: call.meterSource ?? "legacy",
       source: "executive",
       created_at: now,
       updated_at: now,
@@ -1708,6 +1835,44 @@ export class ExecutiveStore implements CostStorage {
     const rows = this.sql.all<Row>("SELECT COALESCE(SUM(input_tokens),0) + COALESCE(SUM(output_tokens),0) AS t FROM model_costs WHERE substr(created_at,1,7) = ?", month);
     return Number(rows[0]?.t ?? 0);
   }
+  /**
+   * Reconciliation view over the ledger (migration v32).
+   *
+   * `ledger` is the SUM over model_costs -- what every dollar figure is derived
+   * from. `unmeasured` counts calls the provider never reported usage for, which
+   * were nonetheless booked (char fallback). Those rows are the honest blind spot
+   * of the meter: real spend, but not MEASURED spend, and the one remaining way
+   * a recorded total can diverge from what the provider bills. Surfacing them is
+   * the difference between "we do not know" and "we recorded zero".
+   */
+  meterReconciliation(): {
+    tokens: number;
+    cost: number;
+    calls: number;
+    unmeasuredCalls: number;
+    unmeasuredCost: number;
+    providerReportedCost: number;
+    priceTableCost: number;
+  } {
+    const row = this.sql.all<Row>(
+      "SELECT COALESCE(SUM(input_tokens),0) + COALESCE(SUM(output_tokens),0) AS tokens, " +
+        "COALESCE(SUM(cost),0) AS cost, " +
+        "COUNT(*) AS calls, " +
+        "COALESCE(SUM(CASE WHEN usage_reported = 0 THEN 1 ELSE 0 END),0) AS unmeasured_calls, " +
+        "COALESCE(SUM(CASE WHEN usage_reported = 0 THEN cost ELSE 0 END),0) AS unmeasured_cost, " +
+        "COALESCE(SUM(provider_cost),0) AS provider_cost, " +
+        "COALESCE(SUM(meter_cost),0) AS meter_cost FROM model_costs",
+    )[0];
+    return {
+      tokens: Number(row?.tokens ?? 0),
+      cost: Number(row?.cost ?? 0),
+      calls: Number(row?.calls ?? 0),
+      unmeasuredCalls: Number(row?.unmeasured_calls ?? 0),
+      unmeasuredCost: Number(row?.unmeasured_cost ?? 0),
+      providerReportedCost: Number(row?.provider_cost ?? 0),
+      priceTableCost: Number(row?.meter_cost ?? 0),
+    };
+  }
   spentThisRun(runId?: string): number {
     if (!runId) return 0;
     const rows = this.sql.all<Row>("SELECT COALESCE(SUM(cost),0) AS s FROM model_costs WHERE run_id = ?", runId);
@@ -1730,6 +1895,10 @@ export class ExecutiveStore implements CostStorage {
       runId: r.run_id ? String(r.run_id) : undefined,
       latencyMs: Number(r.latency_ms),
       timestamp: String(r.created_at),
+      providerCost: r.provider_cost === null || r.provider_cost === undefined ? undefined : Number(r.provider_cost),
+      meterCost: r.meter_cost === null || r.meter_cost === undefined ? undefined : Number(r.meter_cost),
+      usageReported: Number(r.usage_reported ?? 0) === 1,
+      meterSource: (r.meter_source ? String(r.meter_source) : "legacy") as ModelCallRecord["meterSource"],
     }));
   }
 
@@ -2825,6 +2994,7 @@ export class ExecutiveStore implements CostStorage {
 export const SNAPSHOT_TABLES = [
   "executive_state", "founder_profile", "organizations", "objectives", "projects",
   "tasks", "decisions", "approval_requests", "risks", "metrics", "financial_snapshots",
+  "task_evidence",
   "products", "product_status", "engineering_issues", "marketing_campaigns", "persons",
   "delegations", "memories", "doctrine_rules", "policies", "audit_events", "chat_messages",
   "tool_executions", "workstreams", "pipeline_gates", "model_costs", "founder_credentials",
@@ -2841,6 +3011,12 @@ export const SNAPSHOT_TABLES = [
   "org_incidents",
   "org_topology_proposals",
 ];
+
+/** Map a task_evidence row: `verified` is stored as 0/1 in SQLite. */
+function taskEvidenceRow(row: Row): TaskEvidence {
+  const rec = rowTo<TaskEvidence>(row) as TaskEvidence & { verified: unknown };
+  return { ...rec, verified: Number(rec.verified ?? 0) === 1 };
+}
 
 function rowTo<T>(row: Row | undefined): T {
   return row as unknown as T;

@@ -23,6 +23,8 @@ import { isToolCallSequenceError, repairToolCallSequence, trimTranscript } from 
 import { collectiveMetrics, runChaosTest, runOrgAnalyst } from "./core/org/intelligence";
 import { createTask } from "./core/tasks/model";
 import { hashPassword, timingSafeEqual, verifyPassword } from "./core/auth/passwords";
+import { estimateCost } from "./core/model/pricing";
+import { meterModelCall } from "./core/model/meter";
 import {
   assignTask,
   budgetStatus,
@@ -178,35 +180,64 @@ function chatRequestBody(
 }
 
 function recordChatCost(
-  recordCost: (c: ModelCall) => void,
+  store: ExecutiveStore,
   model: string,
   usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
   latencyMs: number,
   fallbackChars = 0,
+  attribution: { sessionId?: string; runId?: string } = {},
 ): void {
-  const inputTokens = usage?.prompt_tokens ?? 0;
-  const outputTokens = usage?.completion_tokens ?? (fallbackChars > 0 ? Math.ceil(fallbackChars / 4) : 0);
-  recordCost({
-    provider: "deepseek",
+  // Priced by the shared meter so the dollars booked here are identical to the
+  // dollars every other provider call books (see core/model/meter.ts).
+  //
+  // The meter is handed the REAL store on purpose. This function used to pass a
+  // shim ({ record: recordCost, addTokenUse: () => {} }) that wrote the
+  // model_costs ledger and THREW AWAY the token_budgets increment — every real
+  // provider call was therefore invisible to the budget meter, and the two
+  // halves of the same feature could never agree. meterModelCall is now the
+  // single writer for both tables: there is no path that writes one without
+  // the other.
+  meterModelCall(store, {
     model,
     taskType: "chat",
-    inputTokens,
-    outputTokens,
-    cost: (inputTokens / 1_000_000) * 0.27 + (outputTokens / 1_000_000) * 1.1,
+    usage,
     latencyMs,
-    timestamp: new Date().toISOString(),
+    fallbackChars,
+    sessionId: attribution.sessionId,
+    runId: attribution.runId,
   });
 }
 
-/** Non-streaming completion: background runs, titles, tool-less helpers. */
+/**
+ * Test-only hook: exercise the REAL non-streaming provider call path
+ * (request build -> fetch -> usage parse -> recordChatCost -> meter) against a
+ * stubbed global fetch, so the metering path can be asserted with pinned
+ * provider numbers instead of a mocked meter.
+ *
+ * This is not a re-export of different behaviour: it is the same function the
+ * Durable Object calls, surfaced so the metering test does not have to reach
+ * into module internals.
+ */
+export function callDeepSeekForTest(
+  apiKey: string,
+  messages: ChatMsg[],
+  registry: ToolRegistry,
+  store: ExecutiveStore,
+  model = "deepseek-chat",
+  opts: { signal?: AbortSignal; noTools?: boolean; sessionId?: string; runId?: string } = {},
+): Promise<ChatMsg> {
+  return callDeepSeek(apiKey, messages, registry, store, model, opts);
+}
+
 async function callDeepSeek(
   apiKey: string,
   messages: ChatMsg[],
   registry: ToolRegistry,
-  recordCost: (c: ModelCall) => void,
+  store: ExecutiveStore,
   model = "deepseek-chat",
-  opts: { signal?: AbortSignal; noTools?: boolean } = {},
+  opts: { signal?: AbortSignal; noTools?: boolean; sessionId?: string; runId?: string } = {},
 ): Promise<ChatMsg> {
+  const attribution = { sessionId: opts.sessionId, runId: opts.runId };
   const started = Date.now();
   const res = await fetch(DEEPSEEK_URL, {
     method: "POST",
@@ -225,7 +256,7 @@ async function callDeepSeek(
   };
   const message = data.choices?.[0]?.message;
   if (!message) throw new Error("Empty model response");
-  recordChatCost(recordCost, model, data.usage, latencyMs);
+  recordChatCost(store, model, data.usage, latencyMs, 0, attribution);
   return message;
 }
 
@@ -240,10 +271,11 @@ async function callDeepSeekStream(
   apiKey: string,
   messages: ChatMsg[],
   registry: ToolRegistry,
-  recordCost: (c: ModelCall) => void,
+  store: ExecutiveStore,
   model: string,
   onDelta: (d: ChatDelta) => void,
   signal?: AbortSignal,
+  attribution: { sessionId?: string; runId?: string } = {},
 ): Promise<ChatMsg> {
   const started = Date.now();
   const res = await fetch(DEEPSEEK_URL, {
@@ -322,7 +354,7 @@ async function callDeepSeekStream(
     }
   }
   if (!sawFrame) throw new Error("Empty model response");
-  recordChatCost(recordCost, model, usage, Date.now() - started, content.length + reasoning.length);
+  recordChatCost(store, model, usage, Date.now() - started, content.length + reasoning.length, attribution);
   const message: ChatMsg = { role: "assistant", content };
   const usable = calls.filter((c) => c.id && c.function.name);
   if (usable.length > 0) message.tool_calls = usable;
@@ -410,7 +442,19 @@ async function agentLoop(opts: {
   const store = opts.store;
   const maxIter = opts.maxIterations ?? 8;
   const messages = [...opts.messages];
+  // THE fix for the meter divergence: this sink used to write ONLY the
+  // model_costs ledger. Every real provider call therefore left token_budgets
+  // untouched, so the budget knob (and productivity.budget_status) reported a
+  // tiny hand-entered number while the ledger reported the real spend.
+  // Booking through meterModelCall keeps ledger and budget identical by
+  // construction, priced from the one shared table.
+  // Books BOTH tables through the one meter: model_costs (the ledger every
+  // dollar figure is summed from) and token_budgets (what the budget gate and
+  // productivity.budget_status read). Writing them by hand here is how they
+  // drifted apart in the first place.
   const recordCost = (c: ModelCall) => {
+    const tokens = c.inputTokens + c.outputTokens;
+    if (tokens > 0) store.addTokenUse("global", undefined, tokens, c.cost);
     store.record({ ...c, sessionId: opts.sessionId, runId: opts.runId });
   };
   let iterations = 0;
@@ -435,16 +479,30 @@ async function agentLoop(opts: {
     let reply: ChatMsg;
     try {
       reply = opts.onDelta
-        ? await callDeepSeekStream(apiKey, messages, opts.registry, recordCost, model, opts.onDelta, opts.signal)
-        : await callDeepSeek(apiKey, messages, opts.registry, recordCost, model, { signal: opts.signal });
+        ? await callDeepSeekStream(apiKey, messages, opts.registry, store, model, opts.onDelta, opts.signal, {
+            sessionId: opts.sessionId,
+            runId: opts.runId,
+          })
+        : await callDeepSeek(apiKey, messages, opts.registry, store, model, {
+            signal: opts.signal,
+            sessionId: opts.sessionId,
+            runId: opts.runId,
+          });
     } catch (err) {
       // Self-heal a broken tool-call sequence (e.g. a checkpoint written by an
       // older build) and retry once instead of failing the whole run.
       if (!isToolCallSequenceError(err)) throw err;
       messages.splice(0, messages.length, ...repairToolCallSequence(messages));
       reply = opts.onDelta
-        ? await callDeepSeekStream(apiKey, messages, opts.registry, recordCost, model, opts.onDelta, opts.signal)
-        : await callDeepSeek(apiKey, messages, opts.registry, recordCost, model, { signal: opts.signal });
+        ? await callDeepSeekStream(apiKey, messages, opts.registry, store, model, opts.onDelta, opts.signal, {
+            sessionId: opts.sessionId,
+            runId: opts.runId,
+          })
+        : await callDeepSeek(apiKey, messages, opts.registry, store, model, {
+            signal: opts.signal,
+            sessionId: opts.sessionId,
+            runId: opts.runId,
+          });
     }
     messages.push(reply);
     const toolCalls = reply.tool_calls;
@@ -2250,7 +2308,13 @@ export class ExecutiveAgent {
             updated_at: nowIso(),
           });
         },
-        recordCost: (c) => this.store.record(c),
+        // BOTH tables, always: a tool that spends money must move the same
+        // meter the budget gate reads. This used to be ledger-only.
+        recordCost: (c) => {
+          const tokens = c.inputTokens + c.outputTokens;
+          if (tokens > 0) this.store.addTokenUse("global", undefined, tokens, c.cost);
+          this.store.record(c);
+        },
       });
       return json(result);
     }
@@ -2772,9 +2836,12 @@ export class ExecutiveAgent {
               { role: "user", content: `First message: ${firstUser.slice(0, 300)}\nAnswer summary: ${reply.slice(0, 500)}\n\nTitle:` },
             ],
             this.buildRegistry(),
-            () => {},
+            // The real store, not an empty function. An unmetered title call is real
+            // provider spend that no meter ever sees — the same defect class as
+            // the budget/ledger split, at a smaller scale.
+            this.store,
             "deepseek-chat",
-            { noTools: true },
+            { noTools: true, sessionId },
           );
           const title = sanitizeChatTitle(String(out.content ?? ""));
           if (title.length >= 3) this.store.setChatSessionTitle(sessionId, title, "auto");

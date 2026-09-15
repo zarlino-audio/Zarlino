@@ -43,6 +43,8 @@ import {
   ORG_PHASE_GAPS_SQL,
   ORG_PHASE5_SQL,
   CHAT_ENHANCE_SQL,
+  TASK_EVIDENCE_SQL,
+  METER_USAGE_SQL,
 } from "./schema";
 import type { Sql } from "./sql";
 
@@ -152,6 +154,9 @@ export const MIGRATIONS: Migration[] = [
   { version: 28, name: "org_phase_gaps", sql: [ORG_PHASE_GAPS_SQL] },
   { version: 29, name: "org_phase5", sql: [ORG_PHASE5_SQL] },
   { version: 30, name: "chat_enhance", sql: [CHAT_ENHANCE_SQL] },
+  { version: 31, name: "task_evidence", sql: [TASK_EVIDENCE_SQL] },
+  { version: 32, name: "meter_provider_usage", sql: [METER_USAGE_SQL] },
+
 ];
 
 /** Latest schema version this code knows how to migrate to. */
