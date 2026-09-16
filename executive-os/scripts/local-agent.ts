@@ -85,13 +85,36 @@ export interface LocalTool {
 }
 
 export async function runCommand(cmd: string, cwd: string): Promise<string> {
+  // SHELL CORRECTNESS (the local_run_tests defect). The command string is
+  // executed by the HOST shell via child_process.exec, which on Windows
+  // spawns %COMSPEC% (cmd.exe). The string must be runnable by THAT shell and
+  // must not embed another shell's cmdlets or utilities:
+  //
+  //   npx vitest run 2>&1 | Select-Object -Last 12   <- PowerShell cmdlet
+  //   npx vitest run 2>&1 | tail -n 12                <- no tail.exe on Windows
+  //
+  // Both died with is-not-recognized errors, so NO output-limiting pipeline
+  // stage is embedded here: the command stays plain host-shell text and the
+  // bound is applied to the CAPTURED TEXT below, in TypeScript.
   try {
     const { stdout } = await exec(cmd, { cwd, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: 600_000, windowsHide: true });
-    return stdout.length > 8000 ? stdout.slice(0, 8000) + "\n…(truncated)" : stdout;
+    return truncateOutput(stdout);
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string; message?: string };
-    return `COMMAND FAILED:\n${(e.stdout || "")}\n${(e.stderr || e.message || "").slice(0, 4000)}`;
+    return truncateOutput([e.stdout || "", e.stderr || e.message || ""].join("\n"), 4000);
   }
+}
+
+/**
+ * Bound captured command output WITHOUT a shell pipeline stage. Keeps the LAST
+ * `max` characters, not the first: the tail of a build/test log is where
+ * vitest prints its pass/fail summary.
+ */
+export function truncateOutput(text: string, max = 8000): string {
+  const s = String(text ?? "");
+  return s.length > max
+    ? "…(truncated, showing last " + max + " chars)\n" + s.slice(s.length - max)
+    : s;
 }
 
 // ---- plugin-factory helpers -----------------------------------------------------
@@ -271,7 +294,7 @@ export const TOOLS: LocalTool[] = [
     description: "Run the Executive OS test suite (vitest)",
     parameters: { type: "object", properties: {} },
     needsConfirm: false,
-    run: async () => runCommand("npx vitest run 2>&1 | Select-Object -Last 12", EXEC_OS),
+    run: async () => runCommand("npx vitest run 2>&1", EXEC_OS),
   },
   {
     name: "local_build_console",
@@ -303,7 +326,7 @@ export const TOOLS: LocalTool[] = [
       const build = await runCommand("npm run build", WEBSITE);
       if (build.includes("FAILED")) return build;
       const wrangler = join(EXEC_OS, "node_modules", ".bin", "wrangler.cmd");
-      return await runCommand(`& "${wrangler}" deploy 2>&1 | Select-Object -Last 6`, WEBSITE);
+      return await runCommand(`& "${wrangler}" deploy 2>&1`, WEBSITE);
     },
   },
 
@@ -407,7 +430,7 @@ export const TOOLS: LocalTool[] = [
       const buildDir = join(REPO_ROOT, "build");
       const ctest = join(PY_SCRIPTS, "ctest.exe");
       if (!existsSync(join(buildDir, "CTestTestfile.cmake"))) return "build/ not configured — run local_build_plugin first";
-      const cmd = `& "${ctest}" --test-dir "${buildDir}" -C Release --output-on-failure -R "${plugin}" 2>&1 | Select-Object -Last 25`;
+      const cmd = `& "${ctest}" --test-dir "${buildDir}" -C Release --output-on-failure -R "${plugin}" 2>&1`;
       return runPowerShell(cmd);
     },
   },
