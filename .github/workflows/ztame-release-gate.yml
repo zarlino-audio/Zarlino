@@ -44,7 +44,7 @@ jobs:
       # action defaults to a Microsoft timestamp service).
       - name: Sign VST3 + Standalone binaries (Azure Artifact Signing)
         if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
-        uses: Azure/artifact-signing-action@v3
+        uses: Azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -88,7 +88,7 @@ jobs:
       # The installer stub must itself be signed, not only the inner payload.
       - name: Sign NSIS installer (Azure Artifact Signing)
         if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
-        uses: Azure/artifact-signing-action@v3
+        uses: Azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
