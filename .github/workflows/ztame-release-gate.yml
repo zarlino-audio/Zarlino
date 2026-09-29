@@ -44,7 +44,7 @@ jobs:
       # action defaults to a Microsoft timestamp service).
       - name: Sign VST3 + Standalone binaries (Azure Artifact Signing)
         if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
-        uses: Azure/artifact-signing-action@v3
+        uses: Azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -63,7 +63,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path artifacts/vst3
           Copy-Item -Recurse -Path "build/plugins/ZTame/ZTame_artefacts/Release/VST3/ZTame.vst3/*" -Destination artifacts/vst3/ -Force
-          Compress-Archive -Path artifacts/vst3/* -DestinationPath "artifacts/ZTame-v1.0.0-Windows-VST3.zip"
+          Compress-Archive -Path artifacts/vst3/* -DestinationPath "artifacts/ZTame-v1.2.0-Windows-VST3.zip"
 
       - name: Package Standalone artifact
         shell: pwsh
@@ -71,7 +71,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path artifacts/standalone
           Copy-Item -Path "build/plugins/ZTame/ZTame_artefacts/Release/Standalone/ZTame.exe" -Destination artifacts/standalone/ -Force -ErrorAction SilentlyContinue
           Copy-Item -Path "plugins/ZTame/README.md" -Destination artifacts/standalone/ -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path artifacts/standalone/* -DestinationPath "artifacts/ZTame-v1.0.0-Windows-Standalone.zip"
+          Compress-Archive -Path artifacts/standalone/* -DestinationPath "artifacts/ZTame-v1.2.0-Windows-Standalone.zip"
 
       # --- NSIS installer ---
       - name: Install NSIS
@@ -81,14 +81,14 @@ jobs:
         shell: pwsh
         run: |
           cd plugins/ZTame/installer
-          makensis /DVERSION=1.0.0 ZTame.nsi
-          Move-Item -Force "ZTame-v1.0.0-Windows-Installer.exe" "../../../artifacts/"
+          makensis /DVERSION=1.2.0 ZTame.nsi
+          Move-Item -Force "ZTame-v1.2.0-Windows-Installer.exe" "../../../artifacts/"
 
       # --- Sign the NSIS installer stub AFTER NSIS compiles (inert until enabled) ---
       # The installer stub must itself be signed, not only the inner payload.
       - name: Sign NSIS installer (Azure Artifact Signing)
         if: ${{ vars.ZARLINO_SIGNING_ENABLED == 'true' }}
-        uses: Azure/artifact-signing-action@v3
+        uses: Azure/artifact-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -97,7 +97,7 @@ jobs:
           trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE }}
           files: |
-            artifacts/ZTame-v1.0.0-Windows-Installer.exe
+            artifacts/ZTame-v1.2.0-Windows-Installer.exe
           file-digest: SHA256
 
       # --- Verify signature (inert until enabled) ---
@@ -109,27 +109,27 @@ jobs:
             ForEach-Object { if ($_.Status -ne 'Valid') { throw "VST3 signature invalid: $($_.Status)" } }
           Get-AuthenticodeSignature "build/plugins/ZTame/ZTame_artefacts/Release/Standalone/ZTame.exe" |
             ForEach-Object { if ($_.Status -ne 'Valid') { throw "Standalone signature invalid: $($_.Status)" } }
-          Get-AuthenticodeSignature "artifacts/ZTame-v1.0.0-Windows-Installer.exe" |
+          Get-AuthenticodeSignature "artifacts/ZTame-v1.2.0-Windows-Installer.exe" |
             ForEach-Object { if ($_.Status -ne 'Valid') { throw "Installer signature invalid: $($_.Status)" } }
 
       # --- Upload all artifacts ---
       - name: Upload VST3 zip
         uses: actions/upload-artifact@v4
         with:
-          name: ZTame-v1.0.0-Windows-VST3
-          path: artifacts/ZTame-v1.0.0-Windows-VST3.zip
+          name: ZTame-v1.2.0-Windows-VST3
+          path: artifacts/ZTame-v1.2.0-Windows-VST3.zip
           if-no-files-found: error
 
       - name: Upload Standalone zip
         uses: actions/upload-artifact@v4
         with:
-          name: ZTame-v1.0.0-Windows-Standalone
-          path: artifacts/ZTame-v1.0.0-Windows-Standalone.zip
+          name: ZTame-v1.2.0-Windows-Standalone
+          path: artifacts/ZTame-v1.2.0-Windows-Standalone.zip
           if-no-files-found: warn
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
-          name: ZTame-v1.0.0-Windows-Installer
-          path: artifacts/ZTame-v1.0.0-Windows-Installer.exe
+          name: ZTame-v1.2.0-Windows-Installer
+          path: artifacts/ZTame-v1.2.0-Windows-Installer.exe
           if-no-files-found: warn
