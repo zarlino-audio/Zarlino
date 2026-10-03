@@ -85,15 +85,31 @@ Track: mark done with date.
 - [x] Email provider: **Cloudflare Email Sending** (no third party). Binding `SEND_EMAIL`
       deployed; first send to the self-test prospect succeeded 2026-10-03 (`{"ok":true}`);
       `providerConfigured: true` confirmed live.
-- [ ] **Check the smoke email arrived** at wherever `support@zarlinoaudio.com` routes
-      (subject "Free ZTame license + 25% for your audience").
-- [ ] Then I switch the cycle ON (`{"enabled": true}`) and load the first reviewed
-      prospects (20-40, added via `/api/outreach/prospects`). Cap stays 20/day.
+- [x] Smoke email received at the routed inbox (founder-confirmed 2026-10-03).
+- [x] Cycle switched ON 2026-10-03 (`enabled: true`, live) — the 6-hour sweep sends ≤20/day.
+- [ ] Load the first reviewed prospects (20-40, via `/api/outreach/prospects`).
+      Batch 1 = founder-supplied names + verified public business contacts only.
 - [ ] Fund the card, then the **real DeepSeek top-up** (~$100-150) — the outreach/agent
       work needs headroom beyond the $2 smoke balance.
 - Deploys: if wrangler asks for login, use the scoped token —
       `$env:CLOUDFLARE_API_TOKEN = (value from .dev.vars)` before `npx wrangler deploy`.
 - See `../MARKETING_AND_AFFILIATE_PLAYBOOK.md` for the full operating manual.
+
+## 10. YouTube prospect sourcing (needs a free API key — 3 min)
+- [ ] console.cloud.google.com → new project `zarlino-os` → APIs & Services → Library →
+      enable **YouTube Data API v3** → Credentials → Create credentials → **API key** → copy it.
+- [ ] Wire it (clipboard-first; the value never passes through chat):
+      `powershell -ExecutionPolicy Bypass -File "C:\Users\khrit\Desktop\plugin\company-readiness\scripts\set-youtube-key.ps1"`
+- [ ] Then the OS can run: `youtube.search_channels`, `youtube.channel`,
+      `youtube.prospect_candidates` (public description contacts only — always a review list).
+
+## 11. WhatsApp bridge (founder channel) — restarted on Baileys 7 (2026-10-03)
+- The bridge was flapping (LINKED↔408 every few minutes) on Baileys 6.7 — the classic cause of
+  sends showing **"Waiting for this message"**. Upgraded to 7.0.0-rc14 and restarted via
+  `tools\whatsapp-bridge\start-bridge.vbs` (auth preserved — no re-pair needed).
+- [ ] Sanity check: send any message to the business line — the auto-reply must be readable
+      (no "Waiting for this message"). If it still appears: delete `auth\`, restart the bridge,
+      scan the QR from http://localhost:3037/ .
 
 ## Done by the AI on 2026-10-02 (no action needed)
 - Sales opened (SALES_ENABLED=true), stale "free until Aug 25" promo removed from every page.

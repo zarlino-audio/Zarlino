@@ -45,6 +45,9 @@ for v1, and anyone whose contact email isn't a public business inquiry address.
   it, don't add them.
 - First batches: 20–40 prospects per week, added via the API (bulk list prepared by the OS
   team from public pages, reviewed by the founder before sending).
+- Tooling: `youtube.search_channels` / `youtube.channel` / `youtube.prospect_candidates`
+  (needs the `YOUTUBE_API_KEY` secret; mines **only** public channel-description contacts and
+  returns a review list — nothing is auto-added or auto-sent).
 
 ## 4. The message (already written, in code)
 
@@ -71,15 +74,11 @@ Notes:
 - Deploys no longer need interactive login: set `CLOUDFLARE_API_TOKEN` from
   `.dev.vars` (the scoped token) before `npx wrangler deploy`.
 
-## 6. Enable sequence (the moment the key is wired)
-
-1. **Smoke test**: `POST /api/outreach/send {"prospectId": <self-test id>}` → the
-   self-test prospect (`support@zarlinoaudio.com`) receives the intro email. Check inbox.
-2. **Load batch 1**: 20–40 reviewed prospects via `POST /api/outreach/prospects`.
-3. **Switch on**: `POST /api/outreach/config {"enabled": true}` — the maintenance sweep
-   now sends ≤20/day automatically, and stops at the cap.
-4. **Watch the funnel**: `GET /api/outreach/report` daily; founder reviews REPLIED.
-   Replies go to `support@zarlinoaudio.com` — they must be answered within 24h.
+## 6. Enable sequence — DONE through step 3 (2026-10-03)
+1. **[x] Smoke test** — delivered to the founder inbox (Cloudflare Email Sending proven end-to-end).
+2. **[ ] Load batch 1** — 20–40 reviewed prospects via `POST /api/outreach/prospects`.
+3. **[x] Switch on** — `{"enabled": true}` live; the 6-hour maintenance sweep sends ≤20/day, stops at the cap.
+4. **[ ] Watch the funnel** — `GET /api/outreach/report` daily; answer REPLIES within 24h.
 
 ## 7. KPIs (weekly review)
 
