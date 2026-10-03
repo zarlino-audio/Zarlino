@@ -56,19 +56,20 @@ Two templates live in `src/core/outreach.ts` (`affiliate_intro`, `follow_up`):
 Rules: no attachments, no tracking pixels, no fake personalisation, no more than
 one follow-up without a reply. Any "no" → status `UNSUBSCRIBED` same day.
 
-## 5. Email provider setup (the one missing piece — 3 minutes)
+## 5. Email provider — DONE via Cloudflare Email Service (2026-10-03)
 
-Recommended: **Brevo free tier** (300 sends/day) — no domain DNS needed for v1:
-1. Sign up at brevo.com with `zarlino001@gmail.com`.
-2. Senders → add + verify sender `support@zarlinoaudio.com` **if that inbox actually
-   receives mail** (confirm its delivery target first!). Otherwise verify
-   `zarlino001@gmail.com` and we'll start from there.
-3. SMTP & API → API Keys → create key → copy it.
-4. Tell the OS side (me): run the clipboard wiring — `wrangler secret put EMAIL_API_KEY`
-   for the exec-os Worker (+ the same key value updated locally in `.dev.vars`).
-5. Verify: `GET /api/outreach/report` → `providerConfigured: true`.
+Outreach sends through the **Cloudflare Email Sending binding** (`[[send_email]]`
+`SEND_EMAIL` in `wrangler.toml`) as `support@zarlinoaudio.com`. The zone already
+carries the Email Service MX/DKIM/SPF records, and DMARC is `p=reject`.
+First live send verified (self-test prospect, 2026-10-03: `{"ok":true}`, audited,
+counted against the daily cap).
 
-(Alternative: Mailjet — same flow, key format `APIKEY:SECRET`.)
+Notes:
+- Provider switch: `EMAIL_PROVIDER = "cloudflare"` — no API key required.
+- Fallbacks remain wired in code (`brevo` / `mailjet` via `EMAIL_API_KEY` secret)
+  if Cloudflare Email Sending is ever unavailable on the plan.
+- Deploys no longer need interactive login: set `CLOUDFLARE_API_TOKEN` from
+  `.dev.vars` (the scoped token) before `npx wrangler deploy`.
 
 ## 6. Enable sequence (the moment the key is wired)
 

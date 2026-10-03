@@ -81,15 +81,18 @@ Track: mark done with date.
       route or a forwarded mailbox — if it's a Gmail forward only, add a second destination.)
 - [ ] Who is the **domain registrar** for zarlinoaudio.com (Cloudflare Registrar vs third party)?
 
-## 9. Outreach pipeline (built 2026-10-03 — needs your sender + enable)
-- [ ] **Confirm where support@zarlinoaudio.com delivers** (real mailbox vs forward).
-- [ ] **Brevo signup** (3 min, free tier 300/day): brevo.com with `zarlino001@gmail.com` →
-      Senders → verify `support@zarlinoaudio.com` (or the Gmail if support@ is not a real inbox)
-      → SMTP & API → create an API key → tell me and I'll wire it (clipboard method, value never in chat).
-- [ ] After wiring: I run the self-test send, you check the inbox, then I load the first
-      20-40 reviewed prospects and switch the cycle on (cap 20/day, kill switch available).
-- [ ] Fund the card, then do the **real DeepSeek top-up** (~$100-150) — the outreach/agent
+## 9. Outreach pipeline (built 2026-10-03 — sending LIVE via Cloudflare Email)
+- [x] Email provider: **Cloudflare Email Sending** (no third party). Binding `SEND_EMAIL`
+      deployed; first send to the self-test prospect succeeded 2026-10-03 (`{"ok":true}`);
+      `providerConfigured: true` confirmed live.
+- [ ] **Check the smoke email arrived** at wherever `support@zarlinoaudio.com` routes
+      (subject "Free ZTame license + 25% for your audience").
+- [ ] Then I switch the cycle ON (`{"enabled": true}`) and load the first reviewed
+      prospects (20-40, added via `/api/outreach/prospects`). Cap stays 20/day.
+- [ ] Fund the card, then the **real DeepSeek top-up** (~$100-150) — the outreach/agent
       work needs headroom beyond the $2 smoke balance.
+- Deploys: if wrangler asks for login, use the scoped token —
+      `$env:CLOUDFLARE_API_TOKEN = (value from .dev.vars)` before `npx wrangler deploy`.
 - See `../MARKETING_AND_AFFILIATE_PLAYBOOK.md` for the full operating manual.
 
 ## Done by the AI on 2026-10-02 (no action needed)

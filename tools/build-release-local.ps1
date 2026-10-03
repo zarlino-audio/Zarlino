@@ -139,16 +139,19 @@ if (-not $SkipBuild) {
 
 # --- Tests --------------------------------------------------------------------------
 if (-not $SkipTests -and $hasTests) {
-    Info 'ctest -L release-gate'
+    # Scope the gate to THIS plugin: the tree may contain other plugins' tests
+    # whose executables were never built (they would report "Not Run" failures).
+    $nameFilter = "^" + [regex]::Escape($Plugin) + "\."
+    Info "ctest -L release-gate -R $nameFilter"
     $oldEap2 = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    $listOut = & $ctest --test-dir $buildPath -C Release -N -L release-gate 2>&1
+    $listOut = & $ctest --test-dir $buildPath -C Release -N -L release-gate -R $nameFilter 2>&1
     $ErrorActionPreference = $oldEap2
     $count = ([regex]::Matches(($listOut | Out-String), 'Test\s+#\d+')).Count
     if ($count -eq 0) {
         Write-Host 'WARN: no tests carry the release-gate label — test step skipped' -ForegroundColor Yellow
     } else {
         $ErrorActionPreference = 'Continue'
-        & $ctest --test-dir $buildPath -C Release --output-on-failure -L release-gate
+        & $ctest --test-dir $buildPath -C Release --output-on-failure -L release-gate -R $nameFilter
         $rcTests = $LASTEXITCODE
         $ErrorActionPreference = 'Stop'
         if ($rcTests -ne 0) { Fail 'release-gate tests failed' }

@@ -1,7 +1,7 @@
 # Build output
 build/
 
-# SDKs (too large, license-restricted — document how to get them in README.md)
+# SDKs (too large, license-restricted â€” document how to get them in README.md)
 sdk/
 
 # macOS
@@ -14,3 +14,20 @@ Thumbs.db
 .vscode/
 *.xcuserdata/
 *.xcworkspace/
+
+# Zarlino license system â€” NEVER commit the private signing key.
+# The PUBLIC key (tools/keys/ztame_license_public.pem) and fingerprints ARE
+# committable: they are embedded into released plugin builds.
+tools/keys/ztame_license_private.pem
+tools/keys/*_private.pem
+tools/keys/*private*.pem
+*.priv
+
+# Local build trees (any suffix)
+/build-*/
+/build_*/
+# Session scratch at repo root (keep _rec/ and _recovered - guarded sources)
+/_*.txt
+/*.bak
+/probe*.txt
+/undefined

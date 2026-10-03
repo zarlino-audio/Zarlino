@@ -60,3 +60,6 @@ Legend for "2nd access": does anyone other than the founder hold admin/recovery 
 2. DeepSeek key was hard-coded in `C:\Users\khrit\collaborative-mql5-ide\backend\server.py` (removed 2026-10-02 — env-only now). The old account it belonged to is retired as of 2026-10-03; the new account + key are handled in FOUNDER_ACTIONS §4.
 3. `INTERNAL_SECRET` — was a hardcoded constant; as of 2026-10-02 it is a Worker secret (rotated).
 4. Website `ADMIN_TOKEN` — previously committed to the public repo; rotated 2026-09-29; founder copy file is missing (re-create).
+5. Wrangler CLI OAuth session expired 2026-10-03 — deploys now run with the scoped
+   `CF_API_TOKEN` (set `$env:CLOUDFLARE_API_TOKEN` from `.dev.vars` before `npx wrangler deploy`).
+   Re-login (`npx wrangler login`) is optional; the token path is sufficient and CI-safe.
