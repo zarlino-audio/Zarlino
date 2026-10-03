@@ -1,4 +1,4 @@
-;==============================================================================
+﻿;==============================================================================
 ;  ZTame — Windows installer (NSIS 3.x, 64-bit only)
 ;
 ;  Build from this directory:
@@ -33,9 +33,15 @@
 !define PUBLISHER   "Zarlino Audio"
 !define REGKEY      "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT}"
 
-; ---- Build tree (relative to this script) -----------------------------------
-!define SRC_VST3  "..\..\..\build\plugins\ZTame\ZTame_artefacts\Release\VST3\ZTame.vst3\Contents"
-!define SRC_APP   "..\..\..\build\plugins\ZTame\ZTame_artefacts\Release\Standalone\ZTame.exe"
+; ---- Build tree (relative to this script unless BUILD_DIR is overridden) -----
+; The local release script (tools\build-release-local.ps1) passes
+; /DBUILD_DIR=<absolute> so the installer can embed artefacts from build-msvc
+; (or any other tree). CI keeps the default and needs no change.
+!ifndef BUILD_DIR
+    !define BUILD_DIR "..\..\..\build"
+!endif
+!define SRC_VST3  "${BUILD_DIR}\plugins\ZTame\ZTame_artefacts\Release\VST3\ZTame.vst3\Contents"
+!define SRC_APP   "${BUILD_DIR}\plugins\ZTame\ZTame_artefacts\Release\Standalone\ZTame.exe"
 !define SRC_README "..\..\README.md"
 
 ; ---- Install targets --------------------------------------------------------
