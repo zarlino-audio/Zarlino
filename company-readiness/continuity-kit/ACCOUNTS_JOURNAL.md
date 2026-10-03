@@ -56,7 +56,7 @@ Legend for "2nd access": does anyone other than the founder hold admin/recovery 
 
 ## Known security debt to close (see FOUNDER_ACTIONS)
 
-1. `CF_API_TOKEN` — the local copy was invalid (401) since Sep; rotate/create a fresh scoped token.
+1. `CF_API_TOKEN` — **RESOLVED 2026-10-03**: fresh scoped token `zarlino-exec-os` created (Account: Workers Scripts/KV/R2 Edit + Account Settings Read; Zone zarlinoaudio.com: Zone Read + DNS Edit + Cache Purge). Wired to the Worker secret + local `.dev.vars`; verified `active` via API and end-to-end via `cloudflare.list_zones` (zone id 2effba86…). Note: the token value was visible once on the dashboard reveal page during setup — if you ever export/share the local session logs, rotate first (see FOUNDER_ACTIONS §3).
 2. DeepSeek key was hard-coded in `C:\Users\khrit\collaborative-mql5-ide\backend\server.py` (removed 2026-10-02 — env-only now). The old account it belonged to is retired as of 2026-10-03; the new account + key are handled in FOUNDER_ACTIONS §4.
 3. `INTERNAL_SECRET` — was a hardcoded constant; as of 2026-10-02 it is a Worker secret (rotated).
 4. Website `ADMIN_TOKEN` — previously committed to the public repo; rotated 2026-09-29; founder copy file is missing (re-create).

@@ -33,16 +33,15 @@ Track: mark done with date.
       (A test ping was sent 2026-10-02; if you subscribe later and see nothing, ask me to send another.)
 - [ ] Optional: bookmark `https://ntfy.sh/zarlino-alerts-h7k2mq4x` on your desktop browser as a web fallback.
 
-## 3. Rotate the Cloudflare API token (the old one has been invalid since September)
-- [ ] dash.cloudflare.com → My Profile → API Tokens → Create Token → custom token with:
-      Workers Scripts: Edit · Workers KV: Edit · R2: Edit · Account Settings: Read · Zone (zarlinoaudio.com): Read + DNS: Edit
-- [ ] In a terminal (you type the value — it never passes through the AI):
-      `cd C:\Users\khrit\Desktop\zarlino-executive-os`
-      `npx wrangler secret put CF_API_TOKEN` ← paste when prompted
-- [ ] Update the local copy too: edit `C:\Users\khrit\Desktop\zarlino-executive-os\.dev.vars`
-      (CF_API_TOKEN=...) — the nightly backup will pick it up automatically.
-- [ ] Verify: ask me to run the Doctor; `secrets.required` should stay green and the exec-os Cloudflare
-      tools should stop returning 401.
+## 3. Cloudflare API token — DONE 2026-10-03 (one optional re-rotation)
+- [x] Token `zarlino-exec-os` created (Workers Scripts/KV/R2: Edit · Account Settings: Read ·
+      Zone zarlinoaudio.com: Zone Read + DNS Edit + Cache Purge). Wired to the Worker secret and
+      local `.dev.vars`; verified live — `cloudflare.list_zones` returned the zone from the OS.
+- [ ] OPTIONAL (2 min, recommended if you ever export/share logs): re-rotate — create a new token
+      with the same scopes named `zarlino-exec-os-2`, then run
+      `powershell -ExecutionPolicy Bypass -File "C:\Users\khrit\Desktop\plugin\company-readiness\scripts\set-cf-token.ps1"`
+      (paste it there; it never passes through chat), then delete the old `zarlino-exec-os` token
+      in the dashboard.
 
 ## 4. DeepSeek key — create + propagate the NEW account's key
 - [x] Old key with the unrecoverable account: superseded (the account was replaced entirely 2026-10-03).
