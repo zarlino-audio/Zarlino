@@ -82,6 +82,17 @@ Track: mark done with date.
       route or a forwarded mailbox — if it's a Gmail forward only, add a second destination.)
 - [ ] Who is the **domain registrar** for zarlinoaudio.com (Cloudflare Registrar vs third party)?
 
+## 9. Outreach pipeline (built 2026-10-03 — needs your sender + enable)
+- [ ] **Confirm where support@zarlinoaudio.com delivers** (real mailbox vs forward).
+- [ ] **Brevo signup** (3 min, free tier 300/day): brevo.com with `zarlino001@gmail.com` →
+      Senders → verify `support@zarlinoaudio.com` (or the Gmail if support@ is not a real inbox)
+      → SMTP & API → create an API key → tell me and I'll wire it (clipboard method, value never in chat).
+- [ ] After wiring: I run the self-test send, you check the inbox, then I load the first
+      20-40 reviewed prospects and switch the cycle on (cap 20/day, kill switch available).
+- [ ] Fund the card, then do the **real DeepSeek top-up** (~$100-150) — the outreach/agent
+      work needs headroom beyond the $2 smoke balance.
+- See `../MARKETING_AND_AFFILIATE_PLAYBOOK.md` for the full operating manual.
+
 ## Done by the AI on 2026-10-02 (no action needed)
 - Sales opened (SALES_ENABLED=true), stale "free until Aug 25" promo removed from every page.
 - Legal v1 pages live: /legal/privacy, /legal/terms, /legal/license, /legal/refunds; footer wired.
@@ -90,3 +101,8 @@ Track: mark done with date.
 - Daily cloud backup of the OS database to R2 (verified), kept 30 deep.
 - Nightly local backup task (git bundles + uncommitted work + secrets), 14-day retention (verified).
 - `INTERNAL_SECRET` hardcode removed (now a rotated Worker secret).
+- 2026-10-03: **DeepSeek migrated** to the new company account (key propagated to all workers,
+  Doctor healthy, live chat proven); **low-balance sentinel** live (alerts < $10 on both channels).
+- 2026-10-03: **affiliate outreach pipeline shipped** (prospects v35, email integration, capped daily
+  cycle, tools + founder API, playbook) — kill switch OFF until the email provider is wired.
+- 2026-10-03: all work committed + pushed to GitHub in all three repos (offsite).
