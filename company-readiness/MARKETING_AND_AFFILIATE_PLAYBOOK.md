@@ -80,6 +80,14 @@ Notes:
 3. **[x] Switch on** — `{"enabled": true}` live; the 6-hour maintenance sweep sends ≤20/day, stops at the cap.
 4. **[ ] Watch the funnel** — `GET /api/outreach/report` daily; answer REPLIES within 24h.
 
+### 6b. Reply handling is autonomous (2026-10-03)
+Inbound mail for support@ is relayed by the `zarlino-inbound-mail` worker to
+`POST /api/outreach/reply`: every reply is stored, intent-classified
+(OPT_OUT / INTERESTED / QUESTION / OTHER), opt-outs flip the prospect to
+UNSUBSCRIBED instantly (they can never be contacted again — enforced in code),
+and the founder is notified through the usual channel. The only manual part
+left is reading the notifications/replying to real people.
+
 ## 7. KPIs (weekly review)
 
 - Prospects added · emails sent · reply rate (target ≥ 8–10% for niche cold outreach)

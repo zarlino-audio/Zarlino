@@ -111,6 +111,21 @@ Track: mark done with date.
       (no "Waiting for this message"). If it still appears: delete `auth\`, restart the bridge,
       scan the QR from http://localhost:3037/ .
 
+## 12. Autonomous reply handling — built 2026-10-03 (one dashboard click left)
+- When a prospect replies, it now routes itself: inbound-mail worker → OS
+  `/api/outreach/reply` → intent classified → **opt-outs enforced** (UNSUBSCRIBED, never
+  contacted again) → founder notified. Verified live with a simulated reply (`matched:true`).
+- [ ] **One-time dashboard setup:** Cloudflare → zarlinoaudio.com → **Email** → **Email Routing**
+      → **Routes** → the `support@zarlinoaudio.com` rule → **Edit** → action **Send to a Worker** →
+      select **zarlino-inbound-mail** → **Save**. (Mail still reaches your inbox — the worker
+      relays it to the OS first, then forwards.)
+- [ ] Tell me where support@ forwarded BEFORE this change — if it was not `zarlino001@gmail.com`,
+      I'll update the worker's `FORWARD_TO` and redeploy in ~1 minute.
+- Verify afterwards: reply to the old smoke email — it must reach your inbox AND be classified
+  in the OS (REPLIED; a plain "no" → UNSUBSCRIBED).
+- Note: `INTERNAL_SECRET` was **rotated** 2026-10-03 (fresh 48-char value set on both workers +
+  local `.dev.vars`). Nothing else referenced the old value.
+
 ## Done by the AI on 2026-10-02 (no action needed)
 - Sales opened (SALES_ENABLED=true), stale "free until Aug 25" promo removed from every page.
 - Legal v1 pages live: /legal/privacy, /legal/terms, /legal/license, /legal/refunds; footer wired.
