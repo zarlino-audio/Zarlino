@@ -58,6 +58,7 @@ Two templates live in `src/core/outreach.ts` (`affiliate_intro`, `follow_up`):
 
 Rules: no attachments, no tracking pixels, no fake personalisation, no more than
 one follow-up without a reply. Any "no" → status `UNSUBSCRIBED` same day.
+Follow-ups are now automated (see §6b): once per prospect, ≥5 days after the last touch.
 
 ## 5. Email provider — DONE via Cloudflare Email Service (2026-10-03)
 
@@ -78,15 +79,37 @@ Notes:
 1. **[x] Smoke test** — delivered to the founder inbox (Cloudflare Email Sending proven end-to-end).
 2. **[ ] Load batch 1** — 20–40 reviewed prospects via `POST /api/outreach/prospects`.
 3. **[x] Switch on** — `{"enabled": true}` live; the 6-hour maintenance sweep sends ≤20/day, stops at the cap.
-4. **[ ] Watch the funnel** — `GET /api/outreach/report` daily; answer REPLIES within 24h.
+4. **[ ] Watch the funnel** — `GET /api/outreach/report` daily (`recentReplies`, `autoRepliesToday`).
+   Replies are answered by the growth agent; the founder only reads **escalations**.
 
-### 6b. Reply handling is autonomous (2026-10-03)
+### 6b. Reply handling **and nurturing** are autonomous (2026-10-03)
 Inbound mail for support@ is relayed by the `zarlino-inbound-mail` worker to
 `POST /api/outreach/reply`: every reply is stored, intent-classified
 (OPT_OUT / INTERESTED / QUESTION / OTHER), opt-outs flip the prospect to
 UNSUBSCRIBED instantly (they can never be contacted again — enforced in code),
-and the founder is notified through the usual channel. The only manual part
-left is reading the notifications/replying to real people.
+and the founder is notified through the usual channel.
+
+**The growth agent answers them** (`src/integrations/growth-ai.ts` +
+`maybeAutoReply` in `src/core/outreach.ts`):
+- **Draft**: DeepSeek (`deepseek-chat`, temp 0.4) grounded in `GROWTH_FACTS` — the price
+  (free NFR license + 25% affiliate), payout route, product facts. No tools, no web.
+- **Policy gate before send** (`checkReplyPolicy`): length 20–1600 chars, no placeholders,
+  no guarantees, no AI/vendor branding, must mention "Zarlino" — a failing draft is
+  **not sent**; it escalates to the founder instead.
+- **Skips by design** (loop/abuse guards): outreach disabled, OPT_OUT, unknown sender,
+  our own address, auto-responder headers, prospect already REPLIED, daily cap reached.
+- **Follow-ups**: silent CONTACTED prospects get one follow-up ≥5 days after the last touch,
+  using the same template + optional opt-out, sharing the *same* daily cap as cold sends.
+- **Caps**: `GROWTH_REPLY_DAILY_CAP` (default 10, cluster var) · `FOLLOWUP_AFTER_DAYS` (default 5).
+- **Kill switch**: setting `growth_auto_reply_enabled = "0"` disables auto-replies
+  (follow-ups stop with the main `outreach_enabled` switch).
+- **Audit**: every draft/auto-reply/follow-up lands in `outreach_touches`
+  (templates `auto_reply`, `follow_up`) and auto-replies show in the daily report.
+
+Live proof (2026-10-03): simulated reply from the founder Gmail
+(`"Yes, please send me the license details!"`) → `{"intent":"INTERESTED","status":"REPLIED",
+"autoReply":{"sent":true}}` — the LLM-drafted answer landed in that inbox, sent by the
+company itself. `autoRepliesToday=1`.
 
 ## 7. KPIs (weekly review)
 
@@ -97,13 +120,18 @@ left is reading the notifications/replying to real people.
 
 ## 8. Standing safety rails
 
-- Cap starts at 20/day; raise only after two weeks with reply rate ≥ 5% and zero complaints.
-- Kill switch is one API call (`{"enabled": false}`); it also survives restarts.
-- The system never invents an address, never emails a "no", and logs everything.
-- Deliverability: if Brevo shows bounces > 5%, pause and clean the list before continuing.
+- Cap starts at 20/day (outreach) and 10/day (auto-replies); raise only after two weeks
+  with reply rate ≥ 5% and zero complaints.
+- Kill switches are one API call each (`{"enabled": false}` for all outreach;
+  `growth_auto_reply_enabled = "0"` for LLM replies); both survive restarts.
+- The system never invents an address, never emails a "no", and logs everything;
+  any unverified claim from the LLM is blocked by the policy gate, not by review.
+- Deliverability: if bounces > 5%, pause and clean the list before continuing.
 
 ## 9. What "the marketing team" is (reality check)
 
-Today it is: this pipeline + the OS agents (tools above) + the founder's judgment.
-Phase 3 adds a human community/support contractor — this playbook is their onboarding.
-Until then, autonomy means: **the machine sends; the founder only reads replies.**
+Today it is: this pipeline + the growth agent (sourcing, sending, replying, following up)
++ the founder auditing escalations and exceptions. Phase 3 adds a human community/support
+contractor — this playbook is their onboarding.
+Until then, autonomy means: **the machine sources, sends, answers, and follows up;
+the founder only audits.**

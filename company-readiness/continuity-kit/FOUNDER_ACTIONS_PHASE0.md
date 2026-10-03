@@ -126,6 +126,24 @@ Track: mark done with date.
 - Note: `INTERNAL_SECRET` was **rotated** 2026-10-03 (fresh 48-char value set on both workers +
   local `.dev.vars`). Nothing else referenced the old value.
 
+## 13. Autonomous LLM nurturing — built 2026-10-03 (nothing to do; it is already on)
+- **Nurturing is the LLM's job now, not yours.** When a prospect replies INTERESTED or asks a
+  QUESTION, the growth agent drafts the answer with DeepSeek (grounded in the real price/terms
+  facts), runs it through a **policy gate** (length, no guarantees, no AI branding, must mention
+  Zarlino), and sends it as `support@zarlinoaudio.com`. A failing draft is **never sent** —
+  it escalates to you with a notification instead.
+- **Follow-ups**: prospects who went quiet ≥5 days after the last touch get one follow-up,
+  once per person, sharing the same daily cap as cold sends.
+- **Live proof**: a simulated reply from your Gmail (`"Yes, please send me the license
+  details!"`) produced `{\"intent\":\"INTERESTED\",\"status\":\"REPLIED\",\"autoReply\":{\"sent\":true}}`
+  — check that Gmail inbox: the company answered by itself.
+- **Loop/abuse guards**: never replies to itself, to unknown senders, to auto-responders,
+  to opted-out prospects, or twice to the same prospect; hard daily cap (10 replies).
+- **Controls** (founder API, no deploy needed): `growth_auto_reply_enabled = \"0\"` disables
+  LLM replies · `GROWTH_REPLY_DAILY_CAP` (10) · `FOLLOWUP_AFTER_DAYS` (5).
+- **You only see exceptions**: escalations (draft blocked/failed) and the daily report's
+  `recentReplies` / `autoRepliesToday`. Zero inbox work required.
+
 ## Done by the AI on 2026-10-02 (no action needed)
 - Sales opened (SALES_ENABLED=true), stale "free until Aug 25" promo removed from every page.
 - Legal v1 pages live: /legal/privacy, /legal/terms, /legal/license, /legal/refunds; footer wired.
