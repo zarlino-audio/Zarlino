@@ -1,0 +1,5 @@
+# built outputs - rebuild with build-vm-setup.ps1 (the OS serves them as artifacts)
+*.exe
+zarlino-vm-payload.zip
+launcher/_build_*.cs
+*.bom.nsi
