@@ -1,0 +1,37 @@
+{
+    "name":  "zarlino-vm-setup",
+    "version":  "1.0.1",
+    "built_at":  "2026-10-04T05:04:35Z",
+    "installer":  {
+                      "file":  "ZarlinoVM-Setup-1.0.1.exe",
+                      "sha256":  "b2f46cd5adfd6a9a000f2a563905107f6406d24e038796058f1368e8c85ca3fb",
+                      "bytes":  27136
+                  },
+    "payload":  {
+                    "file":  "zarlino-vm-payload.zip",
+                    "key":  "artifacts/vm-setup/zarlino-vm-payload.zip",
+                    "sha256":  "5597b13f36712817506694f6bd245993b6dcaf1ed5fed671947cda3ebca2a4a6",
+                    "bytes":  527816
+                },
+    "artifacts":  {
+                      "installer_key":  "artifacts/vm-setup/2026-10-04T05-04-42-265Z-zarlinovm-setup-1.0.1.exe",
+                      "manifest_key":  "artifacts/vm-setup/vm-setup-manifest.json"
+                  },
+    "requirements":  [
+                         "Windows Server 2016+ / Windows 10+",
+                         "Administrator",
+                         "outbound 443 to os.zarlinoaudio.com",
+                         "5 GB free disk"
+                     ],
+    "manual_steps":  [
+                         "Start/allocate the cloud VM",
+                         "Run the installer inside the VM",
+                         "Paste the founder token",
+                         "Scan the WhatsApp QR once"
+                     ],
+    "not_included":  [
+                         "no secrets embedded",
+                         "no Visual Studio / build toolchain",
+                         "does not create the cloud VM itself"
+                     ]
+}
