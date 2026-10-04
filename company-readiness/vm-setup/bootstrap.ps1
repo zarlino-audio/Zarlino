@@ -72,6 +72,50 @@ function Invoke-Action([string]$description, [scriptblock]$action) {
   return & $action
 }
 
+# Delete a tree that may be locked or deeper than PS 5.1 likes (node_modules).
+# Escalates: Remove-Item -> cmd rmdir -> robocopy mirror -> give up (caller
+# then updates files in place instead of failing the whole install).
+function Remove-Tree([string]$path) {
+  if (-not (Test-Path $path)) { return $true }
+  try { Remove-Item -Recurse -Force $path -ErrorAction Stop } catch { }
+  if (-not (Test-Path $path)) { return $true }
+  try { & cmd /c ("rmdir /s /q `"" + $path + "`"") | Out-Null } catch { }
+  if (-not (Test-Path $path)) { return $true }
+  try {
+    $empty = Join-Path $env:TEMP ("zarlino-empty-" + [Guid]::NewGuid().ToString("N").Substring(0, 6))
+    New-Item -ItemType Directory -Force -Path $empty | Out-Null
+    & robocopy $empty $path /MIR /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+    Remove-Item $empty -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue
+  } catch { }
+  return -not (Test-Path $path)
+}
+
+# The bridge and the daemon run FROM the install tree: on an upgrade they hold
+# files in tools\whatsapp-bridge, which is exactly what made the old delete step
+# abort. Two kinds of holder matter:
+#   - node.exe running the bridge / daemon
+#   - the cmd.exe or wscript.exe wrapper our launcher created, whose *working
+#     directory* is inside the tree (a directory with a process CWD cannot be
+#     removed on Windows, even when every file handle is closed)
+# Stop them all; the start step later in this script brings them back. Never
+# touches the running setup itself ($PID).
+function Stop-ZarlinoProcesses {
+  $pattern = 'whatsapp-bridge|local-daemon|Zarlino\\launchers'
+  $found = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object {
+      $_.Name -in @('node.exe', 'cmd.exe', 'wscript.exe') -and
+      $_.ProcessId -ne $PID -and
+      $_.CommandLine -and $_.CommandLine -match $pattern
+    }
+  $n = 0
+  foreach ($p in @($found)) {
+    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop; $n++ } catch { }
+  }
+  if ($n -gt 0) { Start-Sleep -Seconds 3 }
+  return $n
+}
+
 # ---------------------------------------------------------------------------
 Step "Preflight"
 # ---------------------------------------------------------------------------
@@ -178,8 +222,27 @@ else {
 $execRoot = Join-Path $InstallRoot "exec-os"
 $bridgeRoot = Join-Path $execRoot "tools\whatsapp-bridge"
 Invoke-Action ("create {0}" -f $InstallRoot) { New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null }
+
+# Upgrades: stop the running processes, then replace the tree (or update it in
+# place if something still refuses to let go).
+$overwriteInPlace = $false
+if (Test-Path $execRoot) {
+  if ($DryRun) {
+    Write-Host ("    DRY  stop running bridge/daemon, then replace {0}" -f $execRoot) -ForegroundColor DarkGray
+  }
+  else {
+    $stopped = Stop-ZarlinoProcesses
+    if ($stopped -gt 0) { Ok ("stopped {0} running Zarlino process(es) before replacing files" -f $stopped) }
+    else { Info "no running bridge/daemon found" }
+    if (-not (Remove-Tree $execRoot)) {
+      $overwriteInPlace = $true
+      Warn "old install could not be fully deleted (files still locked) - updating files in place"
+    }
+  }
+}
+
 Invoke-Action ("expand payload into {0}" -f $execRoot) {
-  if (Test-Path $execRoot) { Remove-Item -Recurse -Force $execRoot }
+  if ((Test-Path $execRoot) -and -not $overwriteInPlace) { Remove-Tree $execRoot | Out-Null }
   Expand-Archive -Path $zip -DestinationPath $InstallRoot -Force
 }
 Ok "payload laid out"
@@ -191,11 +254,11 @@ if ($SkipDeps) { Warn "dependency install skipped by flag" }
 elseif ($DryRun) { Write-Host ("    DRY  npm ci in {0} and {1}" -f $execRoot, $bridgeRoot) -ForegroundColor DarkGray }
 else {
   Push-Location $execRoot
-  try { Info "npm ci (executor)"; & npm ci --no-audit --no-fund | Out-Null; if ($LASTEXITCODE -ne 0) { Fail "npm ci failed in the executor" } }
+  try { Info "npm ci (executor)"; & npm ci --no-audit --no-fund | Out-Null; if ($LASTEXITCODE -ne 0) { Warn "npm ci failed in the executor (node_modules may be locked) - continuing, the daemon may still start from the existing install" } }
   finally { Pop-Location }
   Ok "executor dependencies installed"
   Push-Location $bridgeRoot
-  try { Info "npm ci (whatsapp bridge)"; & npm ci --no-audit --no-fund | Out-Null; if ($LASTEXITCODE -ne 0) { Fail "npm ci failed in the bridge" } }
+  try { Info "npm ci (whatsapp bridge)"; & npm ci --no-audit --no-fund | Out-Null; if ($LASTEXITCODE -ne 0) { Warn "npm ci failed in the bridge - continuing, check C:\Zarlino\bridge.log after start" } }
   finally { Pop-Location }
   Ok "bridge dependencies installed"
 }
