@@ -144,6 +144,23 @@ Track: mark done with date.
 - **You only see exceptions**: escalations (draft blocked/failed) and the daily report's
   `recentReplies` / `autoRepliesToday`. Zero inbox work required.
 
+## 14. Machine retirement — DONE 2026-10-04 (laptop retired as a host; Zarlino1 is the host)
+- The VM (`Zarlino1`) took over both host jobs. Verified in this order:
+  1. replacement live: doctor showed `whatsapp.bridge: Bridge alive on Zarlino1`, heartbeat 7s;
+  2. **drain test with the old host dark**: this laptop's bridge was stopped first, then a
+     notification was queued (`POST /api/notify/founder`) — it flipped `QUEUED_UNCONFIGURED -> SENT`
+     within 50s, which only the VM could have done (you should have received that WhatsApp message);
+  3. `scripts/retire-this-machine.ps1 -Execute -Deregister`: daemon stopped, both startup entries
+     removed, `local_daemon_01` deregistered. No node processes remain; Startup holds only `Ollama.lnk`.
+- After >10 minutes with the laptop dark the doctor still reports `local_agent.health: OK` —
+  the VM's executor daemon is beating.
+- [ ] Optional, on the business phone: WhatsApp -> Linked devices -> remove the old laptop entry.
+- [ ] Decide: keep the `Zarlino Nightly Backup` task (02:30, protects the local worktree) or delete
+      it if this machine is ever wiped/returned.
+- **Consequence to know:** builds/renders are still laptop-only (no Visual Studio/Ninja toolchain on
+  the VM). With the daemon retired, build tasks sit PENDING in the queue until a build host exists
+  again — that is the laptop, or a future build-capable VM.
+
 ## Done by the AI on 2026-10-02 (no action needed)
 - Sales opened (SALES_ENABLED=true), stale "free until Aug 25" promo removed from every page.
 - Legal v1 pages live: /legal/privacy, /legal/terms, /legal/license, /legal/refunds; footer wired.
