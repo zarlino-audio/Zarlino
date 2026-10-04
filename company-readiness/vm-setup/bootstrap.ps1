@@ -29,6 +29,8 @@ param(
   [string]$InternalSecret = $env:ZARLINO_INTERNAL_SECRET,
   [string]$PayloadKey = "",
   [int]$QrPort = 3037,
+  [switch]$BuildHost,
+  [string]$GitHubToken = $env:ZARLINO_GITHUB_TOKEN,
   [switch]$DryRun,
   [switch]$SkipDeps,
   [switch]$NoStart
@@ -205,6 +207,7 @@ $devVars = Join-Path $execRoot ".dev.vars"
 $devVarsBody = @()
 $devVarsBody += "FOUNDER_AUTH_TOKEN=$ExecToken"
 if ($InternalSecret) { $devVarsBody += "INTERNAL_SECRET=$InternalSecret" }
+if ($GitHubToken) { $devVarsBody += "GITHUB_TOKEN=$GitHubToken" }
 $devVarsBody += "EXEC_URL=$OsUrl"
 $devVarsBody += "ZARLINO_VM=1"
 Invoke-Action ("write {0} (ACL: Administrators + SYSTEM only)" -f $devVars) {
@@ -282,6 +285,57 @@ else {
     if ($bridge) { Ok ("OS monitor sees the bridge: {0} (last check {1})" -f $bridge.state, $bridge.at) }
     else { Info "OS monitor has no bridge entry yet - the first heartbeat lands within ~1 minute" }
   } catch { Warn ("could not read the OS monitor: {0}" -f $_.Exception.Message) }
+}
+
+# ---------------------------------------------------------------------------
+Step "Build host (optional)"
+# ---------------------------------------------------------------------------
+# With -BuildHost the machine also becomes the plugin build/release host: MSVC
+# build tools + CMake + Ninja + NSIS + the monorepo + a verified ZTame build.
+# It needs a GitHub token for the private repo; without one the stage still
+# installs the toolchain and reports what is missing.
+if (-not $BuildHost -and -not $DryRun -and -not $SkipDeps) {
+  $answer = Read-Host "    Make this machine the plugin BUILD HOST as well? (installs MSVC + CMake + Ninja + NSIS, 10-30 min) [y/N]"
+  if ($answer -match '^(y|yes)$') { $BuildHost = $true }
+}
+if ($BuildHost -and -not $GitHubToken -and -not $DryRun) {
+  Write-Host "    Paste a GitHub token with read access to zarlino-audio/Zarlino (stored only on this machine)." -ForegroundColor Yellow
+  $secureGit = Read-Host -Prompt "    GITHUB_TOKEN (Enter to skip the repo stage)" -AsSecureString
+  $bstrGit = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureGit)
+  try { $GitHubToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstrGit) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstrGit) }
+  if ($GitHubToken) {
+    # Persist it for the daemon (build tools read it from the machine's env).
+    [Environment]::SetEnvironmentVariable("ZARLINO_GITHUB_TOKEN", $GitHubToken, "Machine")
+    Ok "GitHub token stored (machine environment)"
+  }
+  else { Warn "no GitHub token - the toolchain will install but the repo will not be cloned" }
+}
+if (-not $BuildHost) {
+  Info "skipped (answer y above, or pass -BuildHost)"
+}
+else {
+  $provScript = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "provision-buildhost.ps1"
+  if (-not (Test-Path $provScript)) {
+    # The launcher extracts it next to this script; fetch from the OS otherwise.
+    $provScript = Join-Path $InstallRoot "provision-buildhost.ps1"
+  }
+  if (-not (Test-Path $provScript)) {
+    Warn ("provision-buildhost.ps1 not found - run it separately from " + $InstallRoot)
+  }
+  else {
+    $provArgs = @("-Stage", "all", "-Root", $InstallRoot, "-RepoDir", (Join-Path $InstallRoot "workspace"))
+    if ($GitHubToken) { $provArgs += @("-GitHubToken", $GitHubToken) }
+    if ($DryRun) { $provArgs += "-DryRun" }
+    if ($DryRun) {
+      Write-Host ("    DRY  powershell -File {0} {1}" -f $provScript, ($provArgs -join " ")) -ForegroundColor DarkGray
+    }
+    else {
+      Info "running the build-host provisioner (this takes 10-30 min: MSVC workload)"
+      & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $provScript @provArgs
+      if ($LASTEXITCODE -ne 0) { Warn "build-host provisioning reported a failure - see C:\Zarlino\buildhost.log" }
+      else { Ok "build host ready (log: C:\Zarlino\buildhost.log)" }
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------

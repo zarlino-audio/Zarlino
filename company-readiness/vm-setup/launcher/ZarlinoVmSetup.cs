@@ -30,6 +30,7 @@ internal static class Program
 {
     private const string ScriptName = "bootstrap.ps1";
     private const string ReadmeName = "README.md";
+    private const string BuildHostName = "provision-buildhost.ps1";
 
     private static string SetupRoot()
     {
@@ -49,6 +50,16 @@ internal static class Program
             }
         }
         catch { return false; }
+    }
+
+    private static bool HasResource(string resourceName)
+    {
+        Assembly asm = Assembly.GetExecutingAssembly();
+        foreach (string n in asm.GetManifestResourceNames())
+        {
+            if (n == resourceName) return true;
+        }
+        return false;
     }
 
     private static void Extract(string resourceName, string targetPath)
@@ -86,11 +97,13 @@ internal static class Program
         string root = SetupRoot();
         string script = Path.Combine(root, ScriptName);
         string readme = Path.Combine(root, ReadmeName);
+        string buildHost = Path.Combine(root, BuildHostName);
 
         try
         {
             Extract(ScriptName, script);
             Extract(ReadmeName, readme);
+            if (HasResource(BuildHostName)) Extract(BuildHostName, buildHost);
         }
         catch (Exception ex)
         {
@@ -104,6 +117,16 @@ internal static class Program
         {
             Console.WriteLine("    ..   extract-only mode: nothing else was done");
             return 0;
+        }
+
+        // Forward any extra arguments to the bootstrap (e.g. -BuildHost, -DryRun).
+        string extraArgs = "";
+        foreach (string a in args)
+        {
+            if (a.Equals("--extract-only", StringComparison.OrdinalIgnoreCase)) continue;
+            if (a.Equals("--version", StringComparison.OrdinalIgnoreCase)) continue;
+            if (a.Equals("-v", StringComparison.OrdinalIgnoreCase)) continue;
+            extraArgs += " " + a;
         }
 
         if (!IsElevated())
@@ -133,7 +156,7 @@ internal static class Program
         ProcessStartInfo psi = new ProcessStartInfo
         {
             FileName = "powershell.exe",
-            Arguments = "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"" + script + "\"",
+            Arguments = "-NoProfile -ExecutionPolicy Bypass -NoExit -File \"" + script + "\"" + extraArgs,
             UseShellExecute = false
         };
         Process p = Process.Start(psi);

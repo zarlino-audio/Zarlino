@@ -109,7 +109,7 @@ else {
   [IO.File]::WriteAllText($patched, $code, (New-Object Text.UTF8Encoding($false)))
   Info ("csc -> {0}" -f (Split-Path -Leaf $exePath))
   & $csc /nologo /target:exe /platform:anycpu /optimize+ /win32manifest:"$launcherDir\vm-setup.manifest" `
-    /resource:"$kitDir\bootstrap.ps1",bootstrap.ps1 /resource:"$kitDir\README.md",README.md `
+    /resource:"$kitDir\bootstrap.ps1",bootstrap.ps1 /resource:"$kitDir\README.md",README.md /resource:"$kitDir\provision-buildhost.ps1",provision-buildhost.ps1 `
     /out:"$exePath" "$patched" | Out-Null
   Remove-Item $patched -ErrorAction SilentlyContinue
   if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exePath)) { Fail "csc failed with exit code $LASTEXITCODE" }

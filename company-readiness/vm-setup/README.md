@@ -29,14 +29,31 @@ Run it inside the VM, paste the founder token, and it:
 It is idempotent - re-run it any time - and supports `-DryRun` to preview every action
 without changing anything.
 
+## Build host (`-BuildHost`) - moving the toolchain off the laptop
+
+Answer **y** to the build-host question (or pass `-BuildHost`, or run `provision-buildhost.ps1`
+directly) and the same machine also becomes the plugin build host. Stages are idempotent and
+individually runnable with `-Stage <name>` (also `-Stage all`):
+
+| Stage | What it does | Notes |
+|---|---|---|
+| `toolchain` | VS 2022 **Build Tools** with the C++ workload, CMake, Ninja, NSIS, Git | winget first, direct-download fallback; needs **elevation** - the exe already requests it |
+| `repo` | clone `zarlino-audio/Zarlino` **including the JUCE submodule** | needs a GitHub token (prompted once, stored in the machine environment) |
+| `env` | writes `C:\Zarlino\build-env.ps1` (VsDevCmd + PATH) and `C:\Zarlino\build-plugin.ps1` | lets the OS daemon build without an interactive shell |
+| `verify` | cmake configure -> `ninja <Plugin>_All` -> `ctest -L release-gate` | **the acceptance evidence** - a real build must pass here |
+| `backup` | nightly 02:30 code bundle + config copy, 14-day retention | the job that used to run on the laptop |
+
+Log: `C:\Zarlino\buildhost.log`. Preview: `-DryRun`. Run stages later, e.g.
+`powershell -File C:\Zarlino\provision-buildhost.ps1 -Stage toolchain`.
+
 ## What it deliberately does not do
 
 | Not included | Why |
 |---|---|
 | Creating/starting the cloud VM | that stays an explicit (paid) cloud action, not something an installer does behind your back |
-| Any embedded secret | the token is typed by you and stored only on the machine, ACL-restricted |
-| Visual Studio / Ninja toolchain | builds and renders still belong to the laptop until the cloud build story exists |
+| Any embedded secret | the tokens are typed by you and stored only on the machine, ACL-restricted |
 | Mac/AU building | unrelated to a Windows VM |
+| Silent elevation | the toolchain stage needs admin; the exe asks for it up front instead of trying to bypass it |
 
 A VM host gives you: the always-on **WhatsApp founder channel**, an executor that heartbeats
 into the OS, and dispatch/soak work. It does not give you plugin builds.
