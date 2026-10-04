@@ -24,8 +24,9 @@
 
 [CmdletBinding()]
 param(
-  [ValidateSet("toolchain", "repo", "env", "verify", "backup", "all")]
-  [string[]]$Stage = @("all"),
+  # Comma-separated list is accepted when run with -File (PS 5.1 does not split
+  # arrays for -File): -Stage toolchain   or   -Stage repo,env,verify
+  [string]$Stage = "all",
   [string]$Root = "C:\Zarlino",
   [string]$RepoDir = "",
   [string]$GitHubToken = $env:ZARLINO_GITHUB_TOKEN,
@@ -61,8 +62,29 @@ function Invoke-Act([string]$what, [scriptblock]$act) {
 }
 function Have([string]$exe) { return [bool](Get-Command $exe -ErrorAction SilentlyContinue) }
 
-$stages = if ($Stage -contains "all") { @("toolchain", "repo", "env", "verify", "backup") } else { $Stage }
+$stages = @($Stage -split "," | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ })
+foreach ($s in $stages) {
+  if ($s -notin @("toolchain", "repo", "env", "verify", "backup", "all")) { throw "unknown stage '$s' (use toolchain|repo|env|verify|backup|all)" }
+}
+if ($stages -contains "all") { $stages = @("toolchain", "repo", "env", "verify", "backup") }
 Log ("build-host provisioning start on {0} (stages: {1})" -f $env:COMPUTERNAME, ($stages -join ","))
+
+# Shared: find the MSVC toolchain. vswhere is the only reliable way on a
+# machine that may have several VS installs (or none).
+$script:VsWhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+function Get-VsPath {
+  if (-not (Test-Path $script:VsWhere)) { return "" }
+  $p = & $script:VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+  return ($p | Select-Object -First 1)
+}
+function Get-ClExe {
+  $vs = Get-VsPath
+  if (-not $vs) { return "" }
+  $cl = Get-ChildItem (Join-Path $vs "VC\Tools\MSVC") -Recurse -Filter cl.exe -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+  if ($cl) { return $cl.FullName }
+  return ""
+}
 
 # ---------------------------------------------------------------------------
 # Stage: toolchain
@@ -74,29 +96,27 @@ if ($stages -contains "toolchain") {
   if ($winget) { Ok "winget available" } else { Warn "winget not found - falling back to direct downloads" }
 
   # --- Visual Studio 2022 Build Tools (C++ workload) ------------------------
-  $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-  $hasMsvc = $false
-  if (Test-Path $vswhere) {
-    $inst = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
-    if ($inst) { $hasMsvc = $true; Ok ("MSVC present: " + $inst) }
-  }
-  if (-not $hasMsvc) {
+  $existingCl = Get-ClExe
+  if ($existingCl) { Ok ("MSVC present: " + $existingCl) }
+  else {
+    if (Get-VsPath) { Info "a Visual Studio install exists but without the C++ workload - adding VCTools" }
     if ($winget) {
       Invoke-Act "winget install Microsoft.VisualStudio.2022.BuildTools (VCTools workload, silent, ~10 min)" {
         winget install --id Microsoft.VisualStudio.2022.BuildTools --accept-source-agreements --accept-package-agreements --silent `
           --override "--quiet --wait --norestart --nocache --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
       }
     }
-    else {
+    # Fallback (also used when winget reports success but installed nothing):
+    if (-not (Get-ClExe)) {
       $vsExe = Join-Path $env:TEMP "vs_BuildTools.exe"
-      Invoke-Act "download + install VS 2022 Build Tools (VCTools workload, ~10 min)" {
+      Invoke-Act "download + install VS 2022 Build Tools directly from Microsoft (~10 min)" {
         Invoke-WebRequest "https://aka.ms/vs/17/release/vs_BuildTools.exe" -OutFile $vsExe -UseBasicParsing -TimeoutSec 600
         Start-Process $vsExe -ArgumentList "--quiet", "--wait", "--norestart", "--nocache", "--add", "Microsoft.VisualStudio.Workload.VCTools", "--includeRecommended" -Wait
       }
     }
     if (-not $DryRun) {
-      $inst = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
-      if ($inst) { Ok ("MSVC installed: " + $inst) } else { Fail "MSVC install did not land (check the VS installer log in %TEMP%)" }
+      if (Get-ClExe) { Ok ("MSVC installed: " + (Get-ClExe)) }
+      else { Fail "MSVC is still missing after installation. Run the VS installer interactively on this VM (install the 'Desktop development with C++' workload), then re-run: -Stage env" }
     }
   }
 
@@ -189,26 +209,37 @@ if ($stages -contains "repo") {
 # ---------------------------------------------------------------------------
 if ($stages -contains "env") {
   Step "Build environment"
-  $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-  $vsPath = if (Test-Path $vswhere) { (& $vswhere -latest -products * -property installationPath 2>$null | Select-Object -First 1) } else { "" }
+  $vsPath = Get-VsPath
+  $clExe = Get-ClExe
+  if (-not $vsPath -or -not $clExe) {
+    if ($DryRun) { Warn "MSVC not detected - the env stage would fail on a real run (install the toolchain first)" }
+    else { Fail "MSVC toolchain not found (no C++ workload). Run: powershell -File <this script> -Stage toolchain   then re-run -Stage env" }
+  }
+  Ok ("visual studio: " + $vsPath)
+  Ok ("compiler: " + $clExe)
   $envFile = Join-Path $Root "build-env.ps1"
   $lines = @(
     "# Zarlino build environment (generated by provision-buildhost.ps1)",
     "# Dot-source this in any shell that must build:  . C:\Zarlino\build-env.ps1",
     ('$env:ZARLINO_REPO = "' + $RepoDir + '"'),
     ('$env:VSINSTALLDIR = "' + $vsPath + '"'),
-    ('$vsDevCmd = Join-Path $env:VSINSTALLDIR "Common7\Tools\VsDevCmd.bat"'),
-    'if (Test-Path $vsDevCmd) {',
-    '  $tmp = [IO.Path]::GetTempFileName()',
-    '  cmd /c "`"$vsDevCmd`" -arch=amd64 -host_arch=amd64 >nul && set" | Set-Content $tmp',
-    '  Get-Content $tmp | ForEach-Object {',
-    '    if ($_ -match "^([^=]+)=(.*)$" -and $Matches[1] -notin @("PATH","PSModulePath")) {',
-    '      [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], "Process")',
-    '    }',
-    '  }',
-    '  Remove-Item $tmp -ErrorAction SilentlyContinue',
+    '# Re-resolve Visual Studio at load time (a repair/update can move it).',
+    '$vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"',
+    'if (-not (Test-Path $env:VSINSTALLDIR) -and (Test-Path $vswhere)) {',
+    '  $env:VSINSTALLDIR = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)',
     '}',
-    '$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")'
+    '$vsDevCmd = Join-Path $env:VSINSTALLDIR "Common7\Tools\VsDevCmd.bat"',
+    'if (-not (Test-Path $vsDevCmd)) { throw "MSVC toolchain not found - run: provision-buildhost.ps1 -Stage toolchain" }',
+    '$tmp = [IO.Path]::GetTempFileName()',
+    'cmd /c "`"$vsDevCmd`" -arch=amd64 -host_arch=amd64 >nul && set" | Set-Content $tmp',
+    'Get-Content $tmp | ForEach-Object {',
+    '  if ($_ -match "^([^=]+)=(.*)$" -and $Matches[1] -notin @("PATH","PSModulePath")) {',
+    '    [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], "Process")',
+    '  }',
+    '}',
+    'Remove-Item $tmp -ErrorAction SilentlyContinue',
+    '$env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User")',
+    'if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) { Write-Warning "cl.exe is not on PATH after loading the environment" }'
   )
   Invoke-Act ("write " + $envFile) { [IO.File]::WriteAllLines($envFile, $lines, (New-Object Text.UTF8Encoding($false))) }
   Ok ("build environment written (repo: " + $RepoDir + ")")
@@ -239,6 +270,7 @@ if ($stages -contains "verify") {
   }
   else {
     . $envFile
+    if (-not (Have cl.exe)) { Fail "cl.exe is not on PATH after loading build-env.ps1 - the MSVC toolchain is missing (run -Stage toolchain)" }
     if (-not (Have cmake)) { Fail "cmake not on PATH after env load" }
     if (-not (Have ninja)) { Fail "ninja not on PATH after env load" }
     $buildDir = Join-Path $RepoDir "build-vm"

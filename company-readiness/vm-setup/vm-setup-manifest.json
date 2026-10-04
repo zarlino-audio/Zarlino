@@ -1,20 +1,20 @@
 {
     "name":  "zarlino-vm-setup",
-    "version":  "2.0.2",
-    "built_at":  "2026-10-04T07:36:03Z",
+    "version":  "2.0.3",
+    "built_at":  "2026-10-04T16:09:07Z",
     "installer":  {
-                      "file":  "ZarlinoVM-Setup-2.0.2.exe",
-                      "sha256":  "8be4b13ee75be83f579f401c15278fa72d873a0e1f6a19d6e4efc98c1ed72c45",
-                      "bytes":  53248
+                      "file":  "ZarlinoVM-Setup-2.0.3.exe",
+                      "sha256":  "48bb7645149a23fa1f867c316eea570e84e69a377935bd5ac996a31d91cb933f",
+                      "bytes":  55296
                   },
     "payload":  {
                     "file":  "zarlino-vm-payload.zip",
                     "key":  "artifacts/vm-setup/zarlino-vm-payload.zip",
-                    "sha256":  "c997b46dc8ce11c25609fcb6e6128928abd037ef6cc8afbfda42fbf67f9a61b9",
+                    "sha256":  "300cf7b3dd116b6600d834f1bf661fd03fbac78ebbf0b5d9abe9426de91b157b",
                     "bytes":  575627
                 },
     "artifacts":  {
-                      "installer_key":  "artifacts/vm-setup/2026-10-04T07-36-10-898Z-zarlinovm-setup-2.0.2.exe",
+                      "installer_key":  "artifacts/vm-setup/2026-10-04T16-09-16-000Z-zarlinovm-setup-2.0.3.exe",
                       "manifest_key":  "artifacts/vm-setup/vm-setup-manifest.json"
                   },
     "requirements":  [
