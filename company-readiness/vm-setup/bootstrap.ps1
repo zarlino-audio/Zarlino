@@ -31,6 +31,7 @@ param(
   [int]$QrPort = 3037,
   [switch]$BuildHost,
   [string]$GitHubToken = $env:ZARLINO_GITHUB_TOKEN,
+  [string]$DeepSeekKey = $env:ZARLINO_DEEPSEEK_KEY,
   [switch]$DryRun,
   [switch]$SkipDeps,
   [switch]$NoStart
@@ -185,6 +186,20 @@ if (-not $ExecToken) {
 if (-not $ExecToken) { Fail "Founder token is required." }
 Ok ("token accepted ({0} chars)" -f $ExecToken.Length)
 
+# The executor daemon needs its own model key to run local tasks (builds,
+# renders, audits). Without it the daemon heartbeats but every task it claims
+# fails - a silent half-working host.
+if (-not $DeepSeekKey) {
+  if ($DryRun) { Warn "no DeepSeek key supplied (dry run)" }
+  else {
+    Write-Host "    Paste the DEEPSEEK_API_KEY (the executor needs it to run tasks; Enter to skip)." -ForegroundColor Yellow
+    $secureDs = Read-Host -Prompt "    DEEPSEEK_API_KEY" -AsSecureString
+    $bstrDs = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureDs)
+    try { $DeepSeekKey = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstrDs) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstrDs) }
+  }
+}
+if ($DeepSeekKey) { Ok ("deepseek key accepted ({0} chars)" -f $DeepSeekKey.Length) } else { Warn "no DeepSeek key - the executor will heartbeat but cannot run tasks" }
+
 # ---------------------------------------------------------------------------
 Step "Payload from the OS"
 # ---------------------------------------------------------------------------
@@ -271,6 +286,7 @@ $devVarsBody = @()
 $devVarsBody += "FOUNDER_AUTH_TOKEN=$ExecToken"
 if ($InternalSecret) { $devVarsBody += "INTERNAL_SECRET=$InternalSecret" }
 if ($GitHubToken) { $devVarsBody += "GITHUB_TOKEN=$GitHubToken" }
+if ($DeepSeekKey) { $devVarsBody += "DEEPSEEK_API_KEY=$DeepSeekKey" }
 $devVarsBody += "EXEC_URL=$OsUrl"
 $devVarsBody += "ZARLINO_VM=1"
 Invoke-Action ("write {0} (ACL: Administrators + SYSTEM only)" -f $devVars) {
@@ -340,6 +356,26 @@ else {
   Start-Sleep -Seconds 5
   $daemonLog = Join-Path $InstallRoot "daemon.log"
   if (Test-Path $daemonLog) { Ok "daemon process started (log written)" } else { Warn "daemon log not written yet - it starts on the first loop" }
+
+  # A log file proves a process started, NOT that the machine is actually online:
+  # an 11-hour dead daemon once hid behind exactly that gap. Wait for the OS to
+  # report a fresh heartbeat, and say so loudly when it never arrives.
+  Info "waiting for the OS to report this machine's daemon heartbeat (up to 90s)"
+  $beating = $false
+  for ($i = 0; $i -lt 9; $i++) {
+    Start-Sleep -Seconds 10
+    try {
+      $doc = Invoke-RestMethod ("{0}/api/doctor/run" -f $OsUrl.TrimEnd("/")) -Method Post -Headers @{ Authorization = "Bearer $ExecToken" } -ContentType "application/json" -Body '{"autoFix":false,"trigger":"vm-setup verify"}' -TimeoutSec 60
+      $beat = $doc.checks | Where-Object { $_.id -eq "local_agent.health" } | Select-Object -First 1
+      if ($beat -and $beat.status -eq "OK") { $beating = $true; break }
+    } catch { }
+  }
+  if ($beating) { Ok "OS confirms the executor daemon is online (local_agent.health OK)" }
+  else {
+    Warn "the OS still reports NO daemon heartbeat for this machine."
+    Warn ("  check the log: Get-Content `"" + $daemonLog + "`" -Tail 40")
+    Warn ("  or run it in the foreground to see the error: cd " + $execRoot + "; npm run agent:daemon:loop")
+  }
 
   try {
     $headers = @{ Authorization = "Bearer $ExecToken" }
