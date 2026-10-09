@@ -43,5 +43,9 @@ int main() {
     runner.runAllTests();
 
     std::cout << "Done!" << std::endl;
-    return 0;
+
+    // AudioProcessor destruction can hang console builds (APVTS / message-manager
+    // teardown ordering). Skip stack unwinding on exit.
+    std::cout.flush();
+    std::exit (0);
 }

@@ -1,38 +1,72 @@
-# VST Plugin Development Workspace
+# Zarlino Audio — plugin monorepo
 
-This workspace is a JUCE-based VST plugin development environment scaffolded for the Khritical Research Initiative.
+JUCE-based VST3 plugin development monorepo for Zarlino Audio.
 
-## What is included
+## Products in this repository
 
-- `JUCE/` - expected JUCE framework clone
-- `sdk/VST3_SDK/` - expected Steinberg VST3 SDK clone
-- `plugins/` - plugin project folders and a starter template
-- `shared/` - reusable DSP/UI code
-- `dissection/` - study notes and annotated JUCE files
-- `build/` - CMake build output
-- `tools/` - helper scripts
+| Plugin | What it is |
+|---|---|
+| `ZTame` | Tone-shaping plugin (v1.2 shipped as public beta). |
+| `ZScorch` | Saturation / "scorch" processor. |
+| `ZVocal` | Vocal processor (in progress). |
+| `PresenceField` | Presence / spatial processor (in progress). |
+| `MyFirstEQ`, `ZAdaptiveHarmonics`, `ZPunch`, `RACK_AI` | Earlier scaffolds and planned products. |
+| `_template` | Starter template for new plugins. |
 
-## Build
+## Layout
 
-From the workspace root:
+| Path | What |
+|---|---|
+| `plugins/` | One folder per plugin (each a CMake project). |
+| `shared/` | Reusable DSP/UI/licensing/test code. |
+| `specs/` | Product specifications. |
+| `docs/` | Documentation hub — start at [`docs/README.md`](docs/README.md). |
+| `tools/` | Build / release / QA helpers — registry in [`tools/TOOL_MANIFEST.md`](tools/TOOL_MANIFEST.md). |
+| `cmake/` | Shared CMake modules (`ZarlinoTest.cmake`). |
+| `company-readiness/` | Company operations: audits, gap ledgers, playbooks, VM setup kit. |
+| `decisions/` | Recorded decisions. |
+| `dissection/` | JUCE/DSP study notes. |
+| `JUCE/` | JUCE framework (git submodule). |
+| `sdk/VST3_SDK/` | Steinberg VST3 SDK — clone required, gitignored. |
+
+## Build & release
+
+See [`docs/operations/BUILD_AND_RELEASE.md`](docs/operations/BUILD_AND_RELEASE.md). In short:
 
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug
+git submodule update --init JUCE
+cmake -B build -G Ninja -DBUILD_TESTING=ON
+cmake --build build
+ctest --test-dir build
 ```
 
-## Add a plugin
+Releases: `powershell -ExecutionPolicy Bypass -File tools\build-release-local.ps1 [-Plugin ZScorch]`.
 
-Create a new plugin by copying `plugins/_template/`, renaming the target in `CMakeLists.txt`, and adding the new project to the root `CMakeLists.txt`.
+## Related repositories
 
-## Useful scripts
+Separate repositories (kept as sibling folders when working locally):
 
-- `tools/new_plugin.sh` - scaffold a new plugin from the template
-- `tools/clean_build.sh` - wipe and rebuild the project
-- `tools/install_vst3.sh` - install a built `.vst3` to the system VST3 folder
+- **zarlino-source** — cloud stem-separation / model engine (`github.com/zarlino-audio/zarlino-source`).
+- **zarlino-website** — zarlinoaudio.com site and storefront (`github.com/zarlino-audio/zarlino-website`).
+- **zarlino-executive-os** — the company operating system (`github.com/zarlino-audio/zarlino-executive-os`).
+
+## Encoding policy (UTF-8)
+
+The repo is UTF-8 everywhere. Smart characters (em/en dashes — –, curly quotes
+“ ” ‘ ’, ellipsis …, ×, etc.) must never appear as `â€"` mojibake — that happens
+when UTF-8 bytes are read with the ANSI/Windows-1252 codepage.
+
+- `.editorconfig` enforces `charset = utf-8` for all files, and `utf-8-bom` for
+  `.nsi` and `.ps1` (NSIS 3.x and PowerShell 5.1 only honour UTF-8 when a BOM is
+  present).
+- When creating new docs or installer scripts, type the real character (e.g. `—`)
+  and let the editor save it as UTF-8 — do NOT pre-encode it. If you ever see
+  `â€"` in a file, the content was saved/read with the wrong codepage: fix the
+  tool/editor (set UTF-8), not the characters.
 
 ## Notes
 
-The workspace structure and setup are documented in `VST_WORKSPACE_SETUP-1.md`.
+Only `main` carries repository content; local-only working folders (build trees, artifacts,
+backups, sibling checkouts) are gitignored — see `.gitignore`.
 
 

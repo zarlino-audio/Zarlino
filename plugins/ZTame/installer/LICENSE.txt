@@ -1,0 +1,44 @@
+ZARLINO AUDIO - END USER LICENSE AGREEMENT (SUMMARY)
+Version 1.0 - 2 October 2026
+Full text: https://zarlinoaudio.com/legal/license
+
+By installing or using this software you agree to the following terms.
+
+1. LICENCE GRANT
+   Zarlino Audio grants you a non-exclusive, non-transferable, perpetual
+   licence to install and use this plugin for a single user, on computers
+   you own or control, for your own music production work. You may make
+   backup copies of the installer and your licence key.
+
+2. YOU MAY NOT
+   - resell, rent, sublicense, share, or publicly post licence keys;
+   - redistribute or publish the software;
+   - remove or alter copyright or licence notices;
+   - bypass, disable, or extract licence/activation functionality;
+   - reverse engineer or decompile, except where applicable law permits;
+   - use the software unlawfully.
+
+3. TRIAL AND BETA BUILDS
+   Trial functionality runs for 14 days without a licence. "Public beta"
+   builds are provided as-is for evaluation and normal use and may change.
+   Keep backups of your projects as you normally would.
+
+4. OWNERSHIP
+   The software and its design remain owned by Zarlino Audio and its
+   licensors. It includes components of the JUCE framework and other
+   third-party libraries under their own licences. This agreement grants
+   a licence to use the software, not ownership of it.
+
+5. TERMINATION
+   This licence ends if you materially breach it; on termination stop
+   using and delete the software. Refund rights are unaffected.
+
+6. WARRANTY AND LIABILITY
+   The software is provided "as is" without warranties of any kind, to
+   the extent the law allows. To the extent the law allows, our total
+   liability is limited to the amount you paid for the software, and we
+   are not liable for indirect or consequential losses, including lost
+   profits or lost or corrupted project data.
+
+7. GOVERNING LAW
+   The laws of Ghana. Contact: support@zarlinoaudio.com

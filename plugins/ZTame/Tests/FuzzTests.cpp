@@ -70,10 +70,14 @@ public:
             {"sensitivity",   0.0f,  100.0f},
             {"range",         0.0f,   24.0f},
             {"selectivity",   0.0f,  100.0f},
-            {"crossoverFreq", 20.0f, 20000.0f},
+            {"focusLow",     20.0f, 20000.0f},
+            {"focusHigh",    20.0f, 20000.0f},
             {"attack",        0.1f,  100.0f},
             {"release",      10.0f, 1000.0f},
             {"dryWet",        0.0f,  100.0f},
+            {"resolution",    0.0f,    1.0f},
+            {"stereoLink",    0.0f,    1.0f},
+            {"sidechain",     0.0f,    1.0f},
         };
 
         // Generate fixed noise buffer for reproducibility
@@ -291,11 +295,14 @@ public:
             setP (*proc, "sensitivity",    rng.nextFloat() * 100.0f);
             setP (*proc, "range",          rng.nextFloat() * 24.0f);
             setP (*proc, "selectivity",    rng.nextFloat() * 100.0f);
-            setP (*proc, "crossoverFreq",  20.0f + rng.nextFloat() * 19980.0f);
+            setP (*proc, "focusLow",       20.0f + rng.nextFloat() * 19980.0f);
+            setP (*proc, "focusHigh",      20.0f + rng.nextFloat() * 19980.0f);
             setP (*proc, "attack",         0.1f + rng.nextFloat() * 99.9f);
             setP (*proc, "release",       10.0f + rng.nextFloat() * 990.0f);
             setP (*proc, "dryWet",         rng.nextFloat() * 100.0f);
             setP (*proc, "listenMode",     rng.nextFloat() > 0.5f ? 1.0f : 0.0f);
+            setP (*proc, "resolution",     rng.nextFloat() > 0.5f ? 1.0f : 0.0f);
+            setP (*proc, "stereoLink",     rng.nextFloat() > 0.5f ? 1.0f : 0.0f);
 
             auto buf = juce::AudioBuffer<float> (2, blockSize);
             buf.makeCopyOf (noise);

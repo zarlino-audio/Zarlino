@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
 project(VSTWorkspace VERSION 1.0)
 
+# Top-level CTest so `ctest --test-dir <build>` finds the tests that plugin
+# subdirectories register (each plugin calls include(CTest) in its own scope).
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -19,7 +23,7 @@ add_subdirectory(plugins/_template)
 add_subdirectory(plugins/MyFirstEQ)
 add_subdirectory(plugins/RACK_AI)
 add_subdirectory(plugins/PresenceField)
-add_subdirectory(plugins/VocalToneShaper)
+add_subdirectory(plugins/ZVocal)
 add_subdirectory(plugins/ZAdaptiveHarmonics)
 add_subdirectory(plugins/ZTame)
 add_subdirectory(plugins/ZPunch)

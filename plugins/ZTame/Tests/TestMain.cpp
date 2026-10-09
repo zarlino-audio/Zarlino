@@ -34,11 +34,17 @@ int main (int, char**)
         {
             std::cout << r->passes << "/" << (r->passes + r->failures)
                       << " passed";
+
             if (r->failures > 0)
             {
                 std::cout << "  *** " << r->failures << " FAILURES ***";
                 totalFailures += r->failures;
+
+                std::cout << std::endl;
+                for (const auto& message : r->messages)
+                    std::cout << "      " << message << std::endl;
             }
+
             std::cout << std::endl;
         }
     }
