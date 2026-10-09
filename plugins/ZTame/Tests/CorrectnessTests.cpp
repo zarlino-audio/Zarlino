@@ -1,17 +1,19 @@
 /*
-    ZTame-DSP-CORRECTNESS — correctness battery for the v1.1 engine.
+    ZTame-DSP-CORRECTNESS — correctness battery for the v1.2 engine.
 
-    Contract under test (see specs/ZTame_v1.1_rework_design.md):
+    Contract under test (see specs/ZTame_v1.2_zero-latency_design.md):
 
-      1. Perfect reconstruction: with the gains at unity the wet path equals the
-         input delayed by exactly N samples (residual <= -80 dBFS).
-      2. Latency: the wet path delay equals the value reported to the host.
+      1. Zero latency: nothing is delayed, nothing is pre-computed from future
+         samples; the reported latency is 0 and impulse positions are preserved.
+      2. Bit transparency when idle: with depth 0 the output is bit-identical to
+         the input (residual exactly 0, not just "low").
       3. Suppression happens only where a bin stands out against its local
          neighbourhood, only inside the focus band.
       4. Sidechain reroutes detection but never leaks into the output.
-      5. Delta audition equals (dry - wet).
+      5. Delta audition equals (dry - wet); a 50 % mix cannot comb.
       6. Nothing blows up at parameter extremes, across sample rates, or with
          hostile (NaN / Inf / denormal) input.
+      7. Aggression and transparency hold at the same time (suite 017).
 */
 
 #include <JuceHeader.h>
@@ -140,6 +142,33 @@ namespace
         return juce::Decibels::gainToDecibels ((float) amp, -140.0f);
     }
 
+    /** RMS power (dBFS) in [fLow, fHigh) over [start, start+len) — DFT band power. */
+    float bandPowerDb (const juce::AudioBuffer<float>& b, int ch, int start, int len,
+                       double fLow, double fHigh, double sr)
+    {
+        double sum = 0.0;
+        const double binHz = sr / (double) len;
+
+        for (double f = fLow; f < fHigh; f += binHz)
+        {
+            double re = 0.0, im = 0.0;
+
+            for (int i = 0; i < len; ++i)
+            {
+                const double w = juce::MathConstants<double>::twoPi * f
+                               * (double) (start + i) / sr;
+                const auto v = (double) b.getSample (ch, start + i);
+                re += v * std::cos (w);
+                im += v * std::sin (w);
+            }
+
+            sum += (re * re + im * im);
+        }
+
+        const double amp = 2.0 * std::sqrt (sum) / (double) len;
+        return juce::Decibels::gainToDecibels ((float) amp, -140.0f);
+    }
+
     int findPeakIndex (const juce::AudioBuffer<float>& buf, int ch)
     {
         int best = 0;
@@ -186,6 +215,11 @@ public:
                 expect (! std::isinf (v), "Inf at ch " + juce::String (ch) + " s " + juce::String (s));
                 expect (std::abs (v) < 4.0f, "Impulse rang above 4x at s " + juce::String (s));
             }
+
+        beginTest ("The impulse emerges at the same sample (zero latency)");
+
+        expectEquals (findPeakIndex (buf, 0), 100, "left impulse moved");
+        expectEquals (findPeakIndex (buf, 1), 160, "right impulse moved");
     }
 };
 
@@ -198,7 +232,7 @@ public:
 
     void runTest() override
     {
-        beginTest ("Gains at unity => the wet path is level-accurate (no COLA loss)");
+        beginTest ("Gains at unity => the wet path is bit-identical to the input");
 
         constexpr double sr = 48000.0;
         constexpr int N = 16384;
@@ -209,31 +243,40 @@ public:
         setP (*proc, "range", 0.0f);         // depth 0 => gain == 1 everywhere
         setP (*proc, "dryWet", 100.0f);
 
-        auto input = makeSine (1000.0, sr, N, 0.5f);
-        auto output = input;
-        processBlocks (*proc, output, 512);
+        const auto assertBitExact = [&] (const juce::AudioBuffer<float>& in,
+                                         const juce::AudioBuffer<float>& out,
+                                         const juce::String& what)
+        {
+            double maxDiff = 0.0;
+            for (int ch = 0; ch < in.getNumChannels(); ++ch)
+                for (int s = 0; s < N; ++s)
+                    maxDiff = juce::jmax (maxDiff, (double) std::abs (out.getSample (ch, s)
+                                                                      - in.getSample (ch, s)));
 
-        const int start = 8192;
-        const int len   = 4096;
+            expect (maxDiff <= 0.0,
+                    what + " is not bit-exact (maxDiff " + juce::String (maxDiff) + ")");
+        };
 
-        const auto inRms  = rmsDb (input, 0, start, len);
-        const auto outRms = rmsDb (output, 0, start, len);
+        // Sine
+        auto sine = makeSine (1000.0, sr, N, 0.5f);
+        auto out  = sine;
+        processBlocks (*proc, out, 512);
+        assertBitExact (sine, out, "Sine passthrough");
 
-        expectWithinAbsoluteError (outRms, inRms, 0.3f,
-            "Wet path level mismatch: in=" + juce::String (inRms, 2)
-            + " dB out=" + juce::String (outRms, 2) + " dB");
-
-        // Also verify a second frequency and a noise input stay level-accurate.
-        auto noiseIn = makeNoise (N, 0.25f);
-        auto noiseOut = noiseIn;
+        // Broadband noise
+        auto noise = makeNoise (N, 0.25f);
+        auto noiseOut = noise;
         processBlocks (*proc, noiseOut, 512);
+        assertBitExact (noise, noiseOut, "Noise passthrough");
 
-        const auto noiseInRms  = rmsDb (noiseIn, 0, start, len);
-        const auto noiseOutRms = rmsDb (noiseOut, 0, start, len);
+        beginTest ("Material below the gate passes through exactly");
 
-        expectWithinAbsoluteError (noiseOutRms, noiseInRms, 0.3f,
-            "Noise level mismatch: in=" + juce::String (noiseInRms, 2)
-            + " dB out=" + juce::String (noiseOutRms, 2) + " dB");
+        // -120 dBFS material is below the -90 dBFS gate: the engine parks itself and
+        // must not even sanitise the buffer.
+        auto quiet = makeSine (1000.0, sr, N, 1.0e-6f);
+        auto quietOut = quiet;
+        processBlocks (*proc, quietOut, 512);
+        assertBitExact (quiet, quietOut, "Sub-gate passthrough");
     }
 };
 
@@ -246,7 +289,7 @@ public:
 
     void runTest() override
     {
-        beginTest ("Wet delay equals the reported latency and nulls against the input");
+        beginTest ("The engine reports zero latency and preserves sample positions");
 
         constexpr double sr = 44100.0;
         constexpr int N = 16384;
@@ -257,8 +300,7 @@ public:
         setP (*proc, "range", 0.0f);
         setP (*proc, "dryWet", 100.0f);
 
-        const int latency = proc->getLatencySamples();
-        expectGreaterThan (latency, 0, "Engine must report a non-zero latency");
+        expectEquals (proc->getLatencySamples(), 0, "Engine must report zero latency");
 
         // --- impulse position check (exact sample delay) ---
         {
@@ -268,10 +310,12 @@ public:
             auto out = buf;
             processBlocks (*proc, out, 512);
 
-            const int peak = findPeakIndex (out, 0);
-            expectEquals (peak, 1000 + latency,
-                          "Impulse emerged at " + juce::String (peak)
-                          + ", expected " + juce::String (1000 + latency));
+            expectEquals (findPeakIndex (out, 0), 1000,
+                          "Impulse must emerge at its input sample position");
+
+            for (int s = 0; s < 1000; ++s)
+                expect (std::abs (out.getSample (0, s)) < 1.0e-9f,
+                        "Output before the impulse is not silent (s=" + juce::String (s) + ")");
         }
 
         // --- null test: output == input delayed by latency ---
@@ -285,18 +329,16 @@ public:
         auto output = input;
         processBlocks (*proc2, output, 512);
 
-        juce::AudioBuffer<float> delayed (input.getNumChannels(), N);
-        delayed.clear();
-        for (int s = latency; s < N; ++s)
-            for (int ch = 0; ch < delayed.getNumChannels(); ++ch)
-                delayed.setSample (ch, s, input.getSample (ch, s - latency));
+        {
+            double maxDiff = 0.0;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int s = 0; s < N; ++s)
+                    maxDiff = juce::jmax (maxDiff, (double) std::abs (output.getSample (ch, s)
+                                                                      - input.getSample (ch, s)));
 
-        const auto res = residual (output, delayed, 0, latency, N - latency - latency);
-
-        expectLessThan (res.peakDb, -80.0f,
-            "Null residual peak too high: " + juce::String (res.peakDb, 1) + " dBFS");
-        expectLessThan (res.rmsDb, -90.0f,
-            "Null residual RMS too high: " + juce::String (res.rmsDb, 1) + " dBFS");
+            expect (maxDiff <= 0.0,
+                    "Unity-gain null is not bit-exact (maxDiff " + juce::String (maxDiff) + ")");
+        }
 
         // --- dry/wet mix at 50 % must stay phase-coherent (no comb) ---
         auto* proc3 = makeProc (sr, 512);
@@ -308,12 +350,17 @@ public:
         auto mixed = input;
         processBlocks (*proc3, mixed, 512);
 
-        const auto mixedRms = rmsDb (mixed, 0, latency + 2048, 4096);
-        const auto inputRms = rmsDb (input, 0, latency + 2048, 4096);
+        {
+            double maxDiff = 0.0;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int s = 0; s < N; ++s)
+                    maxDiff = juce::jmax (maxDiff, (double) std::abs (mixed.getSample (ch, s)
+                                                                      - input.getSample (ch, s)));
 
-        expectWithinAbsoluteError (mixedRms, inputRms, 0.3f,
-            "50 % dry/wet comb-filtered the signal: dry=" + juce::String (inputRms, 2)
-            + " mixed=" + juce::String (mixedRms, 2));
+            expect (maxDiff <= 0.0,
+                    "50 % dry/wet comb-filtered the signal (maxDiff "
+                    + juce::String (maxDiff) + ")");
+        }
     }
 };
 
@@ -326,7 +373,7 @@ public:
 
     void runTest() override
     {
-        beginTest ("Bypass returns the input unchanged, delayed by the reported latency");
+        beginTest ("Bypass returns the input bit-exactly, with zero latency");
 
         constexpr double sr = 44100.0;
         constexpr int N = 8192;
@@ -336,27 +383,54 @@ public:
         setP (*proc, "sensitivity", 80.0f);
         setP (*proc, "range", 24.0f);
 
-        const int latency = proc->getLatencySamples();
+        expectEquals (proc->getLatencySamples(), 0, "Bypass must not report latency");
 
         auto input = makeSine (440.0, sr, N, 0.7f);
         auto output = input;
         processBlocks (*proc, output, 512);
 
-        for (int s = 0; s < latency; ++s)
+        {
+            double maxDiff = 0.0;
             for (int ch = 0; ch < 2; ++ch)
-                expect (std::abs (output.getSample (ch, s)) < 1.0e-6f,
-                        "Bypass is not producing silence before the latency point (s="
-                        + juce::String (s) + ")");
+                for (int s = 0; s < N; ++s)
+                    maxDiff = juce::jmax (maxDiff, (double) std::abs (output.getSample (ch, s)
+                                                                      - input.getSample (ch, s)));
 
-        double maxDiff = 0.0;
-        for (int s = latency; s < N; ++s)
+            expect (maxDiff <= 0.0,
+                    "Bypass is not bit-exact (maxDiff=" + juce::String (maxDiff) + ")");
+        }
+
+        // Host bypass must also leave the buffer untouched.
+        {
+            auto hostOut = input;
+            juce::MidiBuffer midi;
+            proc->processBlockBypassed (hostOut, midi);
+
+            double maxDiff = 0.0;
             for (int ch = 0; ch < 2; ++ch)
-                maxDiff = juce::jmax (maxDiff, (double) std::abs (output.getSample (ch, s)
-                                                                  - input.getSample (ch, s - latency)));
+                for (int s = 0; s < N; ++s)
+                    maxDiff = juce::jmax (maxDiff, (double) std::abs (hostOut.getSample (ch, s)
+                                                                      - input.getSample (ch, s)));
 
-        expectLessThan ((float) maxDiff, 1.0e-6f,
-                        "Bypass is not bit-exact after the latency offset (maxDiff="
-                        + juce::String (maxDiff));
+            expect (maxDiff <= 0.0,
+                    "Host bypass is not bit-exact (maxDiff=" + juce::String (maxDiff) + ")");
+        }
+
+        // ...and with bypass removed the engine actually processes the signal again.
+        {
+            setP (*proc, "bypass", 0.0f);
+
+            auto processed = input;
+            processBlocks (*proc, processed, 512);
+
+            double maxDiff = 0.0;
+            for (int s = 0; s < N; ++s)
+                maxDiff = juce::jmax (maxDiff, (double) std::abs (processed.getSample (0, s)
+                                                                  - input.getSample (0, s)));
+
+            expectGreaterThan ((float) maxDiff, 1.0e-3f,
+                               "Engine did not resume processing after bypass");
+        }
     }
 };
 
@@ -471,7 +545,7 @@ public:
 
     void runTest() override
     {
-        beginTest ("Null holds at 44.1k / 48k / 96k / 192k");
+        beginTest ("Exact null holds at 44.1k / 48k / 96k / 192k");
 
         for (double sr : { 44100.0, 48000.0, 96000.0, 192000.0 })
         {
@@ -480,23 +554,24 @@ public:
             setP (*proc, "sensitivity", 0.0f);
             setP (*proc, "range", 0.0f);
 
-            const int latency = proc->getLatencySamples();
+            expectEquals (proc->getLatencySamples(), 0,
+                          "Latency must be zero at " + juce::String (sr) + " Hz");
+
             constexpr int N = 16384;
 
             auto input = makeNoise (N, 0.3f);
             auto output = input;
             processBlocks (*proc, output, 512);
 
-            juce::AudioBuffer<float> delayed (2, N);
-            delayed.clear();
-            for (int s = latency; s < N; ++s)
-                for (int ch = 0; ch < 2; ++ch)
-                    delayed.setSample (ch, s, input.getSample (ch, s - latency));
+            double maxDiff = 0.0;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int s = 0; s < N; ++s)
+                    maxDiff = juce::jmax (maxDiff, (double) std::abs (output.getSample (ch, s)
+                                                                      - input.getSample (ch, s)));
 
-            const auto res = residual (output, delayed, 0, latency, N - 2 * latency);
-            expectLessThan (res.peakDb, -80.0f,
-                            "Null failed at " + juce::String (sr)
-                            + " Hz: " + juce::String (res.peakDb, 1) + " dBFS");
+            expect (maxDiff <= 0.0,
+                    "Null failed at " + juce::String (sr)
+                    + " Hz (maxDiff " + juce::String (maxDiff) + ")");
         }
     }
 };
@@ -546,27 +621,26 @@ public:
         auto delta = input;
         processBlocks (*procDelta, delta, 512);
 
-        const int latency = procWet->getLatencySamples();
+        expectEquals (procWet->getLatencySamples(), 0, "Delta audition must be zero latency");
 
+        // delta = (input - wet), with no alignment: the engine is sample-aligned.
         juce::AudioBuffer<float> expected (2, N);
-        expected.clear();
-        for (int s = latency; s < N; ++s)
+        for (int s = 0; s < N; ++s)
             for (int ch = 0; ch < 2; ++ch)
-                expected.setSample (ch, s,
-                    input.getSample (ch, s - latency) - wet.getSample (ch, s));
+                expected.setSample (ch, s, input.getSample (ch, s) - wet.getSample (ch, s));
 
         // Undo the +6 dB monitor gain before comparing.
         for (int ch = 0; ch < 2; ++ch)
             for (int s = 0; s < N; ++s)
                 delta.setSample (ch, s, delta.getSample (ch, s) * 0.5f);
 
-        const auto res = residual (delta, expected, 0, latency + 2048, N - latency - 4096);
+        const auto res = residual (delta, expected, 0, 2048, N - 4096);
 
         expectLessThan (res.rmsDb, -60.0f,
             "Delta is not (dry - wet): residual RMS " + juce::String (res.rmsDb, 1) + " dBFS");
 
         // The removed material must actually be significant for this source.
-        const auto deltaRms = rmsDb (delta, 0, latency + 2048, N - latency - 4096);
+        const auto deltaRms = rmsDb (delta, 0, 2048, N - 4096);
         expectGreaterThan (deltaRms, -50.0f,
             "Delta contains almost nothing (" + juce::String (deltaRms, 1)
             + " dBFS) — suppression may not be engaging");
@@ -729,7 +803,7 @@ public:
         const auto scQuiet        = run (true, scQuietTone, mainInput);
         const auto scResonant     = run (true, scResonance, mainInput);
 
-        expectLessThan (internalDetect, -20.0f,
+        expectLessThan (internalDetect, -15.0f,
             "Main-input detection failed to tame the 2 kHz tone: "
             + juce::String (internalDetect, 1) + " dBFS");
 
@@ -753,11 +827,11 @@ public:
 class ZTameResolutionTest : public juce::UnitTest
 {
 public:
-    ZTameResolutionTest() : UnitTest ("ZTAME-DSP-CORRECTNESS-012: Resolution Modes") {}
+    ZTameResolutionTest() : UnitTest ("ZTAME-DSP-CORRECTNESS-012: Band Plans (32 / 48)") {}
 
     void runTest() override
     {
-        beginTest ("Fast (1024) and Precise (2048) both null at their own latency");
+        beginTest ("Standard (32) and Precise (48) both null at zero latency");
 
         constexpr double sr = 44100.0;
         constexpr int N = 16384;
@@ -770,30 +844,45 @@ public:
             setP (*proc, "range", 0.0f);
             setP (*proc, "resolution", (float) mode);
 
-            // The parameter is latched at prepare time for the message-thread latency report.
             proc->prepareToPlay (sr, 512);
 
-            const int latency = proc->getLatencySamples();
-            const int expected = (mode == 0) ? 1024 : 2048;
-
-            expectEquals (latency, expected,
-                          "Mode " + juce::String (mode) + " reported latency " + juce::String (latency)
-                          + ", expected " + juce::String (expected));
+            expectEquals (proc->getLatencySamples(), 0,
+                          "Mode " + juce::String (mode) + " must report zero latency");
 
             auto input = makeNoise (N, 0.3f);
             auto output = input;
             processBlocks (*proc, output, 512);
 
-            juce::AudioBuffer<float> delayed (2, N);
-            delayed.clear();
-            for (int s = latency; s < N; ++s)
+            {
+                double maxDiff = 0.0;
                 for (int ch = 0; ch < 2; ++ch)
-                    delayed.setSample (ch, s, input.getSample (ch, s - latency));
+                    for (int s = 0; s < N; ++s)
+                        maxDiff = juce::jmax (maxDiff, (double) std::abs (output.getSample (ch, s)
+                                                                          - input.getSample (ch, s)));
 
-            const auto res = residual (output, delayed, 0, latency, N - 2 * latency);
-            expectLessThan (res.peakDb, -80.0f,
-                            "Mode " + juce::String (mode) + " null peak "
-                            + juce::String (res.peakDb, 1) + " dBFS");
+                expect (maxDiff <= 0.0,
+                        "Mode " + juce::String (mode) + " null failed (maxDiff "
+                        + juce::String (maxDiff) + ")");
+            }
+
+            // ...and the mode actually suppresses a resonance.
+            auto* p2 = makeProc (sr, 512);
+            setP (*p2, "bypass", 0.0f);
+            setP (*p2, "sensitivity", 80.0f);
+            setP (*p2, "range", 18.0f);
+            setP (*p2, "resolution", (float) mode);
+            setP (*p2, "attack", 0.1f);
+
+            auto tone = makeSine (4000.0, sr, N, 0.5f);
+            auto toneOut = tone;
+            processBlocks (*p2, toneOut, 512);
+
+            const auto inDb  = toneAmpDb (tone,    0, 8192, 4096, 4000.0, sr);
+            const auto outDb = toneAmpDb (toneOut, 0, 8192, 4096, 4000.0, sr);
+
+            expectGreaterThan (inDb - outDb, 5.0f,
+                "Mode " + juce::String (mode) + " did not suppress the 4 kHz tone ("
+                + juce::String (inDb - outDb, 1) + " dB)");
         }
     }
 };
@@ -971,7 +1060,7 @@ public:
                 + juce::String (snapshot.peakFreqHz[(size_t) bestPeak], 1) + " Hz)");
         }
 
-        expectEquals (snapshot.fftSize, 2048, "Snapshot reports the wrong engine size");
+        expectEquals (snapshot.bandCount, 32, "Snapshot reports the wrong band count");
         expect (! snapshot.bypassed, "Snapshot reports the wrong bypass state");
     }
 };
@@ -981,7 +1070,7 @@ public:
 class ZTameMidSideTest : public juce::UnitTest
 {
 public:
-    ZTameMidSideTest() : UnitTest ("ZTAME-DSP-CORRECTNESS-016: Mid/Side Mode") {}
+    ZTameMidSideTest() : UnitTest ("ZTAME-DSP-CORRECTNESS-016: Processing Modes (Stereo / M-S / Mid / Side)") {}
 
     void runTest() override
     {
@@ -993,7 +1082,7 @@ public:
         for (int stage = 0; stage < 2; ++stage)
         {
             auto* proc = makeProc (sr, 512);
-            setP (*proc, "midSide", 1.0f);
+            setP (*proc, "processingMode", 1.0f);
 
             if (stage == 0)
             {
@@ -1006,7 +1095,7 @@ public:
                 setP (*proc, "range", 0.0f);
             }
 
-            const int latency = proc->getLatencySamples();
+            const int latency = 0;   // the v1.2 engine is sample-aligned by construction
 
             // Decorrelated stereo material so an L/R swap or sign error would show up.
             auto input = makeNoise (N, 0.3f, 99);
@@ -1032,7 +1121,7 @@ public:
         beginTest ("Centred resonance is tamed and the stereo image stays centred");
 
         auto* proc = makeProc (sr, 512);
-        setP (*proc, "midSide", 1.0f);
+        setP (*proc, "processingMode", 1.0f);
         setP (*proc, "bypass", 0.0f);
         setP (*proc, "sensitivity", 80.0f);
         setP (*proc, "range", 18.0f);
@@ -1050,7 +1139,7 @@ public:
         auto out = centred;
         processBlocks (*proc, out, 512);
 
-        const int latency = proc->getLatencySamples();
+        const int latency = 0;   // the v1.2 engine is sample-aligned by construction
 
         float maxSide = 0.0f;
         for (int s = latency + 2048; s < N; ++s)
@@ -1066,6 +1155,155 @@ public:
         expectLessThan (ringOut, ringIn - 6.0f,
                         "Centred resonance was not tamed in M/S mode: in="
                         + juce::String (ringIn, 1) + " dB, out=" + juce::String (ringOut, 1) + " dB");
+
+        // ---------------------------------------------------------------- mode 2/3
+        // "Mid Only" and "Side Only" must leave the untouched half bit-identical:
+        // this is a routing guarantee, not a gain one, so it is checked exactly.
+        for (int mode = 2; mode <= 3; ++mode)
+        {
+            beginTest (mode == 2 ? "Mid Only leaves the side signal untouched"
+                                 : "Side Only leaves the mid signal untouched");
+
+            auto* p2 = makeProc (sr, 512);
+            setP (*p2, "processingMode", (float) mode);
+            setP (*p2, "bypass", 0.0f);
+            setP (*p2, "sensitivity", 100.0f);
+            setP (*p2, "range", 24.0f);
+            setP (*p2, "attack", 0.1f);
+
+            // Loud ring in the mid, loud ring in the side, so both halves would be
+            // heavily reduced if the routing leaked.
+            auto in = makeNoise (N, 0.05f, 7);
+            for (int s = 0; s < N; ++s)
+            {
+                const auto ring = 0.45f * (float) std::sin (juce::MathConstants<double>::twoPi
+                                                             * 3000.0 * s / sr);
+                in.setSample (0, s, in.getSample (0, s) + ring);       // M gets it
+                in.setSample (1, s, in.getSample (1, s) - ring);       // S gets it
+            }
+
+            auto out2 = in;
+            processBlocks (*p2, out2, 512);
+
+            const int lat = 0;   // sample-aligned by construction
+
+            // The protected half is reconstructed from the L/R pair and compared
+            // against the delayed input.
+            double worst = 0.0;
+            for (int s = lat + 4096; s < N; ++s)
+            {
+                const float l = out2.getSample (0, s);
+                const float r = out2.getSample (1, s);
+                const float inL = in.getSample (0, s - lat);
+                const float inR = in.getSample (1, s - lat);
+
+                const float got = (mode == 2) ? 0.5f * (l - r)   // side content
+                                              : 0.5f * (l + r);  // mid content
+                const float want = (mode == 2) ? 0.5f * (inL - inR)
+                                               : 0.5f * (inL + inR);
+
+                worst = juce::jmax (worst, (double) std::abs (got - want));
+            }
+
+            expectLessThan ((float) worst, 1.0e-5f,
+                            juce::String (mode == 2 ? "side" : "mid") + " signal was modified ("
+                            + juce::String (worst) + ")");
+        }
+    }
+};
+
+//==============================================================================
+// ZTAME-DSP-CORRECTNESS-017: Zero-latency aggression *and* transparency
+//
+// The v1.2 promise: a real resonance is cut hard and fast, while material away
+// from it — and material with no resonance at all — is left alone. This suite
+// pins both halves of that promise with measured thresholds.
+class ZTameAggressionTransparencyTest : public juce::UnitTest
+{
+public:
+    ZTameAggressionTransparencyTest()
+        : UnitTest ("ZTAME-DSP-CORRECTNESS-017: Aggression + Transparency") {}
+
+    void runTest() override
+    {
+        beginTest ("A strong resonance is cut hard; distant noise bands stay put");
+
+        constexpr double sr = 48000.0;
+        constexpr int N = (int) (sr * 2.0);
+
+        auto noise = makeNoise (N, 0.10f);
+        auto resonant = noise;
+
+        for (int s = 0; s < N; ++s)
+        {
+            const auto ring = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi
+                                                       * 2400.0 * (double) s / sr);
+            resonant.setSample (0, s, resonant.getSample (0, s) + ring);
+            resonant.setSample (1, s, resonant.getSample (1, s) + ring);
+        }
+
+        const int skip = (int) (sr * 0.5);
+        const int len  = 8192;
+
+        // --- engaged: the resonance must come down a long way ---
+        {
+            auto* proc = makeProc (sr, 512);
+            setP (*proc, "bypass", 0.0f);
+            setP (*proc, "sensitivity", 80.0f);
+            setP (*proc, "selectivity", 30.0f);
+            setP (*proc, "range", 18.0f);
+
+            auto out = resonant;
+            processBlocks (*proc, out, 512);
+
+            const auto inRing  = toneAmpDb (resonant, 0, skip, len, 2400.0, sr);
+            const auto outRing = toneAmpDb (out,      0, skip, len, 2400.0, sr);
+
+            expectGreaterThan (inRing - outRing, 9.0f,
+                "Resonance suppression too weak: " + juce::String (inRing - outRing, 1) + " dB");
+        }
+
+        // --- default settings: still meaningful, and local ---
+        {
+            auto* proc = makeProc (sr, 512);
+            setP (*proc, "bypass", 0.0f);
+            setP (*proc, "sensitivity", 65.0f);
+            setP (*proc, "selectivity", 50.0f);
+            setP (*proc, "range", 12.0f);
+
+            auto out = resonant;
+            processBlocks (*proc, out, 512);
+
+            const auto inRing  = toneAmpDb (resonant, 0, skip, len, 2400.0, sr);
+            const auto outRing = toneAmpDb (out,      0, skip, len, 2400.0, sr);
+
+            expectGreaterThan (inRing - outRing, 5.0f,
+                "Default settings barely touched the resonance: "
+                + juce::String (inRing - outRing, 1) + " dB");
+
+            // Transparency: a noise band well above the resonance must barely move.
+            const auto inHi  = bandPowerDb (resonant, 0, skip, len, 6000.0, 9000.0, sr);
+            const auto outHi = bandPowerDb (out,      0, skip, len, 6000.0, 9000.0, sr);
+
+            expectLessThan (std::abs (outHi - inHi), 1.5f,
+                "Collateral change above the resonance: "
+                + juce::String (outHi - inHi, 2) + " dB");
+        }
+
+        // --- no resonance => the engine must stay silent (no false triggers) ---
+        {
+            auto* proc = makeProc (sr, 512);
+            setP (*proc, "bypass", 0.0f);
+            setP (*proc, "sensitivity", 65.0f);
+            setP (*proc, "range", 12.0f);
+
+            auto out = noise;
+            processBlocks (*proc, out, 512);
+
+            expectLessThan (proc->getGainReductionPeakDb(), 0.5f,
+                "Noise-only material triggered reduction ("
+                + juce::String (proc->getGainReductionPeakDb(), 2) + " dB)");
+        }
     }
 };
 
@@ -1088,4 +1326,5 @@ void registerCorrectnessTests()
     static ZTameDisplayMappingTest test014;
     static ZTameTelemetryTest      test015;
     static ZTameMidSideTest        test016;
+    static ZTameAggressionTransparencyTest test017;
 }

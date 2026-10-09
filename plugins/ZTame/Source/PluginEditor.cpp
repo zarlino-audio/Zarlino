@@ -4,7 +4,7 @@
 #include <cmath>
 
 #ifndef ZTAME_VERSION
- #define ZTAME_VERSION "1.1.0"
+ #define ZTAME_VERSION "1.2.0"
 #endif
 
 //==============================================================================
@@ -21,6 +21,21 @@ namespace ztame
     juce::Colour textBright()       { return juce::Colour (0xffeaf3ff); }
     juce::Colour textDim()          { return juce::Colour (0xff8fa2c4); }
     juce::Colour danger()           { return juce::Colour (0xffff6b6b); }
+}
+
+//==============================================================================
+//  Explicitly constructed non-ASCII glyphs.
+//
+//  Raw non-ASCII bytes inside narrow string literals are not reliable in this
+//  toolchain: juce::String's const char* path decodes them byte-per-character,
+//  so a literal U+00B7 (middot) renders as U+00C2 U+00B7 in the UI. Building the
+//  glyphs from their code points sidesteps the issue entirely.
+namespace
+{
+    const juce::String kMidDot    { juce::String::charToString ((juce::juce_wchar) 0x00B7) };  // middot
+    const juce::String kEmDash    { juce::String::charToString ((juce::juce_wchar) 0x2014) };  // em dash
+    const juce::String kPlusMinus { juce::String::charToString ((juce::juce_wchar) 0x00B1) };  // plus-minus
+    const juce::String kDelta     { juce::String::charToString ((juce::juce_wchar) 0x0394) };  // Greek capital delta
 }
 
 //==============================================================================
@@ -511,7 +526,7 @@ void ZTameSpectrumDisplay::paint (juce::Graphics& g)
                                  : juce::String (hz, hz >= 100.0f ? 0 : 1) + " Hz";
         };
 
-        const juce::String bandText = fmt (bandLowHz) + "  —  " + fmt (bandHighHz);
+        const juce::String bandText = fmt (bandLowHz) + "  " + kEmDash + "  " + fmt (bandHighHz);
         const auto textArea = juce::Rectangle<float> (plot.getX() + 6.0f, plot.getBottom() - 20.0f,
                                                       juce::jmin (plot.getWidth() - 12.0f, 190.0f), 15.0f);
 
@@ -682,12 +697,20 @@ void ZTameToggleTile::toggle()
 
     if (auto* p = processor.getValueTreeState().getParameter (paramId))
     {
-        const float current = p->getValue();
         p->beginChangeGesture();
-        // Choice parameters cycle; anything else flips.
-        const bool isChoice = dynamic_cast<juce::AudioParameterChoice*> (p) != nullptr;
-        p->setValueNotifyingHost (isChoice ? (current < 0.5f ? 1.0f : 0.0f)
-                                           : (current > 0.5f ? 0.0f : 1.0f));
+
+        if (auto* choice = dynamic_cast<juce::AudioParameterChoice*> (p))
+        {
+            // Cycle through every choice (Stereo -> M/S Blend -> Mid Only -> Side Only).
+            const int n = juce::jmax (1, choice->choices.size());
+            const int next = (choice->getIndex() + 1) % n;
+            p->setValueNotifyingHost (choice->convertTo0to1 ((float) next));
+        }
+        else
+        {
+            p->setValueNotifyingHost (p->getValue() > 0.5f ? 0.0f : 1.0f);
+        }
+
         p->endChangeGesture();
     }
 
@@ -748,12 +771,12 @@ void ZTameToggleTile::paint (juce::Graphics& g)
 ZTameEditorContent::ZTameEditorContent (ZTameAudioProcessor& p)
     : processor (p),
       spectrum (p),
-      listenTile (p, ZTameAudioProcessor::paramListenMode, "Δ LISTEN",
+      listenTile (p, ZTameAudioProcessor::paramListenMode, kDelta + " LISTEN",
                   "Audition ONLY the energy ZTame removes (+6 dB monitor gain). "
                   "If you hear an objectionable ring, that is exactly what is being tamed."),
       bypassTile (p, ZTameAudioProcessor::paramBypass, "BYPASS",
-                  "True bypass of the suppression engine. Latency is kept so host delay "
-                  "compensation stays aligned — use it for A/B."),
+                  "True bypass: the output is the untouched input (the engine adds zero "
+                  "latency) " + kEmDash + " use it for A/B."),
       sidechainTile (p, ZTameAudioProcessor::paramSidechain, "SC  SIDECHAIN",
                      "Detect resonances from the sidechain input instead of the track itself, "
                      "then suppress them on the main input. Falls back automatically when no "
@@ -761,13 +784,14 @@ ZTameEditorContent::ZTameEditorContent (ZTameAudioProcessor& p)
       linkTile (p, ZTameAudioProcessor::paramStereoLink, "LINK  STEREO",
                 "On: both channels share one detector (stable imaging). "
                 "Off: each channel is detected independently."),
-      midSideTile (p, ZTameAudioProcessor::paramMidSide, "M/S  MODE",
-                   "Process mid and side instead of left and right. A centred resonance is "
-                   "then tamed without touching the stereo width of the track."),
-      resolutionTile (p, ZTameAudioProcessor::paramResolution, "RES  2048 PRECISE",
-                      "Analysis resolution / latency. Precise = 2048-point frames (46 ms at "
-                      "44.1 kHz, finer low-frequency detail). Fast = 1024-point frames "
-                      "(23 ms, lower CPU).")
+      midSideTile (p, ZTameAudioProcessor::paramProcessingMode, "M/S  MODE",
+                   "Processing domain " + kEmDash + " click to cycle Stereo / M/S Blend / Mid Only / "
+                   "Side Only. A centred resonance can be tamed without touching the "
+                   "stereo width of the track."),
+      resolutionTile (p, ZTameAudioProcessor::paramResolution, "BANDS",
+                      "Correction-bank size. Standard = 32 bells (lowest CPU, wider "
+                      "spacing). Precise = 48 bells (finer centres, more surgical cuts). "
+                      "Both run at zero latency " + kEmDash + " click to switch.")
 {
     setLookAndFeel (&lookAndFeel);
     setOpaque (false);
@@ -780,17 +804,18 @@ ZTameEditorContent::ZTameEditorContent (ZTameAudioProcessor& p)
         "Sets the level a bin must exceed, relative to its own local neighbourhood.");
     knobs[1] = std::make_unique<ZTameKnob> (p, ZTameAudioProcessor::paramSelectivity, "Selectivity",
         "How sharply defined a peak must be to trigger. Higher = only obvious ring, "
-        "leaves natural tone alone. Independent of Sensitivity (±6 dB of trigger range).");
+        "leaves natural tone alone. Independent of Sensitivity (" + kPlusMinus + "6 dB of trigger range).");
     knobs[2] = std::make_unique<ZTameKnob> (p, ZTameAudioProcessor::paramRange, "Depth",
         "Maximum cut applied to any single resonance, in dB. 0 dB = analyse only.");
     knobs[3] = std::make_unique<ZTameKnob> (p, ZTameAudioProcessor::paramAttack, "Attack",
-        "How fast a notch closes onto a resonance that appears. Frame period is 23 ms, "
-        "so short values engage within one frame.");
+        "How fast the cut engages a resonance that appears. Control frames update about "
+        "every 22 ms (at 48 kHz), so short values engage within one frame.");
     knobs[4] = std::make_unique<ZTameKnob> (p, ZTameAudioProcessor::paramRelease, "Release",
         "How quickly a notch opens again once the resonance stops.");
     knobs[5] = std::make_unique<ZTameKnob> (p, ZTameAudioProcessor::paramDryWet, "Mix",
         "Parallel blend of the processed signal and the untouched input. "
-        "Both paths are latency-aligned, so the blend stays phase-coherent.");
+        "Both paths are sample-aligned " + kEmDash + " the engine adds zero latency " + kEmDash + " so the blend "
+        "stays phase-perfect.");
 
     for (auto& k : knobs)
         addAndMakeVisible (*k);
@@ -811,64 +836,23 @@ ZTameEditorContent::ZTameEditorContent (ZTameAudioProcessor& p)
     presetBox.setColour (juce::ComboBox::outlineColourId, ztame::panelStroke());
     presetBox.setColour (juce::ComboBox::textColourId, ztame::textBright());
     presetBox.setColour (juce::ComboBox::arrowColourId, ztame::accent());
-    presetBox.addItem ("Init (defaults)", 1);
-    presetBox.addItem ("Vocal Harshness Tamer", 2);
-    presetBox.addItem ("De-Boom", 3);
-    presetBox.addItem ("Guitar Resonance Smooth", 4);
-    presetBox.addItem ("Cymbal Ring Killer", 5);
-    presetBox.addItem ("Master Polish", 6);
-    presetBox.addItem ("Podcast Clarity", 7);
+    for (int i = 0; i < processor.getNumPrograms(); ++i)
+        presetBox.addItem (processor.getProgramName (i), i + 1);
+
     presetBox.onChange = [this] { applyPreset (presetBox.getSelectedId()); };
     addAndMakeVisible (presetBox);
 
     startTimerHz (30);
 }
 
-//==============================================================================
-namespace
-{
-    struct PresetValues
-    {
-        float sensitivity, selectivity, rangeDb, focusLow, focusHigh, attackMs, releaseMs;
-    };
-
-    // Six starting points. They only set the sound-shaping controls: routing
-    // (sidechain, M/S), mix, listen and bypass are left to the user.
-    PresetValues presetFor (int index)
-    {
-        switch (index)
-        {
-            case 2:  return { 68.0f, 55.0f, 14.0f,  1500.0f, 12000.0f,   6.0f, 150.0f };  // vocal
-            case 3:  return { 60.0f, 40.0f, 16.0f,    60.0f,   400.0f,  10.0f, 250.0f };  // de-boom
-            case 4:  return { 62.0f, 50.0f, 12.0f,   200.0f,  6000.0f,   8.0f, 180.0f };  // guitar
-            case 5:  return { 75.0f, 60.0f, 14.0f,  4000.0f, 16000.0f,   3.0f,  90.0f };  // cymbal
-            case 6:  return { 55.0f, 45.0f,  8.0f,    20.0f, 20000.0f,  12.0f, 300.0f };  // master
-            case 7:  return { 70.0f, 58.0f, 12.0f,   300.0f, 10000.0f,   5.0f, 120.0f };  // podcast
-            default: return { 65.0f, 50.0f, 12.0f,    20.0f, 20000.0f,   8.0f, 180.0f };  // init
-        }
-    }
-}
-
 void ZTameEditorContent::applyPreset (int presetIndex)
 {
-    const auto v = presetFor (presetIndex <= 0 ? 1 : presetIndex);
+    // Factory programs live in the processor (Init + six starting points), so the
+    // editor stays in sync with host preset changes.
+    const int program = juce::jlimit (0, processor.getNumPrograms() - 1,
+                                      presetIndex <= 0 ? 0 : presetIndex - 1);
 
-    auto& vts = processor.getValueTreeState();
-
-    const auto set = [&vts] (const char* id, float value)
-    {
-        if (auto* param = vts.getParameter (id))
-            param->setValueNotifyingHost (param->convertTo0to1 (value));
-    };
-
-    set (ZTameAudioProcessor::paramSensitivity, v.sensitivity);
-    set (ZTameAudioProcessor::paramSelectivity, v.selectivity);
-    set (ZTameAudioProcessor::paramRange,       v.rangeDb);
-    set (ZTameAudioProcessor::paramFocusLow,    v.focusLow);
-    set (ZTameAudioProcessor::paramFocusHigh,   v.focusHigh);
-    set (ZTameAudioProcessor::paramAttack,      v.attackMs);
-    set (ZTameAudioProcessor::paramRelease,     v.releaseMs);
-
+    processor.setCurrentProgram (program);
     repaint();
 }
 
@@ -931,6 +915,13 @@ void ZTameEditorContent::refreshTelemetry()
         return false;
     };
 
+    const auto readIndex = [&vts] (const char* id)
+    {
+        if (auto* p = vts.getRawParameterValue (id))
+            return (int) std::lround ((double) p->load());
+        return 0;
+    };
+
     listenTile.setVisualState (readBool (ZTameAudioProcessor::paramListenMode),
                                "+6 dB monitor", true, ztame::amber());
 
@@ -942,36 +933,41 @@ void ZTameEditorContent::refreshTelemetry()
     const bool scOn = readBool (ZTameAudioProcessor::paramSidechain);
     const bool scLive = valid && snapshot.sidechainLive;
 
-    sidechainTile.setVisualState (scOn,
-                                  ! sidechainConnected ? "no input connected"
-                                                       : (scLive ? "live — detecting"
-                                                                 : "waiting for signal"),
-                                  true, ztame::violet());
+    const juce::String scSubText = ! sidechainConnected
+        ? juce::String ("no input connected")
+        : (scLive ? (juce::String ("live ") + kEmDash + " detecting")
+                  : juce::String ("waiting for signal"));
+
+    sidechainTile.setVisualState (scOn, scSubText, true, ztame::violet());
 
     linkTile.setVisualState (readBool (ZTameAudioProcessor::paramStereoLink),
                              "one detector", true, ztame::accent());
 
-    midSideTile.setVisualState (readBool (ZTameAudioProcessor::paramMidSide),
-                                "mid + side engine", true, ztame::violet());
+    const int procMode = readIndex (ZTameAudioProcessor::paramProcessingMode);
+    static const char* const procModeNames[] = { "stereo", "M/S blend", "mid only", "side only" };
+    const auto procModeName = juce::String (procModeNames[juce::jlimit (0, 3, procMode)]);
+
+    midSideTile.setVisualState (procMode != 0, procModeName, true, ztame::violet());
 
     const bool precise = readBool (ZTameAudioProcessor::paramResolution);
     resolutionTile.setVisualState (precise,
-                                   precise ? "46 ms latency" : "23 ms latency", true, ztame::accent());
+                                   precise ? (juce::String ("Precise ") + kMidDot + " 48 bands")
+                                           : (juce::String ("Standard ") + kMidDot + " 32 bands"),
+                                   true, ztame::accent());
 
     if (valid)
     {
         const auto sr = snapshot.sampleRate > 0.0 ? snapshot.sampleRate : 44100.0;
-        const auto latencyMs = 1000.0 * (double) snapshot.fftSize / sr;
 
         statusLeft = "Trigger " + juce::String (snapshot.thresholdDb, 1)
-                   + " dB above local level   ·   Engine " + juce::String (snapshot.fftSize)
-                   + " (latency " + juce::String (latencyMs, 1) + " ms)";
+                   + " dB above local level   " + kMidDot + "   Engine " + juce::String (snapshot.bandCount)
+                   + " bands   " + kMidDot + "   zero latency";
 
         statusRight = juce::String (sr / 1000.0, 1) + " kHz"
-                    + (snapshot.midSide ? "   ·   M/S" : "")
-                    + "   ·   Sidechain: "
+                    + (procMode != 0 ? juce::String ("   ") + kMidDot + "   " + procModeName : juce::String())
+                    + "   " + kMidDot + "   Sidechain: "
                     + (sidechainConnected ? (scLive ? "live" : "connected, silent") : "not connected")
-                    + "   ·   v" + juce::String (ZTAME_VERSION);
+                    + "   " + kMidDot + "   v" + juce::String (ZTAME_VERSION);
     }
 }
 
@@ -992,7 +988,7 @@ void ZTameEditorContent::paint (juce::Graphics& g)
 
     g.setColour (ztame::accentSoft());
     g.setFont (juce::Font (juce::FontOptions (11.5f)));
-    g.drawText ("resonance suppressor  ·  tame the ring, keep the tone",
+    g.drawText ("resonance suppressor  " + kMidDot + "  tame the ring, keep the tone",
                 30, 46, 420, 16, juce::Justification::centredLeft, false);
 
     g.setColour (ztame::textDim().withAlpha (0.8f));

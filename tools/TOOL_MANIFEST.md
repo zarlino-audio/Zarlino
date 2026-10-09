@@ -2,7 +2,7 @@
 
 **File:** tools/TOOL_MANIFEST.md (companion machine-read registry: tools/TOOL_MANIFEST.json)
 **Maintainer:** `zarlino-local-agent` (daemon / worker). Keep the `.md` and `.json` in sync.
-**Last updated:** 2026-10-03 (release pipeline rebuild — tools/build-release-local.ps1 registered; PRD-01 remediation)
+**Last updated:** 2026-10-09 (workspace organization - _rec/ scripts relocated to tools/zscorch-qa/, scratch self-tests + _recovered_*.h + _rec source copies purged after verification; previously 2026-10-03 release pipeline rebuild)
 
 This manifest lists every SELF-INVENTED (ad-hoc) tool currently on this dev machine so none of
 them stays ad-hoc or undiscoverable. It is the central registry that was missing before: many
@@ -64,7 +64,7 @@ OBSOLETE (one-shot; re-running now would mostly no-op). Keep for traceability.
 | tools/patch_zscorch_cmake.py | 2026-09-02 | OBSOLETE | Appended ZScorch_OfflineRender console-app target to plugins/ZScorch/CMakeLists.txt (real dry+processed A/B render). |
 | tools/fix_zscorch_line.py | 2026-09-02 | OBSOLETE | Repaired a corrupt curly-quote/em-dash comment/brace fragment that broke compilation of PluginProcessor.cpp. |
 | tools/fix_zscorch_dtor.py | 2026-09-02 | OBSOLETE | Out-of-lined ~ZScorchAudioProcessor (decl in .h / def in .cpp TU) so unique_ptr<Engine> is destroyed where Engine is fully defined (fixes incomplete type in ZScorch_OfflineRender). |
-| tools/_fix_engine_dtor.py | 2026-09-03 | ORPHAN_DUPLICATE | Near-duplicate of fix_zscorch_dtor.py (relative-path flavour), same edit. Recommend deleting the underscore copy and keeping fix_zscorch_dtor.py. |
+| tools/_fix_engine_dtor.py | 2026-09-03 | DELETED 2026-10-09 | Was a near-duplicate of fix_zscorch_dtor.py (relative-path flavour), same edit; removed in the workspace organization pass. |
 
 Commissioned by: ZScorch DSP re-engineer (4x os + per-band DC block + ceiling limiter + refactor of
 DSP into an anon-namespace Engine) and its real-audio OfflineRender A/B tooling.
@@ -93,7 +93,7 @@ Commissioned by: PresenceField processed-mode (Option B) DSP comparison (process
 | tools/build_presencefield.bat | 2026-09-02 | USED | vcvars64 + cmake configure/build of PresenceField and PresenceField_OfflineRender (Ninja, Release). |
 | tools/ninja_reconf.bat | 2026-09-02 | USED | vcvars64 + cmake -G Ninja reconfigure of the build dir, then forwards ninja args. |
 | tools/ninja_run.bat | 2026-09-02 | USED | vcvars64 + ninja -C build dir forwarding args. |
-| tools/_run_vs_zinja.cmd | 2026-09-03 | ORPHAN_DUPLICATE | Alternate ninja runner (name looks like a typo of ninja -> "zinja"); overlaps ninja_run.bat. Recommend keep one; delete or rename this stray copy. |
+| tools/_run_vs_zinja.cmd | 2026-09-03 | DELETED 2026-10-09 | Was the stray alternate ninja runner overlapping ninja_run.bat; removed in the workspace organization pass. |
 
 ### F. ZTame licensing + P8 test stems
 | Tool | Created | Status | Purpose |
@@ -103,16 +103,17 @@ Commissioned by: PresenceField processed-mode (Option B) DSP comparison (process
 
 Commissioned by: ZTame license-key scheme and ZTame P8 A/B test schedule.
 
-### G. Real-audio A/B render + analysis scratch under repo-root _rec/  (2026-09-01)
+### G. Real-audio A/B render + analysis  (tools/zscorch-qa/, formerly repo-root _rec/ - relocated 2026-10-09)
 | Tool | Created | Status | Purpose |
 |---|---|---|---|
-| _rec/render_zscorch.ps1 | 2026-09-01 | USED | Render a real source file through current ZScorch DSP to dry+processed WAVs. |
-| _rec/stage_ab.ps1 | 2026-09-01 | USED | Stage the A (dry) vs B (processed) pair for a listening test. |
-| _rec/analyze_wavs.py | 2026-09-01 | USED | Post-analysis of the rendered WAVs (metrics). |
-| _rec/spectral_check.py | 2026-09-01 | USED | Spectral comparison of A vs B WAVs. |
-| _rec/envelope_check.py | 2026-09-01 | USED | Envelope/transient comparison of the pair. |
-| _rec/verify_fresh.py | 2026-09-01 | PROTOTYPE | Fresh-build verification pass of the render output. |
-| _rec/final_verify.py | 2026-09-01 | PROTOTYPE | Final end-to-end verification of the A/B deliverables. |
+| tools/zscorch-qa/render_zscorch.ps1 | 2026-09-01 | USED | Render a real source file through current ZScorch DSP to dry+processed WAVs. |
+| tools/zscorch-qa/redo_zscorch_ab_render.ps1 | 2026-09-03 | USED | Re-render the ZScorch A/B demo pair end-to-end after DSP fixes. |
+| tools/zscorch-qa/stage_ab.ps1 | 2026-09-01 | USED | Stage the A (dry) vs B (processed) pair for a listening test. |
+| tools/zscorch-qa/analyze_wavs.py | 2026-09-01 | USED | Post-analysis of the rendered WAVs (metrics). |
+| tools/zscorch-qa/spectral_check.py | 2026-09-01 | USED | Spectral comparison of A vs B WAVs. |
+| tools/zscorch-qa/envelope_check.py | 2026-09-01 | USED | Envelope/transient comparison of the pair. |
+| tools/zscorch-qa/verify_fresh.py | 2026-09-01 | PROTOTYPE | Fresh-build verification pass of the render output. |
+| tools/zscorch-qa/final_verify.py | 2026-09-01 | PROTOTYPE | Final end-to-end verification of the A/B deliverables. |
 
 Commissioned by: ZScorch / general real-audio A/B listening presentation (offline render tooling).
 
@@ -139,15 +140,14 @@ the old packaging script no longer existed). Registered before first real use pe
 ---
 
 ### Not tools (verified residue - not registered, some recommended for deletion)
-- tools/py_test.txt, py_test2.txt, py_test3.txt, _echotest.txt, _writetest.txt: I/O self-tests.
-  Recommend DELETE (SCRATCH_NOT_A_TOOL).
-- tools/__pycache__/: python bytecode cache. Safe to delete.
+- tools/py_test.txt, py_test2.txt, py_test3.txt, _echotest.txt, _writetest.txt: I/O self-tests. DELETED 2026-10-09.
+- tools/__pycache__/: python bytecode cache. DELETED 2026-10-09.
 - build-zscorch-repro/, build-clean-zscorch/, build-zscorch-vs2026/, build-msvc/, build-vs-ci/,
-  build_ci/, build-clean/ : scratch CI/build output dirs. Not tools; archive or purge as deemed fit.
-- _recovered_AnalysisCore.h, _recovered_ControlLayer.h, _recovered_Exciter.h, _recovered_PluginProcessor.h,
-  _recovered_Saturator.h, _recovered_Tilt.h and _rec/*.cpp|.h, tools/keys/: recovered-source / key residue
-  from prior data-loss wipe events - do NOT delete Key/Recon material blindly. Guard before any purge.
-- _pem.txt, _pem_hex.txt, _live_status.txt, _offlinerender_save.txt, logs *.log: scratch state; review before purge.
+  build_ci/, build-clean/ : scratch CI/build output dirs. Now covered by .gitignore (/build-*/, /build_*/); archive or purge as deemed fit.
+- _recovered_*.h and _rec/*.cpp|.h source copies: PURGED 2026-10-09 after verification - the live copies under
+  plugins/ZScorch/Source + shared/ are newer, and checkpoint commits (e.g. 71758c69) still hold snapshots. The
+  _rec/ scripts were RELOCATED to tools/zscorch-qa/ (registered above). tools/keys/ KEPT (key material, gitignored).
+- _pem.txt, _pem_hex.txt (secret copies), _live_status.txt, _offlinerender_save.txt, logs *.log: DELETED 2026-10-09.
 - executive-os daemon worker scripts (writeb64.mjs, upload-audio.ts, daemon start/stop/uninstall *.ps1):
   separate subsystem tooling; tracked with the daemon, covered by its own docs. Not registered here.
 

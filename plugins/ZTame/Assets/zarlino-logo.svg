@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" width="200" height="40">
+  <defs>
+    <linearGradient id="zg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#35d0ba"/>
+      <stop offset="100%" style="stop-color:#1a8a7a"/>
+    </linearGradient>
+  </defs>
+  <!-- Z icon: three stacked horizontal bars forming a Z -->
+  <rect x="4" y="2" width="22" height="6" rx="2" fill="url(#zg)"/>
+  <rect x="4" y="17" width="22" height="4" rx="2" fill="url(#zg)" transform="rotate(-30 15 19)"/>
+  <rect x="4" y="32" width="22" height="6" rx="2" fill="url(#zg)"/>
+  <!-- Text -->
+  <text x="34" y="29" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="700" fill="#eef3f7" letter-spacing="1">Zarlino</text>
+</svg>

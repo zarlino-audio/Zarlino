@@ -131,17 +131,19 @@ public:
                         + juce::String (refRms, 2) + " dB, test="
                         + juce::String (testRms, 2) + " dB");
 
-        // ...and the processed path must be delayed by exactly the reported latency.
-        const int latency = procTest->getLatencySamples();
-        auto earlyRms = rmsDb (test, 0, 0, juce::jmax (16, latency - 8));
-        expectLessThan (earlyRms, -100.0f,
-                        "Wet path starts before its reported latency (early RMS "
-                        + juce::String (earlyRms, 1) + " dB)");
+        // ...and the engine must be zero-latency: with depth 0 the processed path is
+        // bit-identical to the input from the very first sample (no delay line).
+        expectEquals (procTest->getLatencySamples(), 0,
+                      "Engine must report zero latency");
 
-        auto alignedRms = rmsDb (test, 0, latency, 1024);
-        expectGreaterThan (alignedRms, -12.0f,
-                           "Wet path is silent after the latency point ("
-                           + juce::String (alignedRms, 1) + " dB)");
+        double maxDiff = 0.0;
+        for (int s = 0; s < N; ++s)
+            maxDiff = juce::jmax (maxDiff, (double) std::abs (test.getSample (0, s)
+                                                              - input.getSample (0, s)));
+
+        expectLessThan ((float) maxDiff, 1.0e-9f,
+                        "Processed path is not sample-aligned with the input (maxDiff "
+                        + juce::String (maxDiff) + ")");
     }
 };
 
@@ -526,9 +528,10 @@ public:
 
             auto out = processMono (*proc, input);
 
-            const int latency = proc->getLatencySamples();
-            const int hop = latency / 2;
-            const int start = onset + latency + hop;      // first fully-analysed frame after onset
+            // Zero latency: detection runs on past frames, which are available one
+            // hop after onset; gains are smoothed from there. Measure one hop later.
+            constexpr int hop = 1024;   // analysis hop (see ZTameAudioProcessor)
+            const int start = onset + 2 * hop;
 
             return rmsDb (out, 0, start, hop);
         };
@@ -585,15 +588,133 @@ public:
 };
 
 //==============================================================================
-// ZTAME-UI-001: Editor layout — every control stays inside the window at any size
+// ZTAME-UI-001: Editor layout and UI text encoding.
+//
+// The editor is a scalable design: all controls sit inside ZTameEditorContent at a
+// fixed design size and the content is transformed to fit the window, so geometry is
+// verified through JUCE's local-area mapping, which bakes in the transform chain.
+// Two independent things are checked:
+//   1. geometry  — every visible control lies inside the window at every supported
+//                  size, so nothing is clipped or drawn off-panel;
+//   2. encoding  — every string the UI can display is printable ASCII or one of the
+//                  four typographic glyphs the design uses deliberately (middot,
+//                  em dash, plus-minus, delta). All are UTF-8 literals covered by
+//                  the default JUCE fonts, so no glyph can appear as a box.
 class ZTameEditorLayout : public juce::UnitTest
 {
 public:
-    ZTameEditorLayout() : UnitTest ("ZTAME-UI-001: Editor Layout") {}
+    ZTameEditorLayout() : UnitTest ("ZTAME-UI-001: Editor Layout and UI Text Encoding") {}
+
+    /** True for strings the UI may display: printable ASCII plus the small,
+        deliberate set of typographic glyphs used in labels and tooltips. */
+    static bool isDisplayable (const juce::String& s)
+    {
+        for (auto c : s)
+        {
+            if (c == '\n' || c == '\r' || c == '\t')   // tooltip line breaks
+                continue;
+
+            if (c >= 32 && c <= 126)                    // printable ASCII
+                continue;
+
+            if (c == 0x00b7 || c == 0x2014 || c == 0x00b1 || c == 0x0394) // middot, em dash, plus-minus, delta
+                continue;
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /** Recursively collects every string the given component can show on screen. */
+    static void collectVisibleText (juce::Component& c, juce::StringArray& out)
+    {
+        if (auto* label = dynamic_cast<juce::Label*> (&c))
+            out.add (label->getText());
+        else if (auto* button = dynamic_cast<juce::Button*> (&c))
+            out.add (button->getButtonText());
+        else if (auto* box = dynamic_cast<juce::ComboBox*> (&c))
+            for (int i = 0; i < box->getNumItems(); ++i)
+                out.add (box->getItemText (i));
+
+        if (auto* tip = dynamic_cast<juce::SettableTooltipClient*> (&c))
+            out.add (tip->getTooltip());
+
+        out.add (c.getName());
+
+        for (int i = 0; i < c.getNumChildComponents(); ++i)
+            if (auto* child = c.getChildComponent (i))
+                collectVisibleText (*child, out);
+    }
+
+    static bool hasVisibleChild (const juce::Component& c)
+    {
+        for (int i = 0; i < c.getNumChildComponents(); ++i)
+            if (auto* child = c.getChildComponent (i))
+                if (child->isVisible())
+                    return true;
+
+        return false;
+    }
+
+    /** Recurses through the visible components below `parent`, counting leaf
+        controls and checking that each one, mapped through the transform chain,
+        still lies inside the editor window. */
+    static void walkGeometry (juce::Component& editor, juce::Component& parent,
+                              int& visible, int& outside)
+    {
+        for (int i = 0; i < parent.getNumChildComponents(); ++i)
+        {
+            auto* child = parent.getChildComponent (i);
+
+            if (child == nullptr || ! child->isVisible())
+                continue;
+
+            if (child->getWidth() <= 0 || child->getHeight() <= 0)
+                continue;   // layout placeholders cannot be clipped
+
+            if (dynamic_cast<juce::Slider*> (child) != nullptr || ! hasVisibleChild (*child))
+            {
+                ++visible;
+
+                const auto area = editor.getLocalArea (child, child->getLocalBounds());
+
+                if (area.getX() < 0 || area.getY() < 0
+                    || area.getRight() > editor.getWidth() + 1
+                    || area.getBottom() > editor.getHeight() + 1)
+                    ++outside;
+            }
+            else
+            {
+                walkGeometry (editor, *child, visible, outside);
+            }
+        }
+    }
+
+    /** Finds the preset selector anywhere in the tree (>= 7 entries). */
+    static juce::ComboBox* findPresetBox (juce::Component& c)
+    {
+        for (int i = 0; i < c.getNumChildComponents(); ++i)
+        {
+            auto* child = c.getChildComponent (i);
+
+            if (child == nullptr)
+                continue;
+
+            if (auto* box = dynamic_cast<juce::ComboBox*> (child))
+                if (box->getNumItems() >= 7)
+                    return box;
+
+            if (auto* found = findPresetBox (*child))
+                return found;
+        }
+
+        return nullptr;
+    }
 
     void runTest() override
     {
-        beginTest ("Controls fit the design area and the preset bar is populated");
+        beginTest ("Controls fit the window at every supported size");
 
         auto* proc = new ZTameAudioProcessor();
         proc->prepareToPlay (44100.0, 512);
@@ -605,55 +726,50 @@ public:
         if (editor == nullptr)
             return;
 
-        for (auto size : { juce::Point<int> (1000, 640),
-                           juce::Point<int> (750, 480),
-                           juce::Point<int> (1700, 1088) })
+        // Design size, the two resize limits, and a size in between — the whole
+        // range the editor advertises through setResizeLimits().
+        const juce::Point<int> designSize (editor->getWidth(), editor->getHeight());
+
+        for (auto size : { designSize,
+                           juce::Point<int> (820, 560),
+                           juce::Point<int> (1040, 608),
+                           juce::Point<int> (1440, 1040) })
         {
             editor->setSize (size.x, size.y);
-
-            auto* content = editor->getChildComponent (0);
-            expect (content != nullptr, "editor content component missing");
-
-            if (content == nullptr)
-                continue;
 
             int visible = 0;
             int outside = 0;
 
-            for (int i = 0; i < content->getNumChildComponents(); ++i)
-            {
-                auto* child = content->getChildComponent (i);
-
-                if (child == nullptr || ! child->isVisible())
-                    continue;
-
-                ++visible;
-
-                const auto b = child->getBounds();
-                if (b.getX() < 0 || b.getY() < 0
-                    || b.getRight() > ztame::designWidth
-                    || b.getBottom() > ztame::designHeight)
-                    ++outside;
-            }
+            walkGeometry (*editor, *editor, visible, outside);
 
             expectGreaterThan (visible, 10,
                 "expected the full control set at " + juce::String (size.x) + "x" + juce::String (size.y));
             expectEquals (outside, 0,
-                "controls outside the design area at " + juce::String (size.x) + "x" + juce::String (size.y));
-
-            const auto transform = content->getTransform();
-            expectGreaterThan (transform.mat00, 0.0f, "content transform not applied");
+                "controls outside the window at " + juce::String (size.x) + "x" + juce::String (size.y));
         }
 
-        beginTest ("Preset bar offers the six factory presets plus init");
-        {
-            auto* content = editor->getChildComponent (0);
-            juce::ComboBox* presetBox = nullptr;
+        editor->setSize (designSize.x, designSize.y);
 
-            if (content != nullptr)
-                for (int i = 0; i < content->getNumChildComponents(); ++i)
-                    if (auto* box = dynamic_cast<juce::ComboBox*> (content->getChildComponent (i)))
-                        presetBox = box;
+        beginTest ("Every string the UI can display uses supported glyphs");
+        {
+            juce::StringArray text;
+            collectVisibleText (*editor, text);
+
+            // The tooltip of a Component is empty by default; skip blanks so the
+            // intent of a failure is obvious.
+            juce::StringArray offenders;
+            for (const auto& s : text)
+                if (s.isNotEmpty() && ! isDisplayable (s))
+                    offenders.add (s);
+
+            expect (offenders.isEmpty(),
+                    "unsupported UI text could render as boxes or mojibake: "
+                    + offenders.joinIntoString (" | "));
+        }
+
+        beginTest ("Preset bar offers the factory programs");
+        {
+            auto* presetBox = findPresetBox (*editor);
 
             expect (presetBox != nullptr, "preset box not found");
 

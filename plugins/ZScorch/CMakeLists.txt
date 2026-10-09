@@ -1,3 +1,15 @@
+#==============================================================================
+# ZScorch v2.0 — adaptive multi-band harmonic processor
+#==============================================================================
+include(${CMAKE_SOURCE_DIR}/cmake/ZarlinoTest.cmake)
+
+# Shared licensing (ZLicenseManager + embedded public key). The shared tree is
+# not added globally, so pull the interface library in on demand.
+if(NOT TARGET zarlino_licensing)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/shared/licensing
+                     ${CMAKE_BINARY_DIR}/zarlino_licensing)
+endif()
+
 juce_add_plugin(ZScorch
     COMPANY_NAME "Zarlino Audio"
     COMPANY_WEBSITE "https://zarlinoaudio.local"
@@ -19,11 +31,20 @@ target_sources(ZScorch
     PRIVATE
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/AnalysisCore.cpp
+        Source/ControlLayer.cpp
+        Source/Saturator.cpp
+        Source/Tilt.cpp
+        Source/Exciter.cpp
 )
 
 target_include_directories(ZScorch
     PRIVATE
         Source
+        ${CMAKE_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/shared/dsp
+        ${CMAKE_SOURCE_DIR}/shared/ui
+        ${CMAKE_SOURCE_DIR}/shared/licensing
 )
 
 target_compile_definitions(ZScorch
@@ -31,13 +52,14 @@ target_compile_definitions(ZScorch
         JUCE_WEB_BROWSER=0
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
-        ZSCORCH_VERSION="1.0.0"
+        ZSCORCH_VERSION="2.0.0"
 )
 
 target_link_libraries(ZScorch
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp
+        zarlino_licensing
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
@@ -45,114 +67,38 @@ target_link_libraries(ZScorch
 )
 
 #==============================================================================
-# ZScorch DSP Correctness & Fuzz Test Runner
-# Temporarily disabled — test source files not yet created
-# juce_add_console_app(ZScorch_Tests)
-#
-# target_sources(ZScorch_Tests
-#     PRIVATE
-#         Source/PluginProcessor.cpp
-#         Source/PluginEditor.cpp
-#         Tests/TestMain.cpp
-#         Tests/SaturationTests.cpp
-#         Tests/OversamplingTests.cpp
-#         Tests/CrossoverTests.cpp
-#         Tests/EQTests.cpp
-#         Tests/CeilingLimiterTests.cpp
-#         Tests/FullChainTests.cpp
-# )
-#
-# juce_generate_juce_header(ZScorch_Tests)
-#
-# target_include_directories(ZScorch_Tests
-#     PRIVATE
-#         Source
-#         Tests
-#         "${CMAKE_CURRENT_BINARY_DIR}/ZScorch_artefacts/JuceLibraryCode"
-# )
-#
-# target_compile_definitions(ZScorch_Tests
-#     PRIVATE
-#         JUCE_WEB_BROWSER=0
-#         JUCE_USE_CURL=0
-#         JUCE_VST3_CAN_REPLACE_VST2=0
-#         JucePlugin_Name="ZScorch"
-#         JucePlugin_Desc="ZScorch"
-#         JucePlugin_Manufacturer="Zarlino Audio"
-#         JucePlugin_ManufacturerCode=0x4b687269
-#         JucePlugin_PluginCode=0x5a536331
-#         JucePlugin_IsSynth=0
-#         JucePlugin_Build_VST3=0
-#         JucePlugin_Build_Standalone=0
-#         JucePlugin_Build_AU=0
-#         JucePlugin_Build_AAX=0
-#         JucePlugin_Build_LV2=0
-#         JucePlugin_Build_Unity=0
-#         JucePlugin_Build_VST=0
-#         JUCE_SHARED_CODE=1
-# )
-#
-# target_link_libraries(ZScorch_Tests
-#     PRIVATE
-#         juce::juce_audio_utils
-#         juce::juce_dsp
-#     PUBLIC
-#         juce::juce_recommended_config_flags
-#         juce::juce_recommended_warning_flags
-# )
-#==============================================================================
-# ZScorch Offline Render Tool
-# Renders a REAL source audio file through the actual ZScorch DSP
-# (ZScorchAudioProcessor::processBlock) to dry + processed WAVs for a
-# genuine A/B (before/after) presentation of the re-engineered DSP.
-#==============================================================================
-juce_add_console_app(ZScorch_OfflineRender
-    PRODUCT_NAME "ZScorch_OfflineRender"
-    NEEDS_GUI FALSE
-)
+# ZScorch v2.0 test runner (DSP correctness, presets, robustness, fuzz)
+zarlino_add_plugin_test(ZScorch_Tests ZScorch 0x4b687269 0x5a534331)
 
-juce_generate_juce_header(ZScorch_OfflineRender)
-
-target_sources(ZScorch_OfflineRender
+target_sources(ZScorch_Tests
     PRIVATE
-        OfflineRender.cpp
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/AnalysisCore.cpp
+        Source/ControlLayer.cpp
+        Source/Saturator.cpp
+        Source/Tilt.cpp
+        Source/Exciter.cpp
+        Tests/Main.cpp
+        Tests/SmokeTest.cpp
+        Tests/SaturatorTests.cpp
+        Tests/ExciterTests.cpp
+        Tests/TiltTests.cpp
+        Tests/ControlLayerTests.cpp
+        Tests/AnalysisCoreTests.cpp
+        Tests/PluginLevelTests.cpp
+        Tests/RobustnessTests.cpp
+        Tests/AutomationStressTests.cpp
+        Tests/FuzzTests.cpp
+        Tests/LicenseTests.cpp
 )
 
-target_include_directories(ZScorch_OfflineRender
-    PRIVATE
-        Source
+target_link_libraries(ZScorch_Tests PRIVATE
+    zarlino_licensing
 )
 
-target_compile_definitions(ZScorch_OfflineRender
-    PRIVATE
-        JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
-        JUCE_VST3_CAN_REPLACE_VST2=0
-        JucePlugin_Name="ZScorch"
-        JucePlugin_Desc="ZScorch"
-        JucePlugin_Manufacturer="Zarlino Audio"
-        JucePlugin_ManufacturerCode=0x4b687269
-        JucePlugin_PluginCode=0x5a536331
-        JucePlugin_IsSynth=0
-        JucePlugin_Build_VST3=0
-        JucePlugin_Build_Standalone=0
-        JucePlugin_Build_AU=0
-        JucePlugin_Build_AAX=0
-        JucePlugin_Build_LV2=0
-        JucePlugin_Build_Unity=0
-        JucePlugin_Build_VST=0
-        JUCE_SHARED_CODE=1
-)
-
-target_link_libraries(ZScorch_OfflineRender
-    PRIVATE
-        juce::juce_audio_utils
-        juce::juce_dsp
-        juce::juce_audio_formats
-    PUBLIC
-        juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
-        juce::juce_recommended_warning_flags
-)
+include(CTest)
+if(BUILD_TESTING)
+    add_test(NAME ZScorch.Unit COMMAND ZScorch_Tests)
+    set_tests_properties(ZScorch.Unit PROPERTIES LABELS "ZScorch;DSP;release-gate")
+endif()

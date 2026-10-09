@@ -8,44 +8,50 @@
 
 //==============================================================================
 /**
-    ZTame — spectral resonance suppressor (v1.1 engine).
+    ZTame — zero-latency resonance suppressor (v1.2 engine).
 
     Removes narrow-band resonances and ringing harshness while leaving the
     surrounding tonal mass of the source intact: "Tame the ring. Keep the tone."
 
-    Engine contract (see specs/ZTame_v1.1_rework_design.md):
+    Engine contract (see specs/ZTame_v1.2_zero-latency_design.md):
 
-      - STFT with sqrt-Hann analysis AND synthesis windows, 50 % overlap.
-        sqrt(Hann) * sqrt(Hann) = Hann, and Hann + Hann(shift by N/2) = 1, so the
-        overlap-add reconstructs perfectly with NO normalisation factor and no
-        frame-rate amplitude ripple.
-      - The wet path delay is exactly one frame (N samples), reported through
-        setLatencySamples() and applied to every path (dry mix, listen, bypass)
-        so host delay compensation and parallel mixing stay phase coherent.
-      - Detection is a per-bin resonance RATIO against a frequency-adaptive local
-        neighbourhood (never a plain level gate), with an optional sidechain bus
-        as the detection source.
-      - A draggable "focus band" (low/high frequency, soft skirts) restricts where
-        suppression is allowed to happen. Replaces the inert v1.0 split-crossover.
-      - Lock-free double-buffered telemetry for the editor: spectrum in/out,
-        removed-energy curve, detected peak markers, gain-reduction metering.
+      - ZERO latency. The correction runs entirely in the time domain and the
+        detection window covers only PAST input samples, so output sample n
+        depends only on input samples <= n and setLatencySamples(0) is reported
+        for every path — host bypass included.
+      - Bit-transparent when idle: the correction chain is a cascade of RBJ
+        peaking biquads whose 0.000 dB form has identical numerator and
+        denominator coefficients, so an inactive engine passes audio through
+        sample-exactly (residual = 0, not merely "low").
+      - Detection keeps the v1.1 detector — per-bin resonance RATIO against a
+        frequency-adaptive neighbourhood baseline, focus band mask, peak hold,
+        selectivity — but the transform is analysis-only: there is no inverse
+        FFT, no synthesis window, no overlap-add, and no per-bin gain applied to
+        the audio. Per-band corrections are executed by the bell cascade.
+      - Correction aggressiveness comes from the bells: a bell hits its
+        specified depth exactly at its centre, so a detected resonance is
+        reduced by the full clamped amount instead of the partial cancellation
+        a subtracted-band filterbank would deliver.
+      - The engine parks itself when it provably cannot change the output
+        (silence, nothing detected, bypass), so idle CPU approaches zero.
 
     Signal flow:
 
-        in ─► ring ─► [frame: sqrt-Hann ─► FFT ─► magnitude] ─┐
-                                                              ├─ detection ─►
-        sidechain ─► [same analysis] ─────────────────────────┘   reduction dB
-                                                                     │
-                                              focus band mask ───────┤
-                                                                     ▼
-                                       per-bin attack/release gain trajectory
-                                                                     │
-                          frame * gain ─► IFFT ─► synthesis window ─► OLA ─► wet
-                                                                     │
-        out = (1-mix) * dry[N] + mix * wet        (listen: out = delta * 2)
+        in ─┬─ correction : cascade of N peaking bells (cuts only) ──► wet
+            │                  ▲
+            │                  │ per-band gains (attack/release, dB)
+            │        ┌─────────┴───────────┐
+            │        │ band aggregation    │  max reduction per band
+            │        └─────────▲───────────┘
+            │                  │
+            └─ analysis : past-window FFT (N = 1024, hop = N/2, Hann)
+                          ─► per-bin magnitude + 80 ms peak hold
+                          ─► excess over local neighbourhood
+                          ─► threshold · focus mask · selectivity
+
+        out = x + (wet - x) * mix          (listen: out = (x - wet) * 2)
 */
-class ZTameAudioProcessor final : public juce::AudioProcessor,
-                                  private juce::Timer
+class ZTameAudioProcessor final : public juce::AudioProcessor
 {
 public:
     //==============================================================================
@@ -57,7 +63,7 @@ public:
 
         std::array<float, numDisplayBins> inputDb      {};  // main input spectrum (dBFS)
         std::array<float, numDisplayBins> outputDb     {};  // processed spectrum (dBFS)
-        std::array<float, numDisplayBins> reductionDb  {};  // removed energy (dB, positive)
+        std::array<float, numDisplayBins> reductionDb  {};  // detected reduction (dB, positive)
         std::array<float, numDisplayBins> sidechainDb  {};  // sidechain spectrum (dBFS)
         std::array<float, maxPeaks>       peakFreqHz   {};
         std::array<float, maxPeaks>       peakReductionDb {};
@@ -65,14 +71,16 @@ public:
         float grAverageDb       = 0.0f;
         float grPeakDb          = 0.0f;
         float thresholdDb       = 12.0f;   // detector trigger currently required
-        int   fftSize           = 2048;
+        int   bandCount         = 32;
         double sampleRate       = 44100.0;
         bool  listenMode        = false;
         bool  bypassed          = false;
         bool  sidechainOn       = false;
         bool  sidechainConnected= false;
         bool  sidechainLive     = false;   // bus connected AND carrying signal
-        bool  midSide           = false;
+        int   processingMode    = 0;
+        float outputLevelDb     = -100.0f; // peak of the block just processed
+        float processingLoad    = 0.0f;    // % of the block's real-time budget used
     };
 
     //==============================================================================
@@ -100,10 +108,11 @@ public:
     double getTailLengthSeconds() const override { return 0.0; }
 
     //==============================================================================
-    int getNumPrograms() override { return 1; }
-    int getCurrentProgram() override { return 0; }
-    void setCurrentProgram (int) override {}
-    const juce::String getProgramName (int) override { return {}; }
+    // Factory programs: index 0 is "Init", 1..6 the six factory presets.
+    int getNumPrograms() override;
+    int getCurrentProgram() override;
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
     void changeProgramName (int, const juce::String&) override {}
 
     //==============================================================================
@@ -121,7 +130,22 @@ public:
     float getGainReductionPeakDb() const noexcept    { return grPeakDb.load(); }
     bool  isSidechainConnected() const;
     bool  isSidechainLive() const noexcept           { return sidechainLive.load(); }
-    int   getActiveFftSize() const noexcept          { return activeFftSize.load(); }
+
+    /** Copies the newest published frame into the internal UI cache and returns
+        the analysis spectrum (UiSnapshot::numDisplayBins bins, dBFS, 20 Hz..20 kHz
+        log-spaced), or nullptr until the first frame has been published.
+
+        Call this first: the other data accessors below read the same cached frame,
+        so a display never mixes arrays from two different analysis frames. */
+    const float* getMagnitudeData() const noexcept;
+    /** Detected-reduction spectrum (dB, positive) from the same frame as getMagnitudeData(). */
+    const float* getSuppressionData() const noexcept;
+    int    getNumBins() const noexcept      { return UiSnapshot::numDisplayBins; }
+    double getHostSampleRate() const noexcept { return currentSampleRate; }
+    /** Peak level of the most recent block, dBFS (smoothed release). */
+    float  getOutputLevelDb() const noexcept  { return outputLevelDb.load(); }
+    /** Share of the last block's real-time budget spent in the engine, percent. */
+    float  getProcessingLoadPercent() const noexcept { return processingLoadPercent.load(); }
 
     //==============================================================================
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -145,32 +169,119 @@ public:
     static constexpr const char* paramSidechain   = "sidechain";
     static constexpr const char* paramStereoLink  = "stereoLink";
     static constexpr const char* paramResolution  = "resolution";
-    static constexpr const char* paramMidSide     = "midSide";
+    static constexpr const char* paramProcessingMode = "processingMode";
+
+    /** Processing modes (index order matters — it is saved in presets). */
+    enum ProcessingMode
+    {
+        modeStereo = 0,
+        modeMidSide = 1,
+        modeMidOnly = 2,
+        modeSideOnly = 3
+    };
+
+    static constexpr int numFactoryPrograms = 7;   // Init + six factory presets
 
 private:
     //==============================================================================
-    // Frame geometry
-    static constexpr int minFftOrder = 10;                    //  1024 → 23.2 ms @ 44.1k
-    static constexpr int maxFftOrder = 11;                    //  2048 → 46.4 ms @ 44.1k
-    static constexpr int maxFftSize  = 1 << maxFftOrder;      //  2048
-    static constexpr int maxNumBins  = (maxFftSize / 2) + 1;  //  1025
-    static constexpr int ringSize    = 2 * maxFftSize;        //  4096
+    // Engine geometry
+    static constexpr int   maxBands      = 48;                   // "Precise" band count
+    static constexpr int   analysisOrder = 10;                   // 1024-point analysis FFT
+    static constexpr int   analysisN     = 1 << analysisOrder;
+    static constexpr int   analysisHop   = analysisN;            // control rate ≈ 21.7 ms @ 47k
+    static constexpr int   analysisBins  = analysisN / 2 + 1;
+    static constexpr int   analysisRing  = 2 * analysisN;
+    static constexpr float kMinFreq      = 20.0f;
+    static constexpr float kMaxFreq      = 20000.0f;
+    static constexpr float kBellQ        = 2.0f;                 // ≈ 0.5-octave bells
+
+    //==============================================================================
+    /** One peaking biquad of the correction cascade (direct form I, normalized).
+
+        At 0.000 dB the RBJ peaking coefficients degenerate to b == a, and with
+        seeded/aligned states the stage computes y = x exactly — that is what
+        makes an idle engine a bit-exact passthrough. */
+    struct BellBiquad
+    {
+        float b0 = 1.0f, b1 = 0.0f, b2 = 0.0f, a1 = 0.0f, a2 = 0.0f;
+        float x1 = 0.0f, x2 = 0.0f, y1 = 0.0f, y2 = 0.0f;
+
+        inline float process (float x) noexcept
+        {
+            const float y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1; x1 = x;
+            y2 = y1; y1 = y;
+            return y;
+        }
+
+        /** Start from a steady state: with x1=x2=y1=y2=input the first output is
+            exactly the input for ANY peaking coefficients (unity DC gain), so a
+            band can switch on without a click. */
+        inline void seed (float x) noexcept
+        {
+            x1 = x2 = y1 = y2 = x;
+        }
+
+        inline void setIdentity() noexcept
+        {
+            b0 = 1.0f; b1 = 0.0f; b2 = 0.0f; a1 = 0.0f; a2 = 0.0f;
+        }
+
+        /** Set a cut-only peaking response. cutDb >= 0; cosW0 and alpha are the
+            band's precomputed constants (cos(w0), sin(w0)/(2Q)). */
+        inline void setCut (float cutDb, float cosW0, float alpha) noexcept
+        {
+            const float A   = juce::Decibels::decibelsToGain (-cutDb * 0.5f);
+            const float a0  = 1.0f + alpha / A;
+            const float inv = 1.0f / a0;
+
+            b0 = (1.0f + alpha * A) * inv;
+            b1 = (-2.0f * cosW0) * inv;
+            b2 = (1.0f - alpha * A) * inv;
+            a1 = (-2.0f * cosW0) * inv;
+            a2 = (1.0f - alpha / A) * inv;
+        }
+    };
 
     //==============================================================================
     struct ChannelState
     {
-        std::vector<float> inRing;       // ringSize    — input history
-        std::vector<float> outAcc;       // ringSize    — wet overlap-add accumulator
-        std::vector<float> dryRing;      // ringSize    — input delayed by N (latency-aligned dry)
-        std::vector<float> fftData;      // 2*maxFftSize — JUCE real FFT scratch (must be 2N floats)
-        std::vector<float> magnitude;    // maxNumBins  — |X[k]|
-        std::vector<float> holdMag;      // maxNumBins  — detector peak-hold
-        std::vector<float> reductionDb;  // maxNumBins  — target reduction (dB, positive)
-        std::vector<float> targetGain;   // maxNumBins  — linear target gain
-        std::vector<float> gainSmooth;   // maxNumBins  — attack/release smoothed gain
-        bool  prepared = false;
+        // Correction (the only part of the engine that touches the audio path)
+        BellBiquad bells[maxBands];
+        float cutDb[maxBands]        {};   // smoothed reduction, dB >= 0
+        float appliedCutDb[maxBands] {};   // cut the coefficients were built from
+        bool  seedPending[maxBands]  {};   // band just switched on → seed next sample
+        bool  anyCut = false;              // any band currently cutting
+
+        // Analysis — runs on PAST samples only; never in the audio path
+        float inRing[analysisRing] {};
+        int   ringPos = 0;
+        float fftData[2 * analysisN] {};
+        float mag[analysisBins]      {};   // last frame magnitude (linear, full-scale ref)
+        float holdMag[analysisBins]  {};   // 80 ms peak hold
+        float bandLevel[maxBands]    {};   // per-band level (metering weights)
+
+        bool prepared = false;
     };
 
+    //==============================================================================
+    /** Everything that depends on the band count / sample rate. Rebuilt whenever
+        the resolution parameter or the sample rate changes. No allocation. */
+    struct BandPlan
+    {
+        int numBands = 32;
+        std::array<float, maxBands> centerHz {};
+        std::array<float, maxBands> cosW0    {};
+        std::array<float, maxBands> alpha    {};   // sin(w0) / (2Q)
+
+        /** FFT bin → correction band (-1 = outside the band range). */
+        std::array<int, analysisBins> binToBand {};
+
+        /** Display bin → FFT bin edges (log axis, 20 Hz..20 kHz). */
+        std::array<int, UiSnapshot::numDisplayBins + 1> displayLookup {};
+    };
+
+    //==============================================================================
     struct Params
     {
         float sensitivity  = 65.0f;
@@ -185,35 +296,29 @@ private:
         bool  bypassed     = false;
         bool  sidechainOn  = false;
         bool  stereoLink   = true;
-        bool  midSide      = false;
-        int   fftOrder     = maxFftOrder;
+        int   processingMode = modeStereo;
+        int   planIndex    = 0;            // 0 = Standard (32), 1 = Precise (48)
     };
 
     //==============================================================================
     // Core DSP
     void  processBlockInternal (juce::AudioBuffer<float>& buffer, bool hostBypass);
-    void  initChannel (ChannelState& state, int fftOrder);
-    void  resetChannel (ChannelState& state) noexcept;      // audio-thread safe (no allocation)
-    void  resetWetState (ChannelState& state) noexcept;     // zero the OLA/gains, keep the delay lines
-    Params readParams() const noexcept;
-    void  runHop();                                         // one STFT frame (all channels)
-    void  analyseChannel (ChannelState& state, int fftOrder) noexcept;
-    void  computeReductionSpectrum (const float* mag,
-                                    std::vector<float>& reductionOut,
+    void  rebuildBandPlan (int planIndex) noexcept;
+    void  resetChannel (ChannelState& state) noexcept;
+    void  resetAllChannels() noexcept;
+    void  analyseChannel (ChannelState& state) noexcept;
+    void  computeReductionSpectrum (const float* holdMag, std::vector<float>& out,
                                     const Params& p) noexcept;
-    void  synthesiseChannel (ChannelState& state, int fftOrder,
-                             const Params& p, float attackCoeff, float releaseCoeff,
-                             float& avgReductionDb, float& peakReductionDb) noexcept;
+    void  runHop (const Params& p, const bool* channelProcessed,
+                  const bool* scProcessed, bool scArmed) noexcept;
     void  publishSnapshot (const Params& p, bool scLive) noexcept;
-    void  rebuildDisplayLookup (int fftSize) noexcept;
+    void  computeBandLevels (ChannelState& state) noexcept;
+    Params readParams() const noexcept;
 
     float detectorThresholdDb (const Params& p) const noexcept;
 
     static int   neighbourhoodRadius (int binIndex, double sampleRate, int fftSize) noexcept;
     static float bandProfile (float freqHz, float lowHz, float highHz) noexcept;
-
-    //==============================================================================
-    void timerCallback() override;
 
     //==============================================================================
     juce::AudioProcessorValueTreeState parameters;
@@ -231,28 +336,27 @@ private:
     std::atomic<float>* pSidechain   = nullptr;
     std::atomic<float>* pStereoLink  = nullptr;
     std::atomic<float>* pResolution  = nullptr;
-    std::atomic<float>* pMidSide     = nullptr;
+    std::atomic<float>* pProcessingMode = nullptr;
 
-    std::unique_ptr<juce::dsp::FFT> fftMin;   // order 10
-    std::unique_ptr<juce::dsp::FFT> fftMax;   // order 11
-
+    // Engine state
     std::array<ChannelState, 2> mainChannels;
     std::array<ChannelState, 2> sideChannels;
+    BandPlan bandPlan;
 
-    // Pre-computed windows, one per supported FFT order
-    std::array<std::vector<float>, maxFftOrder + 1> windows;
-    std::array<float, maxFftOrder + 1> windowGains {};   // coherent gain (mean) of each window
+    // Analysis engine (shared; the transform itself is stateless after construction)
+    std::unique_ptr<juce::dsp::FFT> analysisFft;
+    std::vector<float> window;
+    float windowGain = 1.0f;
 
-    // Shared scratch (audio thread only)
-    std::vector<float> dbScratch;        // maxNumBins
-    std::vector<float> prefixScratch;    // maxNumBins + 1
-    std::vector<float> detectionMag;     // maxNumBins — combined detection source
-    std::vector<float> sharedReduction;  // maxNumBins — stereo-linked reduction
-    std::vector<float> displayIn;        // UiSnapshot::numDisplayBins
-    std::vector<float> displayOut;       // UiSnapshot::numDisplayBins
-    std::vector<float> displayRed;       // UiSnapshot::numDisplayBins
-    std::vector<float> displaySide;      // UiSnapshot::numDisplayBins
-    std::vector<int>   displayLookup;    // UiSnapshot::numDisplayBins + 1 — FFT bin edges
+    // Analysis scratch (audio thread only)
+    std::vector<float> dbScratch;          // analysisBins
+    std::vector<float> prefixScratch;      // analysisBins + 1
+    std::vector<float> combinedHold;       // analysisBins — linked detection source
+    std::vector<float> detectionReduction; // analysisBins — latest reduction (display source)
+    std::vector<float> displayIn;          // UiSnapshot::numDisplayBins
+    std::vector<float> displayOut;
+    std::vector<float> displayRed;
+    std::vector<float> displaySide;
 
     // Smoothed wet/dry mix (per-sample, message-thread parameter → audio thread)
     juce::SmoothedValue<float, juce::ValueSmoothingTypes::Linear> mixSmooth;
@@ -260,35 +364,47 @@ private:
     // Transport / state
     double currentSampleRate = 44100.0;
     int    maxSamplesPerBlock = 512;
-    int    samplesSinceHop = 0;
-    int    ringPos = 0;                 // next ring slot to write (also the frame end)
+    int    activePlanIndex = -1;
     int    numMainChannels = 0;
     int    numSideChannels = 0;         // sidechain channels analysed this block
+    int    samplesUntilHop = analysisHop;
     bool   prepared = false;
     bool   wasBypassed = false;
-    bool   bypassDeep = false;          // bypassed long enough that the engine is parked
-    int    bypassHoldSamples = 0;
-    int    silentSidechainHops = 0;
-    bool   sidechainInUse = false;      // this block: sidechain is the detection source
 
-    std::atomic<int>  activeFftOrder { maxFftOrder };
-    std::atomic<int>  activeFftSize { maxFftSize };
+    // Per-hop coefficients (recomputed every hop from the parameters / sample rate)
+    float holdCoeff    = 0.9f;
+    float attackCoeff  = 1.0f;
+    float releaseCoeff = 0.1f;
+
+    // Sidechain liveness (hops, not seconds)
+    int  sidechainSilentHops = 0;
+    bool sidechainLiveInternal = false;
+
     std::atomic<bool> uiActive { false };
     std::atomic<bool> sidechainLive { false };
-    int sidechainSilentHopCount = 0;
 
     // Metering
     std::atomic<float> grAverageDb { 0.0f };
     std::atomic<float> grPeakDb    { 0.0f };
+    std::atomic<float> outputLevelDb { -100.0f };
+    std::atomic<float> processingLoadPercent { 0.0f };
     float grAverageSmoothed = 0.0f;
     float grPeakSmoothed    = 0.0f;
-    int   snapshotThrottle   = 0;
 
-    // Lock-free double-buffered UI snapshot
+    // Snapshot publishing
+    int publishCountdown = 0;
     std::array<UiSnapshot, 2> snapshotSlots;
     std::atomic<int> snapshotWriteIndex { 0 };    // slot the audio thread will fill next
     std::atomic<int> snapshotReadyIndex { -1 };   // last published slot
     mutable std::atomic<int> snapshotReadIndex { -1 };   // slot the UI is currently copying
+
+    // Local frame cache for the editor so that several arrays can be read from one
+    // frame without copying it more than once per repaint.
+    mutable UiSnapshot uiCache;
+    mutable bool uiCacheValid = false;
+
+    // Program state
+    std::atomic<int> currentProgram { 0 };
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ZTameAudioProcessor)

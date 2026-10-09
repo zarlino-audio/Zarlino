@@ -8,14 +8,22 @@
 namespace
 {
     constexpr float kSilenceFloorDb = -140.0f;
-    constexpr float kBinGateDb      = -90.0f;    // bins quieter than this are never touched
+    constexpr float kBandGateDb     = -90.0f;    // bins quieter than this are never touched
     constexpr float kSkirtRatio     = 0.2599f;   // 2^(1/3) - 1 → one-third-octave band skirts
     constexpr float kListenMonitor  = 2.0f;      // +6 dB on the removed-material audition
     constexpr float kHoldSeconds    = 0.080f;    // detector per-bin peak hold
+    constexpr float kIdentitySnapDb = 0.0005f;   // cuts below this are exactly 0 → bit-transparency
+    constexpr float kProcessFloorDb = 0.2000f;   // cuts below this are inaudible → skip the filter
+    constexpr float kSilenceGateDb  = -90.0f;    // whole-block gate for the idle fast path
 
     inline float sanitise (float v) noexcept
     {
         return std::isfinite (v) ? v : 0.0f;
+    }
+
+    inline float probeDb (float g, float floor) noexcept
+    {
+        return juce::Decibels::gainToDecibels (g, floor);
     }
 
     inline float smoothStep (float t) noexcept
@@ -24,12 +32,35 @@ namespace
         return t * t * (3.0f - 2.0f * t);
     }
 
-    // One-pole coefficient for a time constant expressed in *frames* (hop periods).
+    /** One-pole coefficient for a time constant expressed in frames (hops). */
     inline float frameCoeff (float millis, float hopSeconds) noexcept
     {
-        const float t = juce::jmax (0.0005f, millis * 0.001f);
+        const float t = juce::jmax (5.0e-5f, millis * 0.001f);
         return 1.0f - std::exp (-hopSeconds / t);
     }
+
+    //==============================================================================
+    struct FactoryPreset
+    {
+        const char* name;
+        float sensitivity, rangeDb, selectivity, focusLow, focusHigh, attackMs, releaseMs;
+        int   planIndex;                          // 0 = Standard (32 bands), 1 = Precise (48)
+    };
+
+    const FactoryPreset kFactoryPrograms[] =
+    {
+        { "Init",         65.0f, 12.0f, 50.0f,    20.0f, 20000.0f,   8.0f, 180.0f, 0 },
+        { "Vocal Soothe", 70.0f, 10.0f, 62.0f,  1500.0f,  9000.0f,   6.0f, 160.0f, 1 },
+        { "Room Tamer",   75.0f, 14.0f, 40.0f,   150.0f,  6000.0f,  12.0f, 220.0f, 0 },
+        { "Drum Ring",    72.0f, 12.0f, 55.0f,   500.0f,  8000.0f,   4.0f, 120.0f, 0 },
+        { "Master Polish",55.0f,  6.0f, 45.0f,    20.0f, 20000.0f,  15.0f, 250.0f, 1 },
+        { "De-Harsh",     68.0f,  9.0f, 58.0f,  3000.0f, 16000.0f,   5.0f, 140.0f, 1 },
+        { "Extreme Ring", 85.0f, 20.0f, 70.0f,  2000.0f, 12000.0f,   2.0f,  80.0f, 1 },
+    };
+
+    static_assert ((sizeof (kFactoryPrograms) / sizeof (kFactoryPrograms[0]))
+                       == (size_t) ZTameAudioProcessor::numFactoryPrograms,
+                   "factory program table size mismatch");
 }
 
 //==============================================================================
@@ -40,44 +71,32 @@ ZTameAudioProcessor::ZTameAudioProcessor()
                         .withOutput ("Output",    juce::AudioChannelSet::stereo(), true)),
       parameters (*this, nullptr, "ZTameState", createParameterLayout())
 {
-    // FFT engines
-    fftMin = std::make_unique<juce::dsp::FFT> (minFftOrder);
-    fftMax = std::make_unique<juce::dsp::FFT> (maxFftOrder);
+    // Analysis-only FFT. The transform is stateless after construction; the
+    // frame buffers live in each ChannelState (audio-thread only).
+    analysisFft = std::make_unique<juce::dsp::FFT> (analysisOrder);
 
-    // sqrt(Hann) analysis + synthesis windows.
-    // Hann is periodic (denominator N, not N-1) so that
-    //     Hann[i] + Hann[i + N/2] == 1 exactly
-    // and, with sqrt windows on both sides,
-    //     w_a[i] * w_s[i] == Hann[i]
-    // Therefore the overlap-add reconstructs with unity gain and zero ripple,
-    // and no normalisation divisor is needed anywhere.
-    for (int order = minFftOrder; order <= maxFftOrder; ++order)
+    // sqrt(Hann) — the same analysis window family as v1.1, so the magnitude
+    // calibration (and therefore the detector thresholds) carries over.
+    window.resize ((size_t) analysisN);
+
+    double windowSum = 0.0;
+    for (int i = 0; i < analysisN; ++i)
     {
-        const int n = 1 << order;
-        auto& win = windows[(size_t) order];
-        win.resize ((size_t) n);
-
-        double sum = 0.0;
-        for (int i = 0; i < n; ++i)
-        {
-            const auto hann = 0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi
-                                                    * (double) i / (double) n);
-            win[(size_t) i] = (float) std::sqrt (juce::jmax (0.0, hann));
-            sum += win[(size_t) i];
-        }
-        windowGains[(size_t) order] = (float) (sum / (double) n);
+        const auto hann = 0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi
+                                                * (double) i / (double) analysisN);
+        window[(size_t) i] = (float) std::sqrt (juce::jmax (0.0, hann));
+        windowSum += window[(size_t) i];
     }
+    windowGain = (float) (windowSum / (double) analysisN);
 
-    // Scratch buffers (sized for the largest supported frame)
-    dbScratch.assign      (maxNumBins, 0.0f);
-    prefixScratch.assign  (maxNumBins + 1, 0.0f);
-    detectionMag.assign   (maxNumBins, 0.0f);
-    sharedReduction.assign(maxNumBins, 0.0f);
-    displayIn.assign      (UiSnapshot::numDisplayBins, -140.0f);
-    displayOut.assign     (UiSnapshot::numDisplayBins, -140.0f);
-    displayRed.assign     (UiSnapshot::numDisplayBins, 0.0f);
-    displaySide.assign    (UiSnapshot::numDisplayBins, -140.0f);
-    displayLookup.assign  (UiSnapshot::numDisplayBins + 1, 1);
+    dbScratch.assign          (analysisBins, 0.0f);
+    prefixScratch.assign      (analysisBins + 1, 0.0f);
+    combinedHold.assign       (analysisBins, 0.0f);
+    detectionReduction.assign (analysisBins, 0.0f);
+    displayIn.assign          (UiSnapshot::numDisplayBins, kSilenceFloorDb);
+    displayOut.assign         (UiSnapshot::numDisplayBins, kSilenceFloorDb);
+    displayRed.assign         (UiSnapshot::numDisplayBins, 0.0f);
+    displaySide.assign        (UiSnapshot::numDisplayBins, kSilenceFloorDb);
 
     // Cached parameter pointers — no string lookups anywhere near processBlock
     pSensitivity = parameters.getRawParameterValue (paramSensitivity);
@@ -93,15 +112,10 @@ ZTameAudioProcessor::ZTameAudioProcessor()
     pSidechain   = parameters.getRawParameterValue (paramSidechain);
     pStereoLink  = parameters.getRawParameterValue (paramStereoLink);
     pResolution  = parameters.getRawParameterValue (paramResolution);
-    pMidSide     = parameters.getRawParameterValue (paramMidSide);
-
-    startTimerHz (8);   // watches the resolution parameter (latency must be re-reported)
+    pProcessingMode = parameters.getRawParameterValue (paramProcessingMode);
 }
 
-ZTameAudioProcessor::~ZTameAudioProcessor()
-{
-    stopTimer();
-}
+ZTameAudioProcessor::~ZTameAudioProcessor() = default;
 
 //==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout
@@ -149,8 +163,8 @@ ZTameAudioProcessor::createParameterLayout()
         NormalisableRange<float> (10.0f, 1000.0f, 0.1f, 0.5f), 180.0f,
         AudioParameterFloatAttributes().withLabel ("ms")));
     shapeGroup->addChild (std::make_unique<AudioParameterChoice> (
-        paramResolution, "Resolution",
-        StringArray { "Fast (1024)", "Precise (2048)" }, 1));
+        paramResolution, "Bands",
+        StringArray { "Standard (32)", "Precise (48)" }, 0));
     layout.add (std::move (shapeGroup));
 
     auto outputGroup = std::make_unique<AudioProcessorParameterGroup> ("output", "Output", "|");
@@ -158,10 +172,9 @@ ZTameAudioProcessor::createParameterLayout()
         paramDryWet, "Mix",
         NormalisableRange<float> (0.0f, 100.0f, 0.1f, 0.5f), 100.0f,
         AudioParameterFloatAttributes().withLabel ("%")));
-    outputGroup->addChild (std::make_unique<AudioParameterBool> (
-        paramStereoLink, "Stereo Link", true));
-    outputGroup->addChild (std::make_unique<AudioParameterBool> (
-        paramMidSide, "Mid/Side", false));
+    outputGroup->addChild (std::make_unique<AudioParameterChoice> (
+        paramProcessingMode, "Processing Mode",
+        StringArray { "Stereo", "M/S Blend", "Mid Only", "Side Only" }, 0));
     outputGroup->addChild (std::make_unique<AudioParameterBool> (
         paramListenMode, "Delta (Listen)", false));
     outputGroup->addChild (std::make_unique<AudioParameterBool> (
@@ -169,6 +182,54 @@ ZTameAudioProcessor::createParameterLayout()
     layout.add (std::move (outputGroup));
 
     return layout;
+}
+
+//==============================================================================
+// Factory programs
+//==============================================================================
+int ZTameAudioProcessor::getNumPrograms()
+{
+    return numFactoryPrograms;
+}
+
+int ZTameAudioProcessor::getCurrentProgram()
+{
+    return currentProgram.load();
+}
+
+void ZTameAudioProcessor::setCurrentProgram (int index)
+{
+    if (index < 0 || index >= numFactoryPrograms)
+        return;
+
+    const auto& pr = kFactoryPrograms[index];
+
+    auto set = [this] (const char* id, float value)
+    {
+        if (auto* param = parameters.getParameter (id))
+            param->setValueNotifyingHost (param->convertTo0to1 (value));
+    };
+
+    set (paramSensitivity, pr.sensitivity);
+    set (paramRange,       pr.rangeDb);
+    set (paramSelectivity, pr.selectivity);
+    set (paramFocusLow,    pr.focusLow);
+    set (paramFocusHigh,   pr.focusHigh);
+    set (paramAttack,      pr.attackMs);
+    set (paramRelease,     pr.releaseMs);
+    set (paramResolution,  (float) pr.planIndex);
+
+    // Global output controls (mix / listen / bypass / sidechain arming) are not
+    // touched: a preset change must not silently re-route detection or mute the mix.
+    currentProgram.store (index);
+}
+
+const juce::String ZTameAudioProcessor::getProgramName (int index)
+{
+    if (index >= 0 && index < numFactoryPrograms)
+        return kFactoryPrograms[index].name;
+
+    return {};
 }
 
 //==============================================================================
@@ -188,7 +249,9 @@ ZTameAudioProcessor::Params ZTameAudioProcessor::readParams() const noexcept
     if (pBypass      != nullptr) p.bypassed    = pBypass->load() > 0.5f;
     if (pSidechain   != nullptr) p.sidechainOn = pSidechain->load() > 0.5f;
     if (pStereoLink  != nullptr) p.stereoLink  = pStereoLink->load() > 0.5f;
-    if (pMidSide     != nullptr) p.midSide     = pMidSide->load() > 0.5f;
+    if (pResolution  != nullptr) p.planIndex   = pResolution->load() >= 0.5f ? 1 : 0;
+    if (pProcessingMode != nullptr)
+        p.processingMode = juce::jlimit (0, 3, (int) std::lround (pProcessingMode->load()));
 
     p.focusLowHz  = juce::jlimit (20.0f, 20000.0f, p.focusLowHz);
     p.focusHighHz = juce::jlimit (20.0f, 20000.0f, p.focusHighHz);
@@ -199,43 +262,99 @@ ZTameAudioProcessor::Params ZTameAudioProcessor::readParams() const noexcept
 }
 
 //==============================================================================
-void ZTameAudioProcessor::initChannel (ChannelState& s, int /*fftOrder*/)
+void ZTameAudioProcessor::rebuildBandPlan (int planIndex) noexcept
 {
-    s.inRing.assign    (ringSize, 0.0f);
-    s.outAcc.assign    (ringSize, 0.0f);
-    s.dryRing.assign   (ringSize, 0.0f);
-    s.fftData.assign   ((size_t) 2 * maxFftSize, 0.0f);
-    s.magnitude.assign (maxNumBins, 0.0f);
-    s.holdMag.assign   (maxNumBins, 0.0f);
-    s.reductionDb.assign (maxNumBins, 0.0f);
-    s.targetGain.assign  (maxNumBins, 1.0f);
-    s.gainSmooth.assign  (maxNumBins, 1.0f);
+    auto& plan = bandPlan;
+    plan.numBands = (planIndex >= 1) ? maxBands : 32;
+
+    const int nb = plan.numBands;
+    const double fs = juce::jmax (1.0, currentSampleRate);
+    const double fMax = juce::jmin ((double) kMaxFreq, 0.45 * fs);
+    const double minF = (double) kMinFreq;
+    const double ratio = fMax / minF;
+
+    std::array<double, maxBands + 1> edges {};
+    edges[0] = minF;
+    for (int i = 1; i <= nb; ++i)
+        edges[(size_t) i] = minF * std::pow (ratio, (double) i / (double) nb);
+
+    for (int k = 0; k < nb; ++k)
+    {
+        const double c  = std::sqrt (edges[(size_t) k] * edges[(size_t) (k + 1)]);
+        const double w0 = juce::MathConstants<double>::twoPi * c / fs;
+
+        plan.centerHz[(size_t) k] = (float) c;
+        plan.cosW0[(size_t) k]    = (float) std::cos (w0);
+        plan.alpha[(size_t) k]    = (float) (std::sin (w0) / (2.0 * (double) kBellQ));
+    }
+
+    // FFT bin → band (bins outside 20 Hz..fMax are not corrected).
+    {
+        const double binHz = fs / (double) analysisN;
+        int band = 0;
+
+        for (int k = 0; k < analysisBins; ++k)
+        {
+            const double f = (double) k * binHz;
+
+            while (band < nb - 1 && f >= edges[(size_t) (band + 1)])
+                ++band;
+
+            plan.binToBand[(size_t) k] = (f >= minF && f <= fMax) ? band : -1;
+        }
+    }
+
+    // Display bin → FFT bin edges (20 Hz..20 kHz log axis, matching the editor).
+    {
+        const int D = UiSnapshot::numDisplayBins;
+
+        for (int d = 0; d <= D; ++d)
+        {
+            const float f = displayNormToFreq ((float) d / (float) D);
+            const int bin = (int) std::llround ((double) f * (double) analysisN / fs);
+            plan.displayLookup[(size_t) d] = juce::jlimit (1, analysisBins - 2, bin);
+        }
+
+        for (int d = 1; d <= D; ++d)
+            plan.displayLookup[(size_t) d] = juce::jmax (plan.displayLookup[(size_t) d],
+                                                         plan.displayLookup[(size_t) (d - 1)]);
+    }
+}
+
+//==============================================================================
+void ZTameAudioProcessor::resetChannel (ChannelState& s) noexcept
+{
+    for (int k = 0; k < maxBands; ++k)
+    {
+        s.bells[k].setIdentity();
+        s.bells[k].x1 = s.bells[k].x2 = s.bells[k].y1 = s.bells[k].y2 = 0.0f;
+        s.cutDb[k] = 0.0f;
+        s.appliedCutDb[k] = 0.0f;
+        s.seedPending[k] = false;
+        s.bandLevel[k] = 0.0f;
+    }
+
+    std::fill (std::begin (s.inRing), std::end (s.inRing), 0.0f);
+    std::fill (std::begin (s.fftData), std::end (s.fftData), 0.0f);
+    std::fill (std::begin (s.mag), std::end (s.mag), 0.0f);
+    std::fill (std::begin (s.holdMag), std::end (s.holdMag), 0.0f);
+    s.ringPos = 0;
+    s.anyCut = false;
     s.prepared = true;
 }
 
-void ZTameAudioProcessor::resetChannel (ChannelState& s) noexcept
+void ZTameAudioProcessor::resetAllChannels() noexcept
 {
-    // Only fills; never resizes — safe to call from the audio thread.
-    std::fill (s.inRing.begin(),    s.inRing.end(),    0.0f);
-    std::fill (s.outAcc.begin(),    s.outAcc.end(),    0.0f);
-    std::fill (s.dryRing.begin(),   s.dryRing.end(),   0.0f);
-    std::fill (s.fftData.begin(),   s.fftData.end(),   0.0f);
-    std::fill (s.magnitude.begin(), s.magnitude.end(), 0.0f);
-    std::fill (s.holdMag.begin(),   s.holdMag.end(),   0.0f);
-    std::fill (s.reductionDb.begin(), s.reductionDb.end(), 0.0f);
-    std::fill (s.targetGain.begin(),  s.targetGain.end(),  1.0f);
-    std::fill (s.gainSmooth.begin(),  s.gainSmooth.end(),  1.0f);
-}
+    for (auto& ch : mainChannels)
+        resetChannel (ch);
 
-void ZTameAudioProcessor::resetWetState (ChannelState& s) noexcept
-{
-    // Keep the delay lines (in/dry) running so the dry path stays continuous,
-    // but empty the overlap-add accumulator and re-open every notch to unity.
-    std::fill (s.outAcc.begin(),    s.outAcc.end(),    0.0f);
-    std::fill (s.holdMag.begin(),   s.holdMag.end(),   0.0f);
-    std::fill (s.reductionDb.begin(), s.reductionDb.end(), 0.0f);
-    std::fill (s.targetGain.begin(),  s.targetGain.end(),  1.0f);
-    std::fill (s.gainSmooth.begin(),  s.gainSmooth.end(),  1.0f);
+    for (auto& ch : sideChannels)
+        resetChannel (ch);
+
+    grAverageSmoothed = 0.0f;
+    grPeakSmoothed = 0.0f;
+    grAverageDb.store (0.0f);
+    grPeakDb.store (0.0f);
 }
 
 //==============================================================================
@@ -248,44 +367,41 @@ void ZTameAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     if (auto* bus = getBus (true, 0))
         numMainChannels = juce::jlimit (0, 2, bus->getNumberOfChannels());
 
-    const int wantedOrder = (pResolution != nullptr && pResolution->load() >= 1.0f)
-                                ? maxFftOrder : minFftOrder;
+    const int wantedPlan = (pResolution != nullptr && pResolution->load() >= 0.5f) ? 1 : 0;
+    rebuildBandPlan (wantedPlan);
+    activePlanIndex = wantedPlan;
 
-    for (auto& ch : mainChannels) initChannel (ch, wantedOrder);
-    for (auto& ch : sideChannels) initChannel (ch, wantedOrder);
+    resetAllChannels();
 
-    activeFftOrder.store (wantedOrder);
-    activeFftSize.store (1 << wantedOrder);
+    samplesUntilHop = analysisHop;
+
+    const float hopSeconds = (float) ((double) analysisHop / currentSampleRate);
+    holdCoeff    = (float) std::exp (-(double) hopSeconds / (double) kHoldSeconds);
+    attackCoeff  = frameCoeff (readParams().attackMs,  hopSeconds);
+    releaseCoeff = frameCoeff (readParams().releaseMs, hopSeconds);
+
+    numSideChannels = 0;
+    sidechainSilentHops = 0;
+    sidechainLiveInternal = false;
+    sidechainLive.store (false);
 
     for (auto& slot : snapshotSlots)
         slot = UiSnapshot {};
+
     snapshotWriteIndex.store (0);
     snapshotReadyIndex.store (-1);
     snapshotReadIndex.store (-1);
-    snapshotThrottle = 0;
+    publishCountdown = juce::jmax (1, (int) std::lround (currentSampleRate * 0.023));
 
-    ringPos = 0;
-    samplesSinceHop = 0;
-    bypassDeep = false;
-    bypassHoldSamples = 0;
-    wasBypassed = false;
-    silentSidechainHops = 0;
-    sidechainInUse = false;
-    numSideChannels = 0;
-    sidechainLive.store (false);
-
-    grAverageSmoothed = 0.0f;
-    grPeakSmoothed = 0.0f;
-    grAverageDb.store (0.0f);
-    grPeakDb.store (0.0f);
-
-    rebuildDisplayLookup (1 << wantedOrder);
+    outputLevelDb.store (-100.0f);
+    processingLoadPercent.store (0.0f);
 
     const auto p = readParams();
     mixSmooth.reset (currentSampleRate, 0.02);
     mixSmooth.setCurrentAndTargetValue (p.mix);
 
-    setLatencySamples (1 << wantedOrder);
+    // The v1.2 engine is causal end-to-end: no delay is introduced on any path.
+    setLatencySamples (0);
     prepared = true;
 }
 
@@ -331,11 +447,12 @@ void ZTameAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::
 
 void ZTameAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
 {
-    // The plugin reports latency N, so it must keep delaying the signal even when
-    // the host bypasses it — otherwise delay compensation goes out of sync.
+    // Zero latency: host bypass is a plain passthrough (there is no delay to keep
+    // delay compensation coherent, so the buffer must stay untouched).
     processBlockInternal (buffer, true);
 }
 
+//==============================================================================
 void ZTameAudioProcessor::processBlockInternal (juce::AudioBuffer<float>& buffer, bool hostBypass)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -344,26 +461,14 @@ void ZTameAudioProcessor::processBlockInternal (juce::AudioBuffer<float>& buffer
     if (numSamples <= 0 || ! prepared || numMainChannels <= 0)
         return;
 
-    // --- resolution change (parameter) ---
-    // The engine switches immediately on the audio thread; the message-thread timer
-    // re-reports the new latency to the host. Buffers are pre-allocated for the
-    // largest frame, so this path performs no allocation.
-    const int wantedOrder = (pResolution != nullptr && pResolution->load() >= 1.0f)
-                                ? maxFftOrder : minFftOrder;
-
-    if (wantedOrder != activeFftOrder.load())
+    // --- band plan follows the resolution parameter (no latency to re-report) ---
+    const int wantedPlan = (pResolution != nullptr && pResolution->load() >= 0.5f) ? 1 : 0;
+    if (wantedPlan != activePlanIndex)
     {
-        activeFftOrder.store (wantedOrder);
-        activeFftSize.store (1 << wantedOrder);
-
-        for (auto& ch : mainChannels) resetChannel (ch);
-        for (auto& ch : sideChannels) resetChannel (ch);
-
-        rebuildDisplayLookup (1 << wantedOrder);
-        ringPos = 0;
-        samplesSinceHop = 0;
-        bypassDeep = false;
-        bypassHoldSamples = 0;
+        rebuildBandPlan (wantedPlan);
+        activePlanIndex = wantedPlan;
+        resetAllChannels();
+        samplesUntilHop = analysisHop;
     }
 
     auto mainInBuf  = getBusBuffer (buffer, true, 0);
@@ -376,75 +481,171 @@ void ZTameAudioProcessor::processBlockInternal (juce::AudioBuffer<float>& buffer
         return;
 
     const Params p = readParams();
-    const bool bypassed = hostBypass || p.bypassed;
+    const int nb = bandPlan.numBands;
 
-    // --- sidechain bus ---
+    // --- sidechain bus (detection source only) ---
     int numSc = 0;
     juce::AudioBuffer<float> scBuf;
-    const bool scBusAvailable = getBusCount (true) > 1;
-
-    if (scBusAvailable && p.sidechainOn && getBus (true, 1) != nullptr
-        && getBus (true, 1)->isEnabled())
+    const bool scArmed = (getBusCount (true) > 1)
+                          && p.sidechainOn
+                          && getBus (true, 1) != nullptr
+                          && getBus (true, 1)->isEnabled();
+    if (scArmed)
     {
         scBuf = getBusBuffer (buffer, true, 1);
         numSc = juce::jlimit (0, 2, scBuf.getNumChannels());
     }
     numSideChannels = numSc;
-    sidechainInUse = (numSc > 0) && sidechainLive.load();
 
-    // --- bypass handling -----------------------------------------------------
-    // Short bypass: keep the engine running so returning from bypass is seamless.
-    // Long bypass: park the engine (saves CPU) and re-open all notches on resume,
-    // so the hand-off back to the wet path is a transparent crossfade.
+    // --- bypass --------------------------------------------------------------
+    // Zero-latency engine → bypass is a sample-exact passthrough and the engine
+    // is parked entirely; it re-opens (with fresh state) on the falling edge.
+    const bool bypassed = hostBypass || p.bypassed;
+
     if (bypassed)
     {
-        bypassHoldSamples = juce::jmin (bypassHoldSamples + numSamples,
-                                        (int) juce::jmax (1.0, currentSampleRate) * 4);
-        if (! bypassDeep && bypassHoldSamples > (int) juce::jmax (1.0, currentSampleRate))
-            bypassDeep = true;
+        wasBypassed = true;
+        sidechainSilentHops = 0;
+        sidechainLiveInternal = false;
+        sidechainLive.store (false);
+        mixSmooth.skip (numSamples);
+        return;
     }
-    else
+
+    if (wasBypassed)
     {
-        if (bypassDeep)
+        resetAllChannels();
+        samplesUntilHop = analysisHop;
+        wasBypassed = false;
+    }
+
+    // --- processing mode -----------------------------------------------------
+    const bool useMidSide  = (p.processingMode != modeStereo) && numCh > 1;
+    const bool processMid  = (p.processingMode != modeSideOnly);
+    const bool processSide = (p.processingMode != modeMidOnly);
+
+    bool mainProcessed[2] = { true, numCh > 1 };
+    if (useMidSide)
+    {
+        mainProcessed[0] = processMid;
+        mainProcessed[1] = processSide;
+    }
+
+    bool scProcessed[2] = { true, true };
+    if (useMidSide)
+    {
+        scProcessed[0] = processMid;
+        scProcessed[1] = processSide;
+    }
+
+    mixSmooth.setTargetValue (p.mix);
+
+    const double blockSeconds = (double) numSamples / juce::jmax (1.0, currentSampleRate);
+
+    // RAII so that every early return out of this function is still accounted for.
+    struct LoadMeter
+    {
+        ZTameAudioProcessor& owner;
+        juce::int64 startTicks;
+        double budget;
+
+        ~LoadMeter()
         {
-            for (auto& ch : mainChannels) resetWetState (ch);
-            for (auto& ch : sideChannels) resetWetState (ch);
+            const auto elapsed = juce::Time::highResolutionTicksToSeconds (
+                                     juce::Time::getHighResolutionTicks() - startTicks);
+            const auto percent = budget > 0.0 ? (float) (100.0 * elapsed / budget) : 0.0f;
+            const auto smoothed = juce::jmax (percent, owner.processingLoadPercent.load() * 0.85f);
+            owner.processingLoadPercent.store (juce::jlimit (0.0f, 400.0f, smoothed));
+        }
+    } loadMeter { *this, juce::Time::getHighResolutionTicks(), blockSeconds };
+
+    // --- silence fast path ----------------------------------------------------
+    // The correction only ever subtracts energy, so with a silent input the output
+    // cannot change (above the -90 dBFS gate). Release the engine at hop rate,
+    // decay the states to match the unprocessed silence, and leave the buffer as-is.
+    const float inputPeak = mainInBuf.getMagnitude (0, numSamples);
+
+    if (inputPeak <= juce::Decibels::decibelsToGain (kSilenceGateDb))
+    {
+        // The engine cannot change anything audible, but the buffer must still leave
+        // as valid audio: sanitise non-finite samples even on this fast path (JUCE's
+        // magnitude scan ignores NaN, so a NaN-only block reads as "silent").
+        for (int ch = 0; ch < numCh; ++ch)
+        {
+            auto* d = mainOutBuf.getWritePointer (ch);
+
+            for (int n = 0; n < numSamples; ++n)
+                if (! std::isfinite (d[n]))
+                    d[n] = 0.0f;
         }
 
-        bypassDeep = false;
-        bypassHoldSamples = 0;
+        std::fill (combinedHold.begin(), combinedHold.end(), 0.0f);
+
+        for (auto* channels : { &mainChannels, &sideChannels })
+            for (auto& ch : *channels)
+            {
+                std::fill (std::begin (ch.holdMag), std::end (ch.holdMag), 0.0f);
+                std::fill (std::begin (ch.mag), std::end (ch.mag), 0.0f);
+                std::fill (std::begin (ch.bandLevel), std::end (ch.bandLevel), 0.0f);
+
+                // The correction cascade would have decayed its own state while the
+                // input was silent; approximate that so audio can return without a
+                // stale-state click.
+                for (int k = 0; k < nb; ++k)
+                {
+                    if (ch.appliedCutDb[k] <= 0.0f)
+                        continue;
+
+                    auto& bell = ch.bells[k];
+                    const float disc = bell.a1 * bell.a1 - 4.0f * bell.a2;
+                    float radius;
+
+                    if (disc >= 0.0f)
+                    {
+                        const float r = std::sqrt (disc);
+                        radius = juce::jmax (std::abs ((-bell.a1 + r) * 0.5f),
+                                             std::abs ((-bell.a1 - r) * 0.5f));
+                    }
+                    else
+                    {
+                        radius = std::sqrt (juce::jmax (0.0f, bell.a2));
+                    }
+
+                    const float decay = (float) std::pow (juce::jlimit (0.0f, 1.0f, radius),
+                                                          (double) numSamples);
+                    bell.x1 = 0.0f;
+                    bell.x2 = 0.0f;
+                    bell.y1 *= decay;
+                    bell.y2 *= decay;
+                }
+            }
+
+        for (int n = 0; n < numSamples; ++n)
+        {
+            if (--samplesUntilHop <= 0)
+            {
+                samplesUntilHop = analysisHop;
+                runHop (p, mainProcessed, scProcessed, scArmed);
+            }
+
+            if (uiActive.load() && --publishCountdown <= 0)
+            {
+                publishCountdown = juce::jmax (1, (int) std::lround (currentSampleRate * 0.023));
+                publishSnapshot (p, false);
+            }
+        }
+
+        mixSmooth.skip (numSamples);
+        outputLevelDb.store (-100.0f);
+        return;
     }
-    wasBypassed = bypassed;
 
-    const int N    = activeFftSize.load();
-    const int hop  = N / 2;
-    const bool listening = p.listening && ! bypassed;
+    // --- sample loop ----------------------------------------------------------
+    float blockPeak = 0.0f;
+    const bool listening = p.listening;
 
-    mixSmooth.setTargetValue (bypassed ? 1.0f : p.mix);
-
-    // --- sample loop ---------------------------------------------------------
     for (int n = 0; n < numSamples; ++n)
     {
-        // A frame is processed *before* the incoming sample is consumed: the frame
-        // covers input samples [pos-N, pos), i.e. everything up to the sample we
-        // are about to store. The output sample emitted this step is exactly
-        // N samples old, which is the reported latency.
-        if (samplesSinceHop >= hop)
-        {
-            samplesSinceHop = 0;
-
-            if (! bypassDeep)
-                runHop();
-        }
-
-        const float mix = mixSmooth.getNextValue();
-        const int w = ringPos;
-        const int rIdx = (w - N + ringSize) % ringSize;
-
-        // Mid/Side mode processes the M and S signals as the two engine channels.
-        // Encode: M = (L+R)/2, S = (L-R)/2.  Decode: L = M+S, R = M-S (unity round trip).
-        const bool useMidSide = p.midSide && numCh > 1;
-
         float working[2] = { 0.0f, 0.0f };
 
         for (int ch = 0; ch < numCh; ++ch)
@@ -458,40 +659,114 @@ void ZTameAudioProcessor::processBlockInternal (juce::AudioBuffer<float>& buffer
             working[1] = s;
         }
 
+        // Input history for the analysis window (never touched by the audio path
+        // itself — the FFT reads only past samples).
+        for (int ch = 0; ch < numCh; ++ch)
+            if (mainProcessed[ch])
+            {
+                auto& state = mainChannels[(size_t) ch];
+                state.inRing[(size_t) state.ringPos] = working[ch];
+                state.ringPos = (state.ringPos + 1) % analysisRing;
+            }
+
+        if (scArmed && numSc > 0)
+        {
+            float sc0 = sanitise (scBuf.getSample (0, n));
+            float sc1 = (numSc > 1) ? sanitise (scBuf.getSample (1, n)) : sc0;
+
+            if (useMidSide && numSc > 1)
+            {
+                const float m = 0.5f * (sc0 + sc1);
+                const float s = 0.5f * (sc0 - sc1);
+                sc0 = scProcessed[0] ? m : 0.0f;
+                sc1 = scProcessed[1] ? s : 0.0f;
+            }
+
+            if (scProcessed[0])
+            {
+                auto& state = sideChannels[0];
+                state.inRing[(size_t) state.ringPos] = sc0;
+                state.ringPos = (state.ringPos + 1) % analysisRing;
+            }
+
+            if (numSc > 1 && scProcessed[1])
+            {
+                auto& state = sideChannels[1];
+                state.inRing[(size_t) state.ringPos] = sc1;
+                state.ringPos = (state.ringPos + 1) % analysisRing;
+            }
+        }
+
+        // --- hop: analysis + detection + gain trajectory -----------------------
+        if (--samplesUntilHop <= 0)
+        {
+            samplesUntilHop = analysisHop;
+
+            for (int ch = 0; ch < numCh; ++ch)
+                if (mainProcessed[ch])
+                    analyseChannel (mainChannels[(size_t) ch]);
+
+            if (scArmed && numSc > 0)
+            {
+                if (scProcessed[0]) analyseChannel (sideChannels[0]);
+                if (numSc > 1 && scProcessed[1]) analyseChannel (sideChannels[1]);
+            }
+
+            runHop (p, mainProcessed, scProcessed, scArmed);
+        }
+
+        const float mix = mixSmooth.getNextValue();
+
+        // Correction: both channels run their cascades in the same band loop so the
+        // two independent recurrences can be scheduled in parallel (ILP).
+        const bool active0 = numCh > 0 && mainProcessed[0] && mainChannels[0].anyCut;
+        const bool active1 = numCh > 1 && mainProcessed[1] && mainChannels[1].anyCut;
+
+        float wet0 = working[0];
+        float wet1 = (numCh > 1) ? working[1] : 0.0f;
+
+        if (active0 || active1)
+        {
+            auto& s0 = mainChannels[0];
+            auto& s1 = mainChannels[1];
+
+            for (int k = 0; k < nb; ++k)
+            {
+                if (active0 && s0.appliedCutDb[k] > 0.0f)
+                {
+                    if (s0.seedPending[k])
+                    {
+                        s0.bells[k].seed (wet0);   // switch-on without a click
+                        s0.seedPending[k] = false;
+                    }
+
+                    wet0 = s0.bells[k].process (wet0);
+                }
+
+                if (active1 && s1.appliedCutDb[k] > 0.0f)
+                {
+                    if (s1.seedPending[k])
+                    {
+                        s1.bells[k].seed (wet1);
+                        s1.seedPending[k] = false;
+                    }
+
+                    wet1 = s1.bells[k].process (wet1);
+                }
+            }
+        }
+
         for (int ch = 0; ch < numCh; ++ch)
         {
-            auto& state = mainChannels[(size_t) ch];
-            const float x = working[ch];
+            const float wet = (ch == 0) ? wet0 : wet1;
 
-            state.inRing[(size_t) w] = x;
-
-            const float wet = state.outAcc[(size_t) rIdx];
-            state.outAcc[(size_t) rIdx] = 0.0f;
-
-            // Dry delay line: write the current sample at the *current* slot and read
-            // the slot from N samples ago, so the dry path is latency-aligned with the wet.
-            const float dry = state.dryRing[(size_t) rIdx];
-            state.dryRing[(size_t) w] = x;
-
-            float y;
-
-            if (bypassed)
-            {
-                y = dry;
-            }
-            else if (listening)
-            {
-                // Removed material only. delta = dry - wet is exact: resynthesis is
-                // linear, and resynthesis of the full spectrum is the dry signal.
-                const float delta = (dry - wet) * kListenMonitor;
-                y = dry + (delta - dry) * mix;
-            }
-            else
-            {
-                y = dry + (wet - dry) * mix;
-            }
-
+            const float y = listening
+                                // Removed material only, +6 dB monitor. delta = dry - wet
+                                // is exact: the correction is a subtractive peaking cascade.
+                                ? working[ch] + ((working[ch] - wet) * kListenMonitor - working[ch]) * mix
+                                : working[ch] + (wet - working[ch]) * mix;
             working[ch] = y;
+            blockPeak = juce::jmax (blockPeak, std::abs (y));
         }
 
         if (useMidSide)
@@ -504,232 +779,108 @@ void ZTameAudioProcessor::processBlockInternal (juce::AudioBuffer<float>& buffer
 
         for (int ch = 0; ch < numCh; ++ch)
             mainOutBuf.setSample (ch, n, working[ch]);
+    }
 
-        if (numSc > 0)
+    // Output level meter: instant attack, 20 dB/s release.
+    {
+        const auto peakDb = juce::Decibels::gainToDecibels (blockPeak, -100.0f);
+        const auto decayed = outputLevelDb.load() - (float) (20.0 * blockSeconds);
+        outputLevelDb.store (juce::jmax (peakDb, decayed));
+    }
+
+    // Telemetry (UI only; skipped entirely when no editor is attached).
+    // The countdown is in SAMPLES, so it is decremented by the block length —
+    // decrementing once per block would delay the first frame by ~23 seconds.
+    if (uiActive.load())
+    {
+        publishCountdown -= numSamples;
+
+        if (publishCountdown <= 0)
         {
-            float sc0 = sanitise (scBuf.getSample (0, n));
-            float sc1 = (numSc > 1) ? sanitise (scBuf.getSample (1, n)) : sc0;
-
-            if (useMidSide && numSc > 1)
-            {
-                const float m = 0.5f * (sc0 + sc1);
-                const float s = 0.5f * (sc0 - sc1);
-                sc0 = m;
-                sc1 = s;
-            }
-
-            sideChannels[0].inRing[(size_t) w] = sc0;
-            if (numSc > 1)
-                sideChannels[1].inRing[(size_t) w] = sc1;
+            publishCountdown = juce::jmax (1, (int) std::lround (currentSampleRate * 0.023));
+            publishSnapshot (p, sidechainLive.load());
         }
-
-        ringPos = (ringPos + 1) % ringSize;
-        ++samplesSinceHop;
     }
 }
 
 //==============================================================================
-void ZTameAudioProcessor::runHop()
+void ZTameAudioProcessor::analyseChannel (ChannelState& s) noexcept
 {
-    if (! prepared)
-        return;
-
-    const int order   = activeFftOrder.load();
-    const int N       = 1 << order;
-    const int hop     = N / 2;
-    const int numBins = N / 2 + 1;
-    const Params p    = readParams();
-
-    const int numMain = juce::jmin (numMainChannels, 2);
-
-    // 1) analysis ------------------------------------------------------------
-    for (int ch = 0; ch < numMain; ++ch)
-        analyseChannel (mainChannels[(size_t) ch], order);
-
-    for (int ch = 0; ch < numSideChannels; ++ch)
-        analyseChannel (sideChannels[(size_t) ch], order);
-
-    // Sidechain liveness: a connected-but-dead sidechain must not silently mute
-    // the effect, so detection falls back to the main input until it carries signal.
-    if (numSideChannels > 0)
-    {
-        float scPeak = 0.0f;
-        for (int ch = 0; ch < numSideChannels; ++ch)
-        {
-            const auto& mag = sideChannels[(size_t) ch].magnitude;
-            for (int k = 1; k < numBins - 1; ++k)
-                scPeak = juce::jmax (scPeak, mag[(size_t) k]);
-        }
-
-        const bool scHasSignal = scPeak > juce::Decibels::decibelsToGain (-80.0f);
-
-        if (scHasSignal)
-            silentSidechainHops = 0;
-        else
-            silentSidechainHops = juce::jmin (silentSidechainHops + 1, 10000);
-
-        sidechainLive.store (silentSidechainHops < 24);   // ≈ 0.5 s at 44.1 kHz
-    }
-    else
-    {
-        sidechainLive.store (false);
-    }
-
-    // 2) detection source ----------------------------------------------------
-    const bool fromSidechain = (numSideChannels > 0) && sidechainLive.load();
-    const bool linked = p.stereoLink || numMain <= 1;
-
-    if (linked)
-    {
-        const int numSrc = fromSidechain ? numSideChannels : numMain;
-
-        if (numSrc > 0)
-        {
-            const auto& first = fromSidechain ? sideChannels[0] : mainChannels[0];
-            std::copy_n (first.holdMag.data(), (size_t) numBins, detectionMag.data());
-
-            for (int ch = 1; ch < numSrc; ++ch)
-            {
-                const auto& src = fromSidechain ? sideChannels[(size_t) ch]
-                                                : mainChannels[(size_t) ch];
-                for (int k = 0; k < numBins; ++k)
-                    detectionMag[(size_t) k] = juce::jmax (detectionMag[(size_t) k],
-                                                           src.holdMag[(size_t) k]);
-            }
-
-            computeReductionSpectrum (detectionMag.data(), sharedReduction, p);
-
-            for (int ch = 0; ch < numMain; ++ch)
-                std::copy_n (sharedReduction.data(), (size_t) numBins,
-                             mainChannels[(size_t) ch].reductionDb.data());
-        }
-    }
-    else
-    {
-        for (int ch = 0; ch < numMain; ++ch)
-        {
-            const auto& src = (fromSidechain && ch < numSideChannels)
-                                  ? sideChannels[(size_t) ch]
-                                  : mainChannels[(size_t) ch];
-
-            computeReductionSpectrum (src.holdMag.data(),
-                                      mainChannels[(size_t) ch].reductionDb, p);
-        }
-    }
-
-    // 3) resynthesis ---------------------------------------------------------
-    const float hopSeconds  = (float) (hop / currentSampleRate);
-    const float attackCoeff  = frameCoeff (p.attackMs,  hopSeconds);
-    const float releaseCoeff = frameCoeff (p.releaseMs, hopSeconds);
-
-    float avgAcc = 0.0f, peakAcc = 0.0f;
-
-    for (int ch = 0; ch < numMain; ++ch)
-    {
-        float avg = 0.0f, peak = 0.0f;
-        synthesiseChannel (mainChannels[(size_t) ch], order, p,
-                           attackCoeff, releaseCoeff, avg, peak);
-        avgAcc  = juce::jmax (avgAcc, avg);
-        peakAcc = juce::jmax (peakAcc, peak);
-    }
-
-    // 4) metering ------------------------------------------------------------
-    grAverageSmoothed += (avgAcc - grAverageSmoothed) * 0.25f;
-    grPeakSmoothed = juce::jmax (peakAcc, grPeakSmoothed * 0.94f);
-    grAverageDb.store (grAverageSmoothed);
-    grPeakDb.store (grPeakSmoothed);
-
-    // 5) telemetry (UI only; skipped entirely when no editor is attached) ----
-    if (uiActive.load() && ++snapshotThrottle >= 2)
-    {
-        snapshotThrottle = 0;
-        publishSnapshot (p, sidechainLive.load());
-    }
-}
-
-//==============================================================================
-void ZTameAudioProcessor::analyseChannel (ChannelState& s, int order) noexcept
-{
-    const int N = 1 << order;
-    const int numBins = N / 2 + 1;
-
-    auto* fft = (order == maxFftOrder) ? fftMax.get() : fftMin.get();
+    auto* fft = analysisFft.get();
     if (fft == nullptr)
         return;
 
-    const auto& win = windows[(size_t) order];
-    float* dst = s.fftData.data();
+    float* dst = s.fftData;
 
     // Windowed frame: the newest N samples, ending at the current write position.
-    int src = (ringPos - N + ringSize) % ringSize;
-    for (int i = 0; i < N; ++i)
+    int src = (s.ringPos - analysisN + analysisRing) % analysisRing;
+    for (int i = 0; i < analysisN; ++i)
     {
-        dst[i] = s.inRing[(size_t) src] * win[(size_t) i];
-        if (++src >= ringSize)
+        dst[i] = s.inRing[(size_t) src] * window[(size_t) i];
+        if (++src >= analysisRing)
             src = 0;
     }
 
     // JUCE's real-only transform needs 2N floats; the second half is workspace.
-    std::fill (dst + N, dst + 2 * maxFftSize, 0.0f);
+    std::fill (dst + analysisN, dst + 2 * analysisN, 0.0f);
 
     fft->performRealOnlyForwardTransform (dst, true);
 
-    // Magnitude in dBFS-referenced linear units (a full-scale sine reads ~0 dB).
-    const float scale = 2.0f / ((float) N * juce::jmax (1.0e-6f, windowGains[(size_t) order]));
-    const float hopSeconds = (float) (N / 2) / (float) juce::jmax (1.0, currentSampleRate);
-    const float holdCoeff = std::exp (-hopSeconds / kHoldSeconds);
+    const float scale = 2.0f / ((float) analysisN * juce::jmax (1.0e-6f, windowGain));
 
-    float* mag  = s.magnitude.data();
-    float* hold = s.holdMag.data();
+    // Fresh per-band levels for the metering weights.
+    for (int k = 0; k < maxBands; ++k)
+        s.bandLevel[k] = 0.0f;
 
-    for (int k = 0; k < numBins; ++k)
+    for (int k = 0; k < analysisBins; ++k)
     {
         const float re = dst[2 * k];
         const float im = dst[2 * k + 1];
         const float m  = std::sqrt (re * re + im * im) * scale;
 
-        mag[(size_t) k] = m;
-        hold[(size_t) k] = juce::jmax (m, hold[(size_t) k] * holdCoeff);
+        s.mag[(size_t) k] = m;
+        s.holdMag[(size_t) k] = juce::jmax (m, s.holdMag[(size_t) k] * holdCoeff);
+
+        const int band = bandPlan.binToBand[(size_t) k];
+        if (band >= 0)
+            s.bandLevel[band] = juce::jmax (s.bandLevel[band], m);
     }
 }
 
 //==============================================================================
-void ZTameAudioProcessor::computeReductionSpectrum (const float* mag,
-                                                    std::vector<float>& reductionOut,
+void ZTameAudioProcessor::computeReductionSpectrum (const float* holdMag,
+                                                    std::vector<float>& out,
                                                     const Params& p) noexcept
 {
-    const int order   = activeFftOrder.load();
-    const int N       = 1 << order;
-    const int numBins = N / 2 + 1;
+    const int numBins = analysisBins;
 
     const float thresholdDb = detectorThresholdDb (p);
     const float rangeDb     = juce::jmax (0.0f, p.rangeDb);
-    const float binHz       = (float) (currentSampleRate / (double) N);
+    const float binHz       = (float) (currentSampleRate / (double) analysisN);
 
     // dB domain + prefix sums for O(1) local neighbourhood averages
-    dbScratch[0] = juce::Decibels::gainToDecibels (mag[0], kSilenceFloorDb);
-    for (int k = 1; k < numBins; ++k)
-        dbScratch[(size_t) k] = juce::Decibels::gainToDecibels (mag[(size_t) k], kSilenceFloorDb);
+    for (int k = 0; k < numBins; ++k)
+        dbScratch[(size_t) k] = probeDb (holdMag[k], kSilenceFloorDb);
 
     prefixScratch[0] = 0.0f;
     for (int k = 0; k < numBins; ++k)
         prefixScratch[(size_t) (k + 1)] = prefixScratch[(size_t) k] + dbScratch[(size_t) k];
 
-    reductionOut[0] = 0.0f;
-    reductionOut[(size_t) (numBins - 1)] = 0.0f;
+    out[0] = 0.0f;
+    out[(size_t) (numBins - 1)] = 0.0f;
 
     for (int k = 1; k < numBins - 1; ++k)
     {
         const float binLevelDb = dbScratch[(size_t) k];
 
-        if (binLevelDb <= kBinGateDb)
+        if (binLevelDb <= kBandGateDb)
         {
-            reductionOut[(size_t) k] = 0.0f;
+            out[(size_t) k] = 0.0f;
             continue;
         }
 
         // Frequency-adaptive neighbourhood, skipping the bin's own skirt.
-        const int r = neighbourhoodRadius (k, currentSampleRate, N);
+        const int r = neighbourhoodRadius (k, currentSampleRate, analysisN);
 
         const int loStart = juce::jmax (1, k - r);
         const int loEnd   = k - 2;
@@ -760,93 +911,207 @@ void ZTameAudioProcessor::computeReductionSpectrum (const float* mag,
         // Focus band: suppression is only allowed inside the band (soft skirts).
         reduceDb *= bandProfile ((float) k * binHz, p.focusLowHz, p.focusHighHz);
 
-        reductionOut[(size_t) k] = reduceDb;
+        out[(size_t) k] = reduceDb;
     }
 
     // Light smoothing along frequency: avoids isolated single-bin notches
     // (metallic chirp) while leaving a resonance's own bins fully suppressed.
-    std::copy (reductionOut.begin(), reductionOut.begin() + numBins, dbScratch.begin());
+    std::copy (out.begin(), out.begin() + numBins, dbScratch.begin());
     for (int k = 2; k < numBins - 2; ++k)
     {
-        reductionOut[(size_t) k] = 0.25f * dbScratch[(size_t) (k - 1)]
-                                 + 0.50f * dbScratch[(size_t) k]
-                                 + 0.25f * dbScratch[(size_t) (k + 1)];
+        out[(size_t) k] = 0.25f * dbScratch[(size_t) (k - 1)]
+                        + 0.50f * dbScratch[(size_t) k]
+                        + 0.25f * dbScratch[(size_t) (k + 1)];
     }
 }
 
 //==============================================================================
-void ZTameAudioProcessor::synthesiseChannel (ChannelState& s, int order, const Params& p,
-                                             float attackCoeff, float releaseCoeff,
-                                             float& avgReductionDb,
-                                             float& peakReductionDb) noexcept
+void ZTameAudioProcessor::runHop (const Params& p,
+                                  const bool* channelProcessed,
+                                  const bool* scProcessed,
+                                  bool scArmed) noexcept
 {
-    juce::ignoreUnused (p);
+    const int nb = bandPlan.numBands;
+    const float hopSeconds = (float) ((double) analysisHop / juce::jmax (1.0, currentSampleRate));
 
-    const int N = 1 << order;
-    const int numBins = N / 2 + 1;
+    attackCoeff  = frameCoeff (p.attackMs,  hopSeconds);
+    releaseCoeff = frameCoeff (p.releaseMs, hopSeconds);
+    holdCoeff    = (float) std::exp (-(double) hopSeconds / (double) kHoldSeconds);
 
-    auto* fft = (order == maxFftOrder) ? fftMax.get() : fftMin.get();
-    if (fft == nullptr)
-        return;
-
-    const auto& win = windows[(size_t) order];
-    float* dst = s.fftData.data();
-
-    const float* reduction = s.reductionDb.data();
-    float* gainSmooth = s.gainSmooth.data();
-    const float* mag = s.magnitude.data();
-
-    double weightedSum = 0.0;
-    double weightSum = 0.0;
-    float peakDb = 0.0f;
-
-    for (int k = 0; k < numBins; ++k)
+    // --- sidechain liveness ---------------------------------------------------
+    if (scArmed)
     {
-        const float targetDb = reduction[(size_t) k];
-        const float targetGain = (targetDb > 0.0005f)
-                                     ? juce::Decibels::decibelsToGain (-targetDb)
-                                     : 1.0f;
+        float scPeak = 0.0f;
 
-        float g = gainSmooth[(size_t) k];
+        for (int i = 0; i < 2; ++i)
+            if (scProcessed[i])
+                for (int k = 0; k < analysisBins; ++k)
+                    scPeak = juce::jmax (scPeak, sideChannels[(size_t) i].mag[(size_t) k]);
 
-        const float coeff = (targetGain < g) ? attackCoeff : releaseCoeff;
-        g += (targetGain - g) * coeff;
+        const bool scHasSignal = scPeak > juce::Decibels::decibelsToGain (-80.0f);
 
-        if (! std::isfinite (g))
-            g = 1.0f;
+        if (scHasSignal)
+            sidechainSilentHops = 0;
+        else
+            sidechainSilentHops = juce::jmin (sidechainSilentHops + 1, 1000000);
 
-        g = juce::jlimit (0.0f, 1.0f, g);
-        gainSmooth[(size_t) k] = g;
+        sidechainLiveInternal = sidechainSilentHops < 24;   // ≈ 0.25 s at 44.1 kHz
+    }
+    else
+    {
+        sidechainSilentHops = 0;
+        sidechainLiveInternal = false;
+    }
 
-        if (g < 0.99995f)
+    sidechainLive.store (sidechainLiveInternal);
+
+    const bool fromSidechain = scArmed && sidechainLiveInternal;
+    const bool linked = p.stereoLink || ! (channelProcessed[0] && channelProcessed[1]);
+
+    // --- gain trajectory + coefficient refresh --------------------------------
+    auto applyTargets = [&] (ChannelState& s, const float* targets)
+    {
+        bool any = false;
+
+        for (int k = 0; k < nb; ++k)
         {
-            const float appliedDb = juce::jlimit (0.0f, 60.0f,
-                                                  -juce::Decibels::gainToDecibels (g, -60.0f));
-            const float weight = mag[(size_t) k];
-            weightedSum += (double) appliedDb * (double) weight;
-            weightSum   += (double) weight;
-            peakDb = juce::jmax (peakDb, appliedDb);
+            float c = s.cutDb[(size_t) k];
+            const float target = juce::jlimit (0.0f, juce::jmax (0.0f, p.rangeDb), targets[k]);
+            const float coeff = (target > c) ? attackCoeff : releaseCoeff;
+
+            c += (target - c) * coeff;
+
+            if (! std::isfinite (c) || c < kProcessFloorDb)
+                c = 0.0f;
+
+            s.cutDb[(size_t) k] = c;
+
+            if (c == 0.0f)
+            {
+                if (s.appliedCutDb[(size_t) k] != 0.0f)
+                {
+                    s.bells[(size_t) k].setIdentity();
+                    s.appliedCutDb[(size_t) k] = 0.0f;
+                }
+            }
+            else if (std::abs (c - s.appliedCutDb[(size_t) k]) > 1.0e-3f)
+            {
+                s.bells[(size_t) k].setCut (c, bandPlan.cosW0[(size_t) k],
+                                            bandPlan.alpha[(size_t) k]);
+
+                if (s.appliedCutDb[(size_t) k] == 0.0f)
+                    s.seedPending[(size_t) k] = true;   // click-free hand-off
+
+                s.appliedCutDb[(size_t) k] = c;
+            }
+
+            any = any || (s.appliedCutDb[(size_t) k] > 0.0f);
         }
 
-        // Gains apply to the packed real-FFT layout: bin k lives at (2k, 2k+1).
-        dst[2 * k]     *= g;
-        dst[2 * k + 1] *= g;
-    }
+        s.anyCut = any;
+    };
 
-    fft->performRealOnlyInverseTransform (dst);
-
-    // Overlap-add with the synthesis window. No normalisation factor: the window
-    // pair is sqrt(Hann) which sums to exactly 1 across the two overlapping frames.
-    int accPos = (ringPos - N + ringSize) % ringSize;
-    for (int i = 0; i < N; ++i)
+    auto bandTargetsFrom = [&] (const std::vector<float>& reduction, float* bandTargets)
     {
-        s.outAcc[(size_t) accPos] += dst[i] * win[(size_t) i];
-        if (++accPos >= ringSize)
-            accPos = 0;
+        for (int b = 0; b < nb; ++b)
+            bandTargets[b] = 0.0f;
+
+        for (int k = 1; k < analysisBins - 1; ++k)
+        {
+            const int band = bandPlan.binToBand[(size_t) k];
+            if (band >= 0)
+                bandTargets[band] = juce::jmax (bandTargets[band], reduction[(size_t) k]);
+        }
+
+        // Smooth across bands so a resonance does not open a single-band hole and
+        // bell skirts and detector widths agree.
+        float smoothed[maxBands];
+        for (int b = 0; b < nb; ++b)
+        {
+            const float a = bandTargets[juce::jmax (0, b - 1)];
+            const float c = bandTargets[juce::jmin (nb - 1, b + 1)];
+            smoothed[b] = 0.25f * a + 0.5f * bandTargets[b] + 0.25f * c;
+        }
+
+        for (int b = 0; b < nb; ++b)
+            bandTargets[b] = smoothed[b];
+    };
+
+    float zeroTargets[maxBands] {};
+
+    if (linked)
+    {
+        const bool* srcProcessed = fromSidechain ? scProcessed : channelProcessed;
+
+        std::fill (combinedHold.begin(), combinedHold.end(), 0.0f);
+
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            if (! srcProcessed[ch])
+                continue;
+
+            const auto& src = fromSidechain ? sideChannels[(size_t) ch] : mainChannels[(size_t) ch];
+
+            for (int k = 0; k < analysisBins; ++k)
+                combinedHold[(size_t) k] = juce::jmax (combinedHold[(size_t) k], src.holdMag[(size_t) k]);
+        }
+
+        computeReductionSpectrum (combinedHold.data(), detectionReduction, p);
+
+        float bandTargets[maxBands];
+        bandTargetsFrom (detectionReduction, bandTargets);
+
+        for (int ch = 0; ch < 2; ++ch)
+            applyTargets (mainChannels[(size_t) ch],
+                          channelProcessed[ch] ? bandTargets : zeroTargets);
+    }
+    else
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            if (channelProcessed[ch])
+            {
+                const auto& src = fromSidechain ? sideChannels[(size_t) ch]
+                                                : mainChannels[(size_t) ch];
+
+                computeReductionSpectrum (src.holdMag, detectionReduction, p);
+
+                float bandTargets[maxBands];
+                bandTargetsFrom (detectionReduction, bandTargets);
+                applyTargets (mainChannels[(size_t) ch], bandTargets);
+            }
+            else
+            {
+                applyTargets (mainChannels[(size_t) ch], zeroTargets);
+            }
+        }
     }
 
-    avgReductionDb  = (weightSum > 0.0) ? (float) (weightedSum / weightSum) : 0.0f;
-    peakReductionDb = peakDb;
+    // --- metering -------------------------------------------------------------
+    float weightedSum = 0.0f, weightSum = 0.0f, peakCut = 0.0f;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        if (! channelProcessed[ch])
+            continue;
+
+        const auto& s = mainChannels[(size_t) ch];
+
+        for (int k = 0; k < nb; ++k)
+        {
+            const float w = s.bandLevel[(size_t) k];
+            weightedSum += s.cutDb[(size_t) k] * w;
+            weightSum += w;
+            peakCut = juce::jmax (peakCut, s.cutDb[(size_t) k]);
+        }
+    }
+
+    const float avgCut = (weightSum > 1.0e-12f) ? (weightedSum / weightSum) : 0.0f;
+
+    grAverageSmoothed += (avgCut - grAverageSmoothed) * 0.25f;
+    grPeakSmoothed = juce::jmax (peakCut, grPeakSmoothed * 0.94f);
+    grAverageDb.store (grAverageSmoothed);
+    grPeakDb.store (grPeakSmoothed);
 }
 
 //==============================================================================
@@ -896,24 +1161,6 @@ float ZTameAudioProcessor::displayNormToFreq (float norm) noexcept
     return lo * std::pow (hi / lo, juce::jlimit (0.0f, 1.0f, norm));
 }
 
-void ZTameAudioProcessor::rebuildDisplayLookup (int fftSize) noexcept
-{
-    const int numBins = fftSize / 2 + 1;
-    const int D = UiSnapshot::numDisplayBins;
-
-    for (int d = 0; d <= D; ++d)
-    {
-        const float f = displayNormToFreq ((float) d / (float) D);
-        const int bin = (int) std::llround ((double) f * (double) fftSize
-                                            / juce::jmax (1.0, currentSampleRate));
-        displayLookup[(size_t) d] = juce::jlimit (1, numBins - 2, bin);
-    }
-
-    for (int d = 1; d <= D; ++d)
-        displayLookup[(size_t) d] = juce::jmax (displayLookup[(size_t) d],
-                                                displayLookup[(size_t) (d - 1)]);
-}
-
 //==============================================================================
 void ZTameAudioProcessor::publishSnapshot (const Params& p, bool scLive) noexcept
 {
@@ -924,43 +1171,52 @@ void ZTameAudioProcessor::publishSnapshot (const Params& p, bool scLive) noexcep
 
     UiSnapshot& s = snapshotSlots[(size_t) writeIdx];
 
-    const int order   = activeFftOrder.load();
-    const int N       = 1 << order;
-    const int numBins = N / 2 + 1;
-    const int D       = UiSnapshot::numDisplayBins;
+    const int D = UiSnapshot::numDisplayBins;
     const int numMain = juce::jmin (numMainChannels, 2);
-
-    // Applied reduction (dB) per FFT bin, from the (linked) first channel.
-    for (int k = 0; k < numBins; ++k)
-        dbScratch[(size_t) k] = juce::jlimit (0.0f, 60.0f,
-            -juce::Decibels::gainToDecibels (mainChannels[0].gainSmooth[(size_t) k], -60.0f));
 
     for (int d = 0; d < D; ++d)
     {
-        const int b0 = displayLookup[(size_t) d];
-        const int b1 = juce::jmax (b0 + 1, displayLookup[(size_t) (d + 1)]);
+        const int b0 = bandPlan.displayLookup[(size_t) d];
+        const int b1 = juce::jmax (b0 + 1, bandPlan.displayLookup[(size_t) (d + 1)]);
 
-        float inMax = kSilenceFloorDb, redMax = 0.0f, scMax = kSilenceFloorDb;
+        float inMax = kSilenceFloorDb;
+        float redMax = 0.0f;
 
-        for (int k = b0; k < b1 && k < numBins; ++k)
+        for (int k = b0; k < b1 && k < analysisBins; ++k)
         {
             for (int ch = 0; ch < numMain; ++ch)
-                inMax = juce::jmax (inMax, juce::Decibels::gainToDecibels (
-                                               mainChannels[(size_t) ch].magnitude[(size_t) k],
-                                               kSilenceFloorDb));
+                inMax = juce::jmax (inMax, probeDb (mainChannels[(size_t) ch].mag[(size_t) k],
+                                                    kSilenceFloorDb));
 
-            redMax = juce::jmax (redMax, dbScratch[(size_t) k]);
-
-            if (scLive && numSideChannels > 0)
-                scMax = juce::jmax (scMax, juce::Decibels::gainToDecibels (
-                                               sideChannels[0].magnitude[(size_t) k],
-                                               kSilenceFloorDb));
+            redMax = juce::jmax (redMax, detectionReduction[(size_t) k]);
         }
 
         displayIn[(size_t) d]  = inMax;
         displayRed[(size_t) d] = redMax;
         displayOut[(size_t) d] = inMax - redMax;
-        displaySide[(size_t) d] = (scLive && numSideChannels > 0) ? scMax : inMax;
+    }
+
+    // Sidechain spectrum (shown only while the bus is live).
+    if (scLive && numSideChannels > 0)
+    {
+        for (int d = 0; d < D; ++d)
+        {
+            const int b0 = bandPlan.displayLookup[(size_t) d];
+            const int b1 = juce::jmax (b0 + 1, bandPlan.displayLookup[(size_t) (d + 1)]);
+
+            float scMax = kSilenceFloorDb;
+
+            for (int k = b0; k < b1 && k < analysisBins; ++k)
+                for (int ch = 0; ch < numSideChannels; ++ch)
+                    scMax = juce::jmax (scMax, probeDb (sideChannels[(size_t) ch].mag[(size_t) k],
+                                                        kSilenceFloorDb));
+
+            displaySide[(size_t) d] = scMax;
+        }
+    }
+    else
+    {
+        std::copy (displayIn.begin(), displayIn.end(), displaySide.begin());
     }
 
     std::copy (displayIn.begin(),  displayIn.end(),  s.inputDb.begin());
@@ -969,13 +1225,14 @@ void ZTameAudioProcessor::publishSnapshot (const Params& p, bool scLive) noexcep
     std::copy (displaySide.begin(), displaySide.end(), s.sidechainDb.begin());
 
     int numPeaks = 0;
+
     for (int d = 1; d < D - 1 && numPeaks < UiSnapshot::maxPeaks; ++d)
     {
         const float r = displayRed[(size_t) d];
 
         if (r >= 1.5f && r >= displayRed[(size_t) (d - 1)] && r > displayRed[(size_t) (d + 1)])
         {
-            s.peakFreqHz[(size_t) numPeaks] = displayNormToFreq (((float) d + 0.5f) / (float) D);
+            s.peakFreqHz[(size_t) numPeaks]      = displayNormToFreq (((float) d + 0.5f) / (float) D);
             s.peakReductionDb[(size_t) numPeaks] = r;
             ++numPeaks;
         }
@@ -985,14 +1242,16 @@ void ZTameAudioProcessor::publishSnapshot (const Params& p, bool scLive) noexcep
     s.grAverageDb        = grAverageSmoothed;
     s.grPeakDb           = grPeakSmoothed;
     s.thresholdDb        = detectorThresholdDb (p);
-    s.fftSize            = N;
+    s.bandCount          = bandPlan.numBands;
     s.sampleRate         = currentSampleRate;
     s.listenMode         = p.listening;
     s.bypassed           = p.bypassed;
     s.sidechainOn        = p.sidechainOn;
     s.sidechainConnected = isSidechainConnected();
     s.sidechainLive      = scLive;
-    s.midSide            = p.midSide;
+    s.processingMode     = p.processingMode;
+    s.outputLevelDb      = outputLevelDb.load();
+    s.processingLoad     = processingLoadPercent.load();
 
     snapshotReadyIndex.store (writeIdx, std::memory_order_release);
     snapshotWriteIndex.store (1 - writeIdx, std::memory_order_relaxed);
@@ -1012,6 +1271,19 @@ bool ZTameAudioProcessor::getLatestSnapshot (UiSnapshot& dest) const
     return true;
 }
 
+const float* ZTameAudioProcessor::getMagnitudeData() const noexcept
+{
+    uiCacheValid = getLatestSnapshot (uiCache);
+    return uiCacheValid ? uiCache.inputDb.data() : nullptr;
+}
+
+const float* ZTameAudioProcessor::getSuppressionData() const noexcept
+{
+    // Reads the frame cached by getMagnitudeData(), so both arrays come from the
+    // same analysis frame and the curve can never shear between them.
+    return uiCacheValid ? uiCache.reductionDb.data() : nullptr;
+}
+
 bool ZTameAudioProcessor::isSidechainConnected() const
 {
     if (getBusCount (true) <= 1)
@@ -1024,19 +1296,6 @@ bool ZTameAudioProcessor::isSidechainConnected() const
 }
 
 //==============================================================================
-void ZTameAudioProcessor::timerCallback()
-{
-    if (pResolution == nullptr)
-        return;
-
-    const int wanted = (pResolution->load() >= 1.0f) ? maxFftOrder : minFftOrder;
-    const int wantedLatency = 1 << wanted;
-
-    if (getLatencySamples() != wantedLatency)
-        setLatencySamples (wantedLatency);
-}
-
-//==============================================================================
 juce::AudioProcessorEditor* ZTameAudioProcessor::createEditor()
 {
     return new ZTameAudioProcessorEditor (*this);
@@ -1046,7 +1305,7 @@ juce::AudioProcessorEditor* ZTameAudioProcessor::createEditor()
 void ZTameAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = parameters.copyState();
-    state.setProperty ("stateVersion", 2, nullptr);
+    state.setProperty ("stateVersion", 3, nullptr);
 
     std::unique_ptr<juce::XmlElement> xml (state.createXml());
 

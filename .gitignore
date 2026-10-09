@@ -26,8 +26,21 @@ tools/keys/*private*.pem
 # Local build trees (any suffix)
 /build-*/
 /build_*/
-# Session scratch at repo root (keep _rec/ and _recovered - guarded sources)
+# Session scratch at repo root
 /_*.txt
 /*.bak
 /probe*.txt
 /undefined
+/*.log
+
+# Local-only working folders (not repository content)
+.venv/
+artifacts/
+backups/
+desk/
+funds-exec-env/
+_qa/
+zarlino-source/
+zarlino-website/
+realestate-os/
+*.rdp

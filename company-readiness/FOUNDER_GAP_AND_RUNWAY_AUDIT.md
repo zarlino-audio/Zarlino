@@ -35,7 +35,7 @@ verified facts · [U] unknown / must be confirmed by the founder.
 | Line | State | Evidence |
 |---|---|---|
 | **Zarlino Audio — plugins** (ZTame, ZScorch) | Storefront live, downloads live, **checkout OFF**; ZTame v1.2.0 shipped as public beta, free promo expired; ZScorch local source `2.0.0` vs site `1.0.0` | [V] `zarlino-website/src/config/sales.ts`, live site copy, `plugins/ZScorch/Source/Version.h` |
-| **Zarlino Audio — pipeline** | ZVocal 0.2.0 (P1–P7 unimplemented per design doc), PresenceField 0.1.0, ZAdaptiveHarmonics, ZPunch, MyFirstEQ, RACK_AI (scaffold, never compiled), zarlino-source (stem-separation engine, early, 22/22 tests, no UI/worker) | [V] repo file states; `zarlino-qa-platform-spec-2.md` plans 20 plugins |
+| **Zarlino Audio — pipeline** | ZVocal 0.2.0 (P1–P7 unimplemented per design doc), PresenceField 0.1.0, ZAdaptiveHarmonics, ZPunch, MyFirstEQ, RACK_AI (scaffold, never compiled), zarlino-source (stem-separation engine, early, 22/22 tests, no UI/worker) | [V] repo file states; `docs/platform/zarlino-qa-platform-spec-2.md` plans 20 plugins |
 | **realestate-os (Vee Properties)** | 16-agent demo org deployed on `workers.dev`; website page live with **placeholder** contact/phone/listings | [V] `realestate-os/docs/AGENTS.md`, `zarlino-website/src/config/vee.ts` placeholders |
 | **Songwriting Studio** | Own repo, own worker + container analysis engine, no pricing/monetisation found | [V] repo memory + live worker notes |
 | **funds-exec-env (forex desk)** | **Demo-only** MQL5 desk on the laptop (XM MT5, Headway-Demo login 4954825). No real trades, no P&L, not connected to the cloud, git-ignored. A real-account history file (16946195) exists on disk | [V] `funds-exec-env/ENVIRONMENT.md`, `desk/observe_report.md` |
@@ -143,7 +143,7 @@ Severity: **S1** stops the organisation · **S2** stops money or operations · *
 | PRD-01 | S1 | now | **Release process is founder-personal**: packaging script `tools/build-release-local.ps1` no longer exists (searched whole workspace); local builds are manual MSVC/Ninja incantations; CI release gates cover only some plugins (ZTame gate on main; ZScorch gate not merged) | [V] file search; `.github/workflows/` |
 | PRD-02 | S1 | now | Human listening gates: perceptual validation requires the founder's ears (doctor WARNs by design; ZVocal spec lists listening tests + D-3 artefact panel as "human-blocked"); no external evaluator enrolled | [V] perceptual module; `zvocals.md` memory; doctor 3 WARNs |
 | PRD-03 | S2 | weeks | Source control state: monorepo on a feature branch (`fix/meter-provider-usage`) with **210 dirty entries**; website 67 dirty on a CI branch; exec-os 43 dirty on main. Cloud builds are stale vs local work; three data-loss class incidents in repo history | [V] git commands this audit |
-| PRD-04 | S2 | months | Pipeline breadth: only Windows VST3; Mac/AU and AAX not started (no Mac in the loop); 20-plugin roadmap is a spec (2,044 planned QA units, unbuilt); zarlino-source/RACK_AI unfinished | [V] `zarlino-qa-platform-spec-2.md`; repo states |
+| PRD-04 | S2 | months | Pipeline breadth: only Windows VST3; Mac/AU and AAX not started (no Mac in the loop); 20-plugin roadmap is a spec (2,044 planned QA units, unbuilt); zarlino-source/RACK_AI unfinished | [V] `docs/platform/zarlino-qa-platform-spec-2.md`; repo states |
 | PRD-05 | S2 | months | No versioned releases on GitHub (0 releases); version drift live (site 1.0.0 vs source 2.0.0 for ZScorch); stale promo text shipped; downloads are static files with no update channel | [V] inventory; `products.ts`; live copy |
 | PRD-06 | S3 | months | No crash/telemetry pipeline from users' machines; bug reports = public GitHub issues only; no crash triage loop | [V] feedback flow |
 
@@ -178,7 +178,7 @@ Severity: **S1** stops the organisation · **S2** stops money or operations · *
 
 | # | Severity | Bites | Blocker | Evidence |
 |---|---|---|---|---|
-| KNW-01 | S2 | weeks | The cloud-migration mandate (14 phases, 21 deliverables) is mostly NOT STARTED (durable jobs, cloud builds, Azure execution, artifact arch, verification, local decommission, rollback plan). The "cloud-only" goal is ~30% done | [V] `zarlino-cloud-migration/README.md` tracker |
+| KNW-01 | S2 | weeks | The cloud-migration mandate (14 phases, 21 deliverables) is mostly NOT STARTED (durable jobs, cloud builds, Azure execution, artifact arch, verification, local decommission, rollback plan). The "cloud-only" goal is ~30% done | [V] `docs/platform/cloud-migration/README.md` tracker |
 | KNW-02 | S2 | immediate | Runbooks that exist (`OPERATOR_RUNBOOK.md`, `INSTANCE_AND_RETIREMENT.md`) assume the founder with credentials; there is **no company-level document**: accounts, vendors, renewals, money, legal, escalation matrix | [V] docs folder |
 | KNW-03 | S3 | months | Uncommitted work is the norm (320+ dirty files across 3 repos); "the only uncommitted change was lost" already happened in repo history; three branch-switch wipe incidents | [V] git state; repo memory |
 | KNW-04 | S3 | months | Knowledge lives in chat transcripts and scratch files (`_*.txt`, `notes/`); recovery used chat-transcript replay in the past | [V] repo memory |

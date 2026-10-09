@@ -22,6 +22,21 @@ namespace
         x = juce::jlimit (0.0f, 1.0f, x);
         return x * x * (3.0f - 2.0f * x);
     }
+
+#ifdef PRESENCEFIELD_PROCESSED
+    // PROCESSED (Option B) variant: explicit mid/side encode -> side boost
+    // + gentle processed side saturation -> decode. Yields a wider, more
+    // processed stereo image than the plain applyWidth() (Option A) path.
+    void applyProcessedWidth (float& left, float& right, float width, float saturation)
+    {
+        const auto mid  = (left + right) * 0.5f;
+        auto       side = (left - right) * 0.5f;
+        side *= width;
+        side  = side / (1.0f + saturation * std::abs (side) * 0.8f);
+        left  = mid + side;
+        right = mid - side;
+    }
+#endif
 }
 
 PresenceFieldAudioProcessor::PresenceFieldAudioProcessor()
@@ -218,7 +233,13 @@ void PresenceFieldAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer
 
         auto left = anchor[0] + presence[0] * presenceMix + memory[0] * memoryMix;
         auto right = anchor[1] + presence[1] * presenceMix + memory[1] * memoryMix;
+#if defined(PRESENCEFIELD_PROCESSED)
+        // PROCESSED (Option B): wider, spectrally-dressed stereo image.
+        applyProcessedWidth (left, right, globalWidth, saturation);
+#else
+        // UNPROCESSED (Option A): current/unchanged direct width path.
         applyWidth (left, right, globalWidth);
+#endif
 
         buffer.setSample (0, i, softClip (left * outGain, 0.10f));
         buffer.setSample (1, i, softClip (right * outGain, 0.10f));
