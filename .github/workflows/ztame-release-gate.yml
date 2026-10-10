@@ -34,8 +34,31 @@ jobs:
       - name: Build ZTame (VST3 + Standalone) and test runner
         run: cmake --build build --config Release --target ZTame ZTame_Tests --parallel
 
+      # Scope the label gate to THIS plugin's suite, and refuse to report a
+      # green gate when nothing was selected.
+      #
+      # Why the scope is required: every plugin labels its own suite
+      # `release-gate` (plugins/*/CMakeLists.txt), so with -DBUILD_TESTING=ON the
+      # configure step registers ZTame.Unit, ZVocal.Unit and ZScorch.Unit. This
+      # job only builds the ZTame targets, so selecting the bare label made
+      # ctest try to run the two unbuilt executables, report them "Not Run" and
+      # exit 1 — which is why every run of this workflow has failed since it was
+      # added, for a reason that has nothing to do with ZTame. The ZVocal and
+      # ZScorch suites are not skipped silently: they are validated by their own
+      # gates (their tests are built and run when those plugins are built).
+      # Same per-plugin scoping as tools/build-release-local.ps1 and the VM
+      # build-host verify step.
       - name: Run automated release-gate tests
-        run: ctest --test-dir build -C Release --output-on-failure -L release-gate
+        shell: pwsh
+        run: |
+          $listed = ctest --test-dir build -C Release -N -L release-gate -R '^ZTame\.'
+          if ($LASTEXITCODE -ne 0) { throw "ctest could not enumerate the release-gate tests" }
+          $listed | Write-Host
+          if (($listed | Out-String) -notmatch 'Total Tests:\s*[1-9]') {
+            throw "No ZTame release-gate tests were registered — refusing a green gate with nothing tested."
+          }
+          ctest --test-dir build -C Release --output-on-failure -L release-gate -R '^ZTame\.'
+          if ($LASTEXITCODE -ne 0) { throw "ZTame release-gate tests failed" }
 
       # --- Sign plugin binaries IN-PLACE before packaging (inert until enabled) ---
       # Master switch: ZARLINO_SIGNING_ENABLED must be 'true' at repo/org level.
