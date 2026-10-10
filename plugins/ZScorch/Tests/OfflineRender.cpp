@@ -222,8 +222,6 @@ struct SaturationEngine
         }
 
         // Suppress trailing denormals so the writer sees clean zeros.
-        juce::dsp::AudioBlock<float> ob (&out, 1, n);
-        juce::dsp::applyGain (ob, 1.0f); // no-op; forces value pass
         juce::ignoreUnused (b1, b2, b3);
     }
 };

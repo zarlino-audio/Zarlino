@@ -113,6 +113,11 @@ target_sources(ZScorch_OfflineRender
     PRIVATE
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
+        Source/AnalysisCore.cpp
+        Source/ControlLayer.cpp
+        Source/Saturator.cpp
+        Source/Tilt.cpp
+        Source/Exciter.cpp
         Tests/OfflineRender.cpp
 )
 
