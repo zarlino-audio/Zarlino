@@ -31,8 +31,14 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
 
+      # The bare `ZTame` target is a shared-code-only no-op (the plugin folder
+      # defines a static code library under that name) — `ZTame_All` is what
+      # actually produces the VST3 bundle and the standalone exe that the
+      # packaging steps below copy. Same pitfall documented in
+      # tools/build-release-local.ps1; until the ctest selection was fixed this
+      # step was never reached, so the missing formats stayed hidden.
       - name: Build ZTame (VST3 + Standalone) and test runner
-        run: cmake --build build --config Release --target ZTame ZTame_Tests --parallel
+        run: cmake --build build --config Release --target ZTame_All ZTame_Tests --parallel
 
       # Scope the label gate to THIS plugin's suite, and refuse to report a
       # green gate when nothing was selected.
