@@ -221,3 +221,13 @@ jobs:
           name: ZTame-v1.2.0-release-manifest
           path: artifacts/release-manifest.json
           if-no-files-found: error
+
+      # The canonical screenshot itself must remain retrievable, not only hashed:
+      # the manifest binds it by sha256, and the website consumes it from a
+      # verified release (storage/publication decision tracked separately).
+      - name: Upload canonical screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTame-v1.2.0-canonical-screenshot
+          path: artifacts/ztame-ui.png
+          if-no-files-found: error
