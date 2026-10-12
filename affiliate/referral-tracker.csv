@@ -1,0 +1,13 @@
+affiliate_id,contact_name,type,status,ref_code,outreach_date,apply_date,approved_date,clicks,add_to_cart,cart_value_ghes,checkouts,paid_orders,revenue_usd,signups,commission_due,cost_time_min,cost_cash,tags,notes
+AFF_CAND_01,Gearnews.com,review_site,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,plugin_reviewer;test_cohort,Catalog: music tech news/reviews. Outreach HOLD (gate: KV + commission policy + paid conversion).
+AFF_CAND_02,Graham Cochrane (Recording Revolution),education,youTuber CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,mixing_education;test_cohort,Outreach HOLD (gate set).
+AFF_CAND_03,Homebrew Audio,education,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,mixing_education;test_cohort,Outreach HOLD (gate set).
+AFF_CAND_04,Integraudio,reviewer_yt,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,plugin_reviewer;test_cohort,Outreach HOLD (gate set).
+AFF_CAND_05,Mixing Lessons (Bernd Kurtz),education,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,plugin_reviewer;test_cohort;mixing_education,Outreach HOLD (gate set).
+AFF_CAND_06,Musician's HQ,review_site,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,plugin_reviewer;test_cohort,Outreach HOLD (gate set).
+AFF_CAND_07,Plugin Boutique,retail_partner,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,retail_partner;channel,Outreach HOLD (gate set).
+AFF_CAND_08,ProducerSpot,education_deals,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,test_cohort;production_education,Outreach HOLD (gate set).
+AFF_CAND_09,Sound On Sound,authority_magazine,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,plugin_reviewer;authority_outreach,Outreach HOLD (gate set).
+AFF_CAND_10,The Pro Audio Files,education_reviews,CANDIDATE,,,,0,0,0,0,0,,0,0,0,0,plugin_reviewer;test_cohort,Outreach HOLD (gate set).
+# Columns: affiliate_id | contact_name | type | status (CANDIDATE/OUTREACH_SENT/APPLIED/APPROVED/ACTIVE/PAUSED/REVOKED) | ref_code | outreach_date | apply_date | approved_date | clicks | add_to_cart | cart_value_ghes | checkouts | paid_orders | revenue_usd | signups | commission_due | cost_time_min | cost_cash | tags | notes
+# Manual referral tracker (Step 5/7 dec_420964fb). Measure Y=3 signups & CAC<$15 within 60 days of dashboard launch. Reset by Dec 16, 2026 (60d + buffer). $0 cash; time logged against D-003. See referral-tracker.md.
