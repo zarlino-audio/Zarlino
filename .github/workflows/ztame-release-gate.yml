@@ -6,6 +6,7 @@ on:
       - 'plugins/ZTame/**'
       - 'shared/**'
       - 'cmake/ZarlinoTest.cmake'
+      - 'tools/release/**'
       - '.github/workflows/ztame-release-gate.yml'
   push:
     branches: [main]
@@ -13,6 +14,7 @@ on:
       - 'plugins/ZTame/**'
       - 'shared/**'
       - 'cmake/ZarlinoTest.cmake'
+      - 'tools/release/**'
   workflow_dispatch:
 
 jobs:
@@ -28,6 +30,10 @@ jobs:
         with:
           submodules: recursive
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Configure
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
 
@@ -37,8 +43,11 @@ jobs:
       # packaging steps below copy. Same pitfall documented in
       # tools/build-release-local.ps1; until the ctest selection was fixed this
       # step was never reached, so the missing formats stayed hidden.
-      - name: Build ZTame (VST3 + Standalone) and test runner
-        run: cmake --build build --config Release --target ZTame_All ZTame_Tests --parallel
+      #
+      # ZTame_UiShot is a console app that renders the REAL editor offscreen
+      # (no window manager) — it produces the canonical release screenshot.
+      - name: Build ZTame (VST3 + Standalone), test runner and UiShot
+        run: cmake --build build --config Release --target ZTame_All ZTame_Tests ZTame_UiShot --parallel
 
       # Scope the label gate to THIS plugin's suite, and refuse to report a
       # green gate when nothing was selected.
@@ -141,6 +150,46 @@ jobs:
           Get-AuthenticodeSignature "artifacts/ZTame-v1.2.0-Windows-Installer.exe" |
             ForEach-Object { if ($_.Status -ne 'Valid') { throw "Installer signature invalid: $($_.Status)" } }
 
+      # --- Canonical screenshot: render the REAL release editor offscreen -----
+      # (§9) A screenshot is evidence only when it comes from the exact release
+      # candidate being verified. Marketing art / mockups are NOT canonical.
+      - name: Render canonical screenshot (headless UiShot)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "build/plugins/ZTame/ZTame_UiShot_artefacts" -Recurse -Filter "ZTame_UiShot.exe" | Select-Object -First 1
+          if (-not $exe) { throw "ZTame_UiShot.exe not found - screenshot pipeline cannot run" }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          & $exe.FullName "artifacts/ztame-ui.png"
+          if ($LASTEXITCODE -ne 0) { throw "ZTame_UiShot failed with exit code $LASTEXITCODE" }
+
+      - name: Validate canonical screenshot (not blank / not mostly black)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tools/release/validate-screenshot.ps1 -Path artifacts/ztame-ui.png -MinWidth 640 -MinHeight 480
+
+      # --- Release manifest: the atomic release unit (§7/§8/§17) -------------
+      # Binds binaries + screenshot + metadata + commit to the SAME release
+      # candidate with sha256 hashes. finalize recomputes every hash from disk
+      # and only then flips the status to VERIFIED - fail closed.
+      - name: Generate release manifest (hashes)
+        shell: pwsh
+        run: |
+          node tools/release/release-manifest.mjs generate `
+            --product ZTame --version 1.2.0 --commit ${{ github.sha }} `
+            --out artifacts/release-manifest.json `
+            --installer artifacts/ZTame-v1.2.0-Windows-Installer.exe `
+            --vst3 artifacts/ZTame-v1.2.0-Windows-VST3.zip `
+            --standalone artifacts/ZTame-v1.2.0-Windows-Standalone.zip `
+            --screenshot artifacts/ztame-ui.png
+          if ($LASTEXITCODE -ne 0) { throw "manifest generation failed" }
+
+      - name: Validate + finalize release manifest (integrity re-check)
+        shell: pwsh
+        run: |
+          node tools/release/release-manifest.mjs validate --manifest artifacts/release-manifest.json
+          if ($LASTEXITCODE -ne 0) { throw "manifest validation failed" }
+          node tools/release/release-manifest.mjs finalize --manifest artifacts/release-manifest.json --dir artifacts
+          if ($LASTEXITCODE -ne 0) { throw "manifest finalize (integrity) failed - release NOT verified" }
+
       # --- Upload all artifacts ---
       - name: Upload VST3 zip
         uses: actions/upload-artifact@v4
@@ -162,3 +211,13 @@ jobs:
           name: ZTame-v1.2.0-Windows-Installer
           path: artifacts/ZTame-v1.2.0-Windows-Installer.exe
           if-no-files-found: warn
+
+      # The manifest is the authoritative relationship between binaries,
+      # screenshot, metadata and commit. Only a VERIFIED manifest may be
+      # consumed by the website. Fails the job if absent.
+      - name: Upload release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTame-v1.2.0-release-manifest
+          path: artifacts/release-manifest.json
+          if-no-files-found: error
