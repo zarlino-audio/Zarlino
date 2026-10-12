@@ -306,3 +306,44 @@ jobs:
             artifacts/audio-validation.json
             artifacts/audio-evidence.json
           if-no-files-found: error
+
+      # --- Publish the VERIFIED release, then prove the website serves it ---
+      #
+      # The plugin release is an atomic unit: binaries + screenshot + audio, one
+      # version, one commit, one manifest. Publishing uploads that set to the
+      # private R2 bucket `zarlino-releases` — the website's ONLY source of
+      # product assets — so this step is the moment the release actually reaches
+      # users. It runs after the evidence uploads (a publish failure must not
+      # hide the artifacts) and is skipped for pull requests: PR runs verify,
+      # they do not publish.
+      #
+      # publish-release.mjs is verify-then-publish: it refuses a manifest whose
+      # status is not `verified`, uploads every file, re-downloads each object
+      # and compares SHA-256, and only then writes the `latest.json` pointer
+      # (which is also the rollback handle).
+      - name: Publish VERIFIED release to R2 (zarlino-releases)
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if (-not $env:CLOUDFLARE_API_TOKEN) { throw "CLOUDFLARE_API_TOKEN is not set - cannot publish" }
+          node tools/release/publish-release.mjs `
+            --manifest artifacts/release-manifest.json `
+            --base artifacts `
+            --audio-dir artifacts/audio `
+            --web-dir artifacts/audio/web `
+            --bucket zarlino-releases `
+            --account ${{ vars.CF_ACCOUNT_ID }} `
+            --product ztame
+          if ($LASTEXITCODE -ne 0) { throw "R2 publish failed - production still serves the previous verified release" }
+
+      # Verifies the DELIVERY surface, not just the upload: /api/release/ztame
+      # must report this exact commit and the stable installer alias must answer
+      # 200. Bounded polling absorbs the website's 60s release-pointer cache.
+      - name: Verify production website serves this release
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: pwsh
+        run: |
+          node tools/release/verify-website-release.mjs --product ztame --expect-commit ${{ github.sha }}
+          if ($LASTEXITCODE -ne 0) { throw "website does not serve this release - release is NOT live" }
