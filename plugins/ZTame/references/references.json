@@ -1,0 +1,221 @@
+{
+  "schemaVersion": 1,
+  "product": "ZTame",
+  "generatedBy": "tools/release/prepare-references.py",
+  "description": "Canonical reference inputs (committed). Regenerate only via the sources spec; hashes here are the evidence identity - never edit by hand.",
+  "references": [
+    {
+      "id": "loop-disguise",
+      "file": "loop-disguise.wav",
+      "container": "wav",
+      "sha256": "ef5d2a22d313a3458406eec5db9b9f69989b91d866bac8ec685faef4d63581f7",
+      "bytes": 1764044,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitDepth": 16,
+      "frames": 441000,
+      "durationSec": 10.0,
+      "kind": "loop",
+      "title": "Disguise (prod. sconthetrack) - full beat loop",
+      "origin": "looperman.com upload 3395732/0434557 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication",
+      "trim": {
+        "startSec": 0.0,
+        "seconds": 10.0
+      },
+      "source": {
+        "file": "looperman-l-3395732-0434557-disguise-prod-sconthetrack.wav",
+        "sha256": "473c3c3f62c8251369d2c5d8f9485d2d11df7b01427f7c09e3e6975094c47785",
+        "bytes": 7130454
+      }
+    },
+    {
+      "id": "loop-delight",
+      "file": "loop-delight.wav",
+      "container": "wav",
+      "sha256": "adde7f7e0d0f11654a6b6a94ca9e87c0f8fbcf246802438e1fbdf82b1db41c58",
+      "bytes": 1764044,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitDepth": 16,
+      "frames": 441000,
+      "durationSec": 10.0,
+      "kind": "loop",
+      "title": "Delight (prod. sconthetrack) - full beat loop",
+      "origin": "looperman.com upload 3395732/0434558 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication",
+      "trim": {
+        "startSec": 0.0,
+        "seconds": 10.0
+      },
+      "source": {
+        "file": "looperman-l-3395732-0434558-delight-prod-sconthetrack.wav",
+        "sha256": "020f06e5dda9b4d063cad3687b74dd802ce7b67a22a8ed9ea45a946d00c3cde2",
+        "bytes": 6048182
+      }
+    },
+    {
+      "id": "loop-uk-bass-vocal-chop",
+      "file": "loop-uk-bass-vocal-chop.wav",
+      "container": "wav",
+      "sha256": "e3dc49720923bc25e768a46df7dc2e9008937bcbbff4a5ab5f71a55b395fdead",
+      "bytes": 1764044,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitDepth": 16,
+      "frames": 441000,
+      "durationSec": 10.0,
+      "kind": "loop",
+      "title": "UK bass with vocal chop",
+      "origin": "looperman.com upload 7424908/0433015 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication",
+      "trim": {
+        "startSec": 0.0,
+        "seconds": 10.0
+      },
+      "source": {
+        "file": "looperman-l-7424908-0433015-uk-bass-vocal-chop.wav",
+        "sha256": "68c9846060d1119c65eb554e96a93628898a78e660b54c3af58c9304c4e6d4c9",
+        "bytes": 2419382
+      }
+    },
+    {
+      "id": "loop-afro-drum-115",
+      "file": "loop-afro-drum-115.wav",
+      "container": "wav",
+      "sha256": "fd2ae52540b00c64e37090638cf78d9435a1daa19587ddacc748be5d2f169efd",
+      "bytes": 1473560,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitDepth": 16,
+      "frames": 368379,
+      "durationSec": 8.353265,
+      "kind": "loop",
+      "title": "Afro drum groove 115 BPM (whole file)",
+      "origin": "looperman.com upload 8232127/0434008 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication",
+      "trim": {
+        "startSec": 0.0,
+        "seconds": null
+      },
+      "source": {
+        "file": "looperman-l-8232127-0434008-115bpm-afro-drum.wav",
+        "sha256": "c687aff543ea7ac15130f8e48f3d7b2d095aaf20574f3cc99ed1618e526c42cb",
+        "bytes": 1473700
+      }
+    },
+    {
+      "id": "loop-afrohouse-102",
+      "file": "loop-afrohouse-102.wav",
+      "container": "wav",
+      "sha256": "aedbdc0f0fd87d048c8e1d3f0966383b16b90383ce59c92ead621506e5c3b381",
+      "bytes": 1764044,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitDepth": 16,
+      "frames": 441000,
+      "durationSec": 10.0,
+      "kind": "loop",
+      "title": "Afrohouse drums with kick 102 BPM",
+      "origin": "looperman.com upload 8630321/0434339 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication",
+      "trim": {
+        "startSec": 0.0,
+        "seconds": 10.0
+      },
+      "source": {
+        "file": "looperman-l-8630321-0434339-102bpm-afrohouse-drums-with-kick.wav",
+        "sha256": "888cecc4d2fb54a80e0b61ea7aa5dd68398866b33755e2736b33b511211e812d",
+        "bytes": 3326282
+      }
+    },
+    {
+      "id": "oneshot-nylon-guitar-d4",
+      "file": "oneshot-nylon-guitar-d4.flac",
+      "container": "flac",
+      "sha256": "e0f460d3b9fa546ae6cd2d85ef3f01f424d8dab7feda28a3e412996d5cee2698",
+      "bytes": 75411,
+      "sampleRate": 44100,
+      "channels": 1,
+      "bitDepth": 16,
+      "frames": 130792,
+      "durationSec": 2.965805,
+      "kind": "oneshot",
+      "title": "Nylon guitar D4 (DirectWave one-shot)",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input",
+      "trim": null,
+      "source": {
+        "file": "Nylon Guitar d4.wav",
+        "sha256": "e0f460d3b9fa546ae6cd2d85ef3f01f424d8dab7feda28a3e412996d5cee2698",
+        "bytes": 75411
+      }
+    },
+    {
+      "id": "oneshot-bass-c2",
+      "file": "oneshot-bass-c2.flac",
+      "container": "flac",
+      "sha256": "fab4939caf1126593361963dac254ccbf118c0b0bbad3ad78837c60cdb95a1ad",
+      "bytes": 399764,
+      "sampleRate": 44100,
+      "channels": 1,
+      "bitDepth": 16,
+      "frames": 612880,
+      "durationSec": 13.897506,
+      "kind": "oneshot",
+      "title": "Picked five-string bass C2 (DirectWave one-shot)",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input",
+      "trim": null,
+      "source": {
+        "file": "5String BopBass Pick_C2.wav",
+        "sha256": "fab4939caf1126593361963dac254ccbf118c0b0bbad3ad78837c60cdb95a1ad",
+        "bytes": 399764
+      }
+    },
+    {
+      "id": "oneshot-rhodes-3",
+      "file": "oneshot-rhodes-3.flac",
+      "container": "flac",
+      "sha256": "10dd4415695a8a6e1f32fa9194ed65f488c386393579d52359e214d62c6d84d2",
+      "bytes": 47475,
+      "sampleRate": 44100,
+      "channels": 1,
+      "bitDepth": 16,
+      "frames": 89544,
+      "durationSec": 2.030476,
+      "kind": "oneshot",
+      "title": "Rhodes piano (Sytrus) one-shot",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input",
+      "trim": null,
+      "source": {
+        "file": "Rhodes Piano (3).wav",
+        "sha256": "10dd4415695a8a6e1f32fa9194ed65f488c386393579d52359e214d62c6d84d2",
+        "bytes": 47475
+      }
+    },
+    {
+      "id": "oneshot-strings-c4",
+      "file": "oneshot-strings-c4.flac",
+      "container": "flac",
+      "sha256": "0cb70184e0694a86407c55e62861e0679623f8b9006723ca2a1bf2783d1cf4ef",
+      "bytes": 305198,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitDepth": 16,
+      "frames": 132300,
+      "durationSec": 3.0,
+      "kind": "oneshot",
+      "title": "Orchestral strings section C4 (DirectWave one-shot)",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input",
+      "trim": null,
+      "source": {
+        "file": "OSTR C4.wav",
+        "sha256": "0cb70184e0694a86407c55e62861e0679623f8b9006723ca2a1bf2783d1cf4ef",
+        "bytes": 305198
+      }
+    }
+  ]
+}

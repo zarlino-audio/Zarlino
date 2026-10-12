@@ -1,0 +1,15 @@
+# Canonical evidence files must stay BYTE-EXACT: never let git apply
+# line-ending or encoding filters to audio, images or archives. The sha256 of
+# these files is evidence identity (see tools/release/release-manifest.mjs).
+*.wav  binary
+*.flac binary
+*.mp3  binary
+*.ogg  binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.zip  binary
+*.exe  binary
+*.dll  binary
+*.vst3 binary

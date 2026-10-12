@@ -1,19 +1,22 @@
 /*
-    ZTame real-instrument A/B renderer.
+    ZTame real-instrument A/B renderer (canonical release audio pipeline).
 
-    Renders genuine recorded multitrack stems through the real ZTame engine and
-    writes a strictly comparable dry/wet pair per source:
+    Renders genuine recorded sources through the real ZTame engine and writes
+    per source:
 
-        <name>-A-dry.wav    latency-aligned bypass of the plugin (honest reference)
-        <name>-B-wet.wav    ZTame v1.2 engaged, loudness-matched to the dry file
+        <name>-A-dry.wav       dry master - latency-aligned bypass (honest reference)
+        <name>-B-wet-raw.wav   wet master - ZTame engaged, UNMODIFIED by measurement
+        <name>-B-wet.wav       comparison copy - wet loudness-matched to the dry file
 
-    Why this is not the demo RenderLab:
-      * sources are REAL instrument recordings read from disk, not synthesised
-      * output is 24-bit / 48 kHz
-      * the dry reference passes through the plugin in bypass so both files carry
-        exactly the same engine latency (sample-accurate alignment)
-      * the wet file is loudness-matched to the dry so the A/B is level-honest
-      * every file's peak dBFS and integrated LUFS is printed to stdout
+    Masters preserve the untouched render; only the comparison copy carries the
+    level-matched transformation, which is recorded in render-metrics.json. The
+    A/B is never made to sound better through a level bias.
+
+    Also writes render-metrics.json (machine-readable): per-source peak / RMS /
+    integrated LUFS for dry, raw wet and matched wet, the applied trim, latency
+    and the source's native sample rate. Sources whose rate differs from 48000 Hz
+    are resampled with a deterministic JUCE Lagrange interpolator before rendering
+    (recorded per source as "resampled").
 
     Usage: ZTame_RealRender <manifest.json>
 
@@ -82,6 +85,17 @@ namespace
         return token.getDoubleValue();
     }
 
+    juce::String jstr (const juce::String& s)
+    {
+        juce::String out;
+        for (auto c : s)
+        {
+            if (c == '"' || c == '\\') out << '\\';
+            out << c;
+        }
+        return "\"" + out + "\"";
+    }
+
     Manifest parseManifest (const juce::String& json)
     {
         Manifest m;
@@ -121,9 +135,11 @@ namespace
 {
 
     //==========================================================================
-    // Loading — the source stems are 32-bit float WAV; JUCE's reader handles them.
+    // Loading — WAV or FLAC; anything not already 48 kHz is resampled with a
+    // deterministic Lagrange interpolator so every render runs at 48000 Hz.
     //==========================================================================
-    bool loadStereo (const juce::File& file, juce::AudioBuffer<float>& dest)
+    bool loadStereo (const juce::File& file, juce::AudioBuffer<float>& dest,
+                     double& sourceRate, bool& resampled)
     {
         juce::AudioFormatManager formats;
         formats.registerBasicFormats();
@@ -141,11 +157,30 @@ namespace
         dest.setSize (numChannels, numSamples);
         reader->read (&dest, 0, numSamples, 0, true, numChannels > 1);
 
+        sourceRate = reader->sampleRate > 0 ? reader->sampleRate : kSampleRate;
+        resampled  = std::abs (sourceRate - kSampleRate) > 0.5;
+
+        if (resampled)
+        {
+            const double ratio = sourceRate / kSampleRate;   // input samples per output sample
+            const int outLen   = (int) std::round ((double) numSamples / ratio);
+
+            juce::AudioBuffer<float> rs (numChannels, outLen);
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                juce::LagrangeInterpolator interp;
+                interp.reset();
+                interp.process (ratio, dest.getReadPointer (ch), rs.getWritePointer (ch), outLen);
+            }
+            dest = std::move (rs);
+        }
+
         // Mono sources run through both channels of the stereo engine.
         if (numChannels == 1)
         {
-            dest.setSize (2, numSamples, true, true, true);
-            dest.copyFrom (1, 0, dest, 0, 0, numSamples);
+            const int n = dest.getNumSamples();
+            dest.setSize (2, n, true, true, true);
+            dest.copyFrom (1, 0, dest, 0, 0, n);
         }
 
         return true;
@@ -440,10 +475,11 @@ int main (int argc, char** argv)
                        + ", releaseMs=" + juce::String (settings.releaseMs)
                        + ", dryWet=" + juce::String (settings.dryWet));
     manifestLines.add ("");
-    manifestLines.add ("| source | dry peak dBFS | dry LUFS | wet peak dBFS | wet LUFS | trim dB | latency samples |");
+    manifestLines.add ("| source | dry LUFS | wet LUFS | target LUFS | dry gain dB | wet gain dB | matched delta LU | latency samples |");
     manifestLines.add ("|---|---|---|---|---|---|---|");
 
     juce::StringArray statusLines;
+    juce::StringArray metricsEntries;
     int rendered = 0;
 
     for (const auto& source : manifest.sources)
@@ -451,7 +487,9 @@ int main (int argc, char** argv)
         std::cout << "== " << source.name << std::endl;
 
         juce::AudioBuffer<float> whole;
-        if (! loadStereo (juce::File (source.path), whole))
+        double sourceRate = 0.0;
+        bool   resampled  = false;
+        if (! loadStereo (juce::File (source.path), whole, sourceRate, resampled))
         {
             const auto msg = source.name + ": FAILED to load source file " + juce::String (source.path);
             std::cerr << "  !! " << msg << std::endl;
@@ -484,6 +522,11 @@ int main (int argc, char** argv)
         wet.makeCopyOf (segment);
         renderThrough (*wetProc, wet, false);
 
+        // The wet MASTER: taken before any measurement-driven gain change, so
+        // canonical evidence is never altered by the loudness match.
+        juce::AudioBuffer<float> wetRaw;
+        wetRaw.makeCopyOf (wet);
+
         // ------------------------------------------------------------------
         // Dry pass: the SAME engine run through processBlockBypassed, so the
         // reference carries identical latency and both files are sample-aligned.
@@ -497,57 +540,120 @@ int main (int argc, char** argv)
         renderThrough (*dryProc, dry, true);
 
         // ------------------------------------------------------------------
-        // Loudness match: trim wet so its integrated loudness equals the dry
-        // file's. This is what makes the A/B honest — no level bias.
+        // Fair A/B (min-target convention): BOTH comparison copies are levelled
+        // to the QUIETER side's integrated loudness, so neither side can sound
+        // better through a level bias and no added gain pushes peaks above the
+        // master renders. Only the comparison copies carry this recorded
+        // transformation; the masters stay untouched.
         // ------------------------------------------------------------------
         const double dryLufs = integratedLufs (dry);
         const double wetLufsBefore = integratedLufs (wet);
+        const float wetRawPeak = peakDb (wetRaw);
 
-        double trimDb = 0.0;
+        double targetLufs = 0.0;
         if (std::isfinite (dryLufs) && std::isfinite (wetLufsBefore))
-            trimDb = dryLufs - wetLufsBefore;
+            targetLufs = juce::jmin (dryLufs, wetLufsBefore);
 
-        if (std::abs (trimDb) > 0.001)
-            wet.applyGain (juce::Decibels::decibelsToGain ((float) trimDb));
+        const double dryGainDb = std::isfinite (dryLufs) ? (targetLufs - dryLufs) : 0.0;
+        const double wetGainDb = std::isfinite (wetLufsBefore) ? (targetLufs - wetLufsBefore) : 0.0;
+
+        juce::AudioBuffer<float> dryCmp;
+        dryCmp.makeCopyOf (dry);
+        if (std::abs (dryGainDb) > 0.001)
+            dryCmp.applyGain (juce::Decibels::decibelsToGain ((float) dryGainDb));
+
+        juce::AudioBuffer<float> wetCmp;
+        wetCmp.makeCopyOf (wetRaw);
+        if (std::abs (wetGainDb) > 0.001)
+            wetCmp.applyGain (juce::Decibels::decibelsToGain ((float) wetGainDb));
 
         const float dryPeak = peakDb (dry);
-        const float wetPeak = peakDb (wet);
-        const double wetLufs = integratedLufs (wet);
+        const float dryCompPeak = peakDb (dryCmp);
+        const float wetCompPeak = peakDb (wetCmp);
+        const double dryCompLufs = integratedLufs (dryCmp);
+        const double wetCompLufs = integratedLufs (wetCmp);
+        const double matchedDeltaLu = (std::isfinite (dryCompLufs) && std::isfinite (wetCompLufs))
+                                        ? (wetCompLufs - dryCompLufs) : 0.0;
         const float dryRms = rmsDb (dry);
-        const float wetRms = rmsDb (wet);
+        const float wetRms = rmsDb (wetRaw);
 
         const juce::String base (source.name);
-        const auto dryFile = outDir.getChildFile (base + "-A-dry.wav");
-        const auto wetFile = outDir.getChildFile (base + "-B-wet.wav");
+        const auto dryFile    = outDir.getChildFile (base + "-A-dry.wav");
+        const auto dryCmpFile = outDir.getChildFile (base + "-A-dry-compare.wav");
+        const auto wetRawFile = outDir.getChildFile (base + "-B-wet-raw.wav");
+        const auto wetCmpFile = outDir.getChildFile (base + "-B-wet.wav");
 
-        const bool okDry = writeWav24 (dryFile, dry);
-        const bool okWet = writeWav24 (wetFile, wet);
+        const bool okDry    = writeWav24 (dryFile, dry);
+        const bool okDryCmp = writeWav24 (dryCmpFile, dryCmp);
+        const bool okWetRaw = writeWav24 (wetRawFile, wetRaw);
+        const bool okWetCmp = writeWav24 (wetCmpFile, wetCmp);
 
-        if (! okDry || ! okWet)
+        if (! okDry || ! okDryCmp || ! okWetRaw || ! okWetCmp)
         {
             statusLines.add ("- **FAILED** " + base + ": could not write WAV files");
             continue;
         }
 
-        std::cout << "  dry  peak " << juce::String (dryPeak, 2) << " dBFS"
+        {
+            juce::String e;
+            e << "    {\n";
+            e << "      \"name\": " << jstr (base) << ",\n";
+            e << "      \"sourceFile\": " << jstr (juce::File (source.path).getFileName()) << ",\n";
+            e << "      \"sourceSampleRate\": " << juce::String (sourceRate, 0) << ",\n";
+            e << "      \"resampled\": " << (resampled ? "true" : "false") << ",\n";
+            e << "      \"durationSec\": " << juce::String (segment.getNumSamples() / kSampleRate, 6) << ",\n";
+            e << "      \"latencySamples\": " << latency << ",\n";
+            e << "      \"dryMaster\": { \"file\": " << jstr (dryFile.getFileName())
+              << ", \"peakDb\": " << juce::String (dryPeak, 4)
+              << ", \"rmsDb\": " << juce::String (dryRms, 4)
+              << ", \"lufs\": " << juce::String (dryLufs, 4) << " },\n";
+            e << "      \"wetRawMaster\": { \"file\": " << jstr (wetRawFile.getFileName())
+              << ", \"peakDb\": " << juce::String (wetRawPeak, 4)
+              << ", \"rmsDb\": " << juce::String (wetRms, 4)
+              << ", \"lufs\": " << juce::String (wetLufsBefore, 4) << " },\n";
+            e << "      \"dryComparison\": { \"file\": " << jstr (dryCmpFile.getFileName())
+              << ", \"peakDb\": " << juce::String (dryCompPeak, 4)
+              << ", \"lufs\": " << juce::String (dryCompLufs, 4)
+              << ", \"gainDb\": " << juce::String (dryGainDb, 4) << " },\n";
+            e << "      \"wetComparison\": { \"file\": " << jstr (wetCmpFile.getFileName())
+              << ", \"peakDb\": " << juce::String (wetCompPeak, 4)
+              << ", \"lufs\": " << juce::String (wetCompLufs, 4)
+              << ", \"gainDb\": " << juce::String (wetGainDb, 4) << " },\n";
+            e << "      \"loudnessMatch\": { \"rawDeltaLu\": " << juce::String (wetLufsBefore - dryLufs, 4)
+              << ", \"targetLufs\": " << juce::String (targetLufs, 4)
+              << ", \"dryGainDb\": " << juce::String (dryGainDb, 4)
+              << ", \"wetGainDb\": " << juce::String (wetGainDb, 4)
+              << ", \"matchedDeltaLu\": " << juce::String (matchedDeltaLu, 4) << " }\n";
+            e << "    }";
+            metricsEntries.add (e);
+        }
+
+        std::cout << "  source " << juce::String (sourceRate, 0) << " Hz"
+                  << (resampled ? " (resampled to 48000)" : " (native)") << std::endl;
+        std::cout << "  dry  master  peak " << juce::String (dryPeak, 2) << " dBFS"
                   << "  LUFS " << juce::String (dryLufs, 2)
                   << "  rms " << juce::String (dryRms, 2) << std::endl;
-        std::cout << "  wet  peak " << juce::String (wetPeak, 2) << " dBFS"
-                  << "  LUFS " << juce::String (wetLufs, 2)
-                  << "  rms " << juce::String (wetRms, 2)
-                  << "  (trim " << juce::String (trimDb, 2) << " dB)" << std::endl;
+        std::cout << "  wet  master  peak " << juce::String (wetRawPeak, 2) << " dBFS"
+                  << "  LUFS " << juce::String (wetLufsBefore, 2)
+                  << "  rms " << juce::String (wetRms, 2) << std::endl;
+        std::cout << "  compare pair LUFS " << juce::String (targetLufs, 2)
+                  << "  (gains dry " << juce::String (dryGainDb, 2)
+                  << " dB / wet " << juce::String (wetGainDb, 2) << " dB)"
+                  << "  matched delta " << juce::String (matchedDeltaLu, 3) << " LU" << std::endl;
         std::cout << "  latency " << latency << " samples" << std::endl;
-        std::cout << "  wrote " << dryFile.getFileName() << ", " << wetFile.getFileName() << std::endl;
+        std::cout << "  wrote " << dryFile.getFileName() << ", " << dryCmpFile.getFileName() << ", "
+                  << wetRawFile.getFileName() << ", " << wetCmpFile.getFileName() << std::endl;
 
         manifestLines.add ("| " + base
-                           + " | " + juce::String (dryPeak, 2)
                            + " | " + juce::String (dryLufs, 2)
-                           + " | " + juce::String (wetPeak, 2)
-                           + " | " + juce::String (wetLufs, 2)
-                           + " | " + juce::String (trimDb, 2)
+                           + " | " + juce::String (wetLufsBefore, 2)
+                           + " | " + juce::String (targetLufs, 2)
+                           + " | " + juce::String (dryGainDb, 2)
+                           + " | " + juce::String (wetGainDb, 2)
+                           + " | " + juce::String (matchedDeltaLu, 3)
                            + " | " + juce::String (latency) + " |");
 
-        statusLines.add ("- OK " + base + " (dry + wet written, latency "
+        statusLines.add ("- OK " + base + " (masters + comparison pair written, latency "
                          + juce::String (latency) + " samples)");
         ++rendered;
     }
@@ -564,9 +670,39 @@ int main (int argc, char** argv)
     const auto manifestOut = outDir.getChildFile ("MANIFEST.md");
     manifestOut.replaceWithText (manifestLines.joinIntoString ("\n"));
 
+    // ---------------------------------------------------------------- metrics
+    // Machine-readable record for automated validation (tools/release/
+    // validate-audio.mjs): raw and matched loudness, peaks, trims, latency and
+    // per-source sample rate. The manifest tool hashes these files; nothing
+    // downstream may re-derive them.
+    juce::StringArray metrics;
+    metrics.add ("{");
+    metrics.add ("  \"schemaVersion\": 1,");
+    metrics.add ("  \"plugin\": \"ZTame\",");
+    metrics.add ("  \"version\": " + jstr (manifest.version) + ",");
+    metrics.add ("  \"gitHead\": " + jstr (manifest.gitHead) + ",");
+    metrics.add ("  \"renderer\": \"ZTame_RealRender\",");
+    metrics.add ("  \"renderSampleRate\": 48000,");
+    metrics.add ("  \"renderBitDepth\": 24,");
+    metrics.add ("  \"blockSize\": " + juce::String (kBlockSize) + ",");
+    metrics.add ("  \"settings\": { \"sensitivity\": " + juce::String (settings.sensitivity, 2)
+                 + ", \"selectivity\": " + juce::String (settings.selectivity, 2)
+                 + ", \"rangeDb\": " + juce::String (settings.rangeDb, 2)
+                 + ", \"attackMs\": " + juce::String (settings.attackMs, 2)
+                 + ", \"releaseMs\": " + juce::String (settings.releaseMs, 2)
+                 + ", \"dryWet\": " + juce::String (settings.dryWet, 2) + " },");
+    metrics.add ("  \"sources\": [");
+    metrics.add (metricsEntries.joinIntoString (",\n"));
+    metrics.add ("  ]");
+    metrics.add ("}");
+
+    const auto metricsOut = outDir.getChildFile ("render-metrics.json");
+    metricsOut.replaceWithText (metrics.joinIntoString ("\n") + "\n");
+
     std::cout << std::endl;
     std::cout << "Rendered " << rendered << " source(s). Manifest: "
               << manifestOut.getFullPathName() << std::endl;
+    std::cout << "Metrics: " << metricsOut.getFullPathName() << std::endl;
     std::cout.flush();
 
     std::exit (0);   // audio processors are intentionally leaked (console teardown can hang)

@@ -44,3 +44,6 @@ zarlino-source/
 zarlino-website/
 realestate-os/
 *.rdp
+
+# python tooling cache
+__pycache__/

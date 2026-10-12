@@ -47,8 +47,8 @@ jobs:
       #
       # ZTame_UiShot is a console app that renders the REAL editor offscreen
       # (no window manager) — it produces the canonical release screenshot.
-      - name: Build ZTame (VST3 + Standalone), test runner and UiShot
-        run: cmake --build build --config Release --target ZTame_All ZTame_Tests ZTame_UiShot --parallel
+      - name: Build ZTame (VST3 + Standalone), test runner, UiShot and RealRender
+        run: cmake --build build --config Release --target ZTame_All ZTame_Tests ZTame_UiShot ZTame_RealRender --parallel
 
       # Scope the label gate to THIS plugin's suite, and refuse to report a
       # green gate when nothing was selected.
@@ -167,10 +167,66 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File tools/release/validate-screenshot.ps1 -Path artifacts/ztame-ui.png -MinWidth 640 -MinHeight 480
 
+      # --- Canonical audio evidence (§10-§14) --------------------------------
+      # The EXACT release candidate renders the committed reference set
+      # (plugins/ZTame/references/) dry + wet. Masters stay untouched; the
+      # comparison pair is levelled to the quieter side (min-target) so the A/B
+      # can never be won by loudness. Measurements are machine-validated.
+      - name: Generate audio render manifest
+        shell: pwsh
+        run: |
+          node tools/release/build-render-manifest.mjs `
+            --references plugins/ZTame/references/references.json `
+            --outDir artifacts/audio --out artifacts/audio-manifest.json `
+            --version 1.2.0 --gitHead ${{ github.sha }}
+          if ($LASTEXITCODE -ne 0) { throw "audio render manifest generation failed" }
+
+      - name: Render canonical audio (dry/wet through the release plugin)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "build/plugins/ZTame/ZTame_RealRender_artefacts" -Recurse -Filter "ZTame_RealRender.exe" | Select-Object -First 1
+          if (-not $exe) { throw "ZTame_RealRender.exe not found - audio pipeline cannot run" }
+          & $exe.FullName "artifacts/audio-manifest.json"
+          if ($LASTEXITCODE -ne 0) { throw "ZTame_RealRender failed with exit code $LASTEXITCODE" }
+
+      - name: Validate audio evidence (loudness-matched, non-silent, complete)
+        shell: pwsh
+        run: |
+          node tools/release/validate-audio.mjs `
+            --metrics artifacts/audio/render-metrics.json `
+            --dir artifacts/audio `
+            --references plugins/ZTame/references/references.json `
+            --out artifacts/audio-validation.json
+          if ($LASTEXITCODE -ne 0) { throw "audio validation failed - release NOT verified" }
+
+      - name: Install web audio encoder (pinned)
+        shell: pwsh
+        run: npm install --no-save --prefix artifacts/webencoder --no-audit --no-fund @breezystack/lamejs@1.2.7
+
+      - name: Encode web previews (MP3 from the comparison pair)
+        shell: pwsh
+        working-directory: artifacts/webencoder
+        run: |
+          node "$env:GITHUB_WORKSPACE/tools/release/encode-web-audio.mjs" `
+            --metrics "$env:GITHUB_WORKSPACE/artifacts/audio/render-metrics.json" `
+            --dir "$env:GITHUB_WORKSPACE/artifacts/audio" `
+            --outDir "$env:GITHUB_WORKSPACE/artifacts/audio/web"
+          if ($LASTEXITCODE -ne 0) { throw "web audio encoding failed" }
+
+      - name: Build audio evidence bundle (referenced + hashed)
+        shell: pwsh
+        run: |
+          node tools/release/build-audio-evidence.mjs `
+            --metrics artifacts/audio/render-metrics.json `
+            --references plugins/ZTame/references/references.json `
+            --dir artifacts/audio --webDir artifacts/audio/web `
+            --out artifacts/audio-evidence.json
+          if ($LASTEXITCODE -ne 0) { throw "audio evidence build failed" }
+
       # --- Release manifest: the atomic release unit (§7/§8/§17) -------------
-      # Binds binaries + screenshot + metadata + commit to the SAME release
-      # candidate with sha256 hashes. finalize recomputes every hash from disk
-      # and only then flips the status to VERIFIED - fail closed.
+      # Binds binaries + screenshot + canonical audio + metadata + commit to the
+      # SAME release candidate with sha256 hashes. finalize recomputes every
+      # hash from disk and only then flips the status to VERIFIED - fail closed.
       - name: Generate release manifest (hashes)
         shell: pwsh
         run: |
@@ -180,7 +236,8 @@ jobs:
             --installer artifacts/ZTame-v1.2.0-Windows-Installer.exe `
             --vst3 artifacts/ZTame-v1.2.0-Windows-VST3.zip `
             --standalone artifacts/ZTame-v1.2.0-Windows-Standalone.zip `
-            --screenshot artifacts/ztame-ui.png
+            --screenshot artifacts/ztame-ui.png `
+            --audio artifacts/audio-evidence.json
           if ($LASTEXITCODE -ne 0) { throw "manifest generation failed" }
 
       - name: Validate + finalize release manifest (integrity re-check)
@@ -188,7 +245,7 @@ jobs:
         run: |
           node tools/release/release-manifest.mjs validate --manifest artifacts/release-manifest.json
           if ($LASTEXITCODE -ne 0) { throw "manifest validation failed" }
-          node tools/release/release-manifest.mjs finalize --manifest artifacts/release-manifest.json --dir artifacts
+          node tools/release/release-manifest.mjs finalize --manifest artifacts/release-manifest.json --dir artifacts --audio-dir artifacts/audio --web-dir artifacts/audio/web
           if ($LASTEXITCODE -ne 0) { throw "manifest finalize (integrity) failed - release NOT verified" }
 
       # --- Upload all artifacts ---
@@ -231,4 +288,21 @@ jobs:
         with:
           name: ZTame-v1.2.0-canonical-screenshot
           path: artifacts/ztame-ui.png
+          if-no-files-found: error
+
+      # Canonical audio evidence: masters (dry + wet raw), the level-matched
+      # comparison pair, the web previews, the machine measurements and the
+      # validation record. All are sha256-bound inside the release manifest.
+      - name: Upload canonical audio evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTame-v1.2.0-canonical-audio
+          path: |
+            artifacts/audio/MANIFEST.md
+            artifacts/audio/render-metrics.json
+            artifacts/audio/*.wav
+            artifacts/audio/web/*.mp3
+            artifacts/audio/web/web-audio.json
+            artifacts/audio-validation.json
+            artifacts/audio-evidence.json
           if-no-files-found: error

@@ -32,18 +32,26 @@
  *     --installer artifacts/ZTame-v1.2.0-Windows-Installer.exe \
  *     --vst3 artifacts/ZTame-v1.2.0-Windows-VST3.zip \
  *     --standalone artifacts/ZTame-v1.2.0-Windows-Standalone.zip \
- *     [--screenshot artifacts/ztame-ui.png] [--gaps "..."]...
+ *     [--screenshot artifacts/ztame-ui.png] \
+ *     [--audio artifacts/audio-evidence.json] [--gaps "..."]...
  *   node tools/release/release-manifest.mjs validate --manifest <file>
- *   node tools/release/release-manifest.mjs finalize --manifest <file>
+ *   node tools/release/release-manifest.mjs finalize --manifest <file> \
+ *     [--dir artifacts] [--audio-dir artifacts/audio] [--web-dir artifacts/audio/web]
+ *
+ * SCHEMA v2 adds audioExamples[] (canonical audio evidence: per-example
+ * reference + dry/wet masters + level-matched comparison + web previews, all
+ * sha256-bound, produced by tools/release/build-audio-evidence.mjs and
+ * validated by tools/release/validate-audio.mjs). v1 manifests still validate.
  *
  * EXIT 0 ok · 1 invalid / failed closed
  */
 
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, dirname, join } from "node:path";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;                       // v2 adds canonical audioExamples[]
+const SUPPORTED_SCHEMA_VERSIONS = [1, 2];
 const RELEASABLE_STATUSES = ["verifying", "verified"];
 const ALL_STATUSES = [
   "building",
@@ -91,7 +99,9 @@ function parseFlags(argv) {
 function validateManifest(m, { forFinalize = false } = {}) {
   const errors = [];
   if (!m || typeof m !== "object") return ["manifest is not an object"];
-  if (m.schemaVersion !== SCHEMA_VERSION) errors.push(`schemaVersion must be ${SCHEMA_VERSION}`);
+  if (!SUPPORTED_SCHEMA_VERSIONS.includes(m.schemaVersion)) {
+    errors.push(`schemaVersion must be one of ${SUPPORTED_SCHEMA_VERSIONS.join("|")}`);
+  }
   if (typeof m.product !== "string" || !m.product.trim()) errors.push("product is required");
   if (typeof m.version !== "string" || !VERSION_RE.test(m.version)) {
     errors.push("version must be semver-like (e.g. 1.2.0)");
@@ -145,7 +155,60 @@ function validateManifest(m, { forFinalize = false } = {}) {
       errors.push("media.heroScreenshot.generatedFromCommit must equal commit (same release candidate)");
     }
   }
-  if (!Array.isArray(m.audioExamples)) errors.push("audioExamples must be an array (may be empty)");
+  if (!Array.isArray(m.audioExamples)) {
+    errors.push("audioExamples must be an array (may be empty)");
+  } else if (m.audioExamples.length) {
+    if (m.schemaVersion !== 2) errors.push("audioExamples entries require schemaVersion 2");
+    m.audioExamples.forEach((ex, i) => {
+      const p = `audioExamples[${i}]`;
+      if (typeof ex.id !== "string" || !ex.id) errors.push(`${p}.id is required`);
+      const ref = ex.reference || {};
+      if (typeof ref.file !== "string" || !ref.file || ref.file.includes("\\")
+          || ref.file.startsWith("/") || /(^[A-Za-z]:)|\.\./.test(ref.file)) {
+        errors.push(`${p}.reference.file must be a repository-relative forward-slash path`);
+      }
+      if (typeof ref.sha256 !== "string" || !SHA256_RE.test(ref.sha256)) {
+        errors.push(`${p}.reference.sha256 must be 64-char lowercase hex`);
+      }
+      if (!Number.isInteger(ref.bytes) || ref.bytes <= 0) {
+        errors.push(`${p}.reference.bytes must be a positive integer`);
+      }
+      const render = ex.render || {};
+      for (const k of ["dryMaster", "wetRawMaster", "dryComparison", "wetComparison"]) {
+        const f = render[k] || {};
+        if (typeof f.file !== "string" || !f.file || f.file !== basename(f.file)) {
+          errors.push(`${p}.render.${k}.file must be a plain file name`);
+        }
+        if (typeof f.sha256 !== "string" || !SHA256_RE.test(f.sha256)) {
+          errors.push(`${p}.render.${k}.sha256 must be 64-char lowercase hex`);
+        }
+        if (!Number.isInteger(f.bytes) || f.bytes <= 0) {
+          errors.push(`${p}.render.${k}.bytes must be a positive integer`);
+        }
+      }
+      const lm = ((render.measurements || {}).loudnessMatch) || {};
+      for (const k of ["rawDeltaLu", "matchedDeltaLu", "dryGainDb", "wetGainDb"]) {
+        if (typeof lm[k] !== "number" || !Number.isFinite(lm[k])) {
+          errors.push(`${p}.render.measurements.loudnessMatch.${k} must be a finite number`);
+        }
+      }
+      if (ex.web !== undefined) {
+        for (const k of ["dryMp3", "wetMp3"]) {
+          const f = ex.web[k];
+          if (!f) continue;
+          if (typeof f.file !== "string" || !f.file || f.file !== basename(f.file)) {
+            errors.push(`${p}.web.${k}.file must be a plain file name`);
+          }
+          if (typeof f.sha256 !== "string" || !SHA256_RE.test(f.sha256)) {
+            errors.push(`${p}.web.${k}.sha256 must be 64-char lowercase hex`);
+          }
+          if (!Number.isInteger(f.bytes) || f.bytes <= 0) {
+            errors.push(`${p}.web.${k}.bytes must be a positive integer`);
+          }
+        }
+      }
+    });
+  }
   if (m.gaps !== undefined && !Array.isArray(m.gaps)) errors.push("gaps must be an array when present");
 
   if (forFinalize) {
@@ -199,6 +262,27 @@ function cmdGenerate(flags) {
     };
   }
 
+  let audioExamples = [];
+  if (flags.audio) {
+    let doc;
+    try {
+      doc = JSON.parse(readFileSync(flags.audio, "utf8"));
+    } catch (e) {
+      fail(`cannot read --audio evidence: ${flags.audio} (${e.message})`);
+    }
+    if (doc.version !== undefined && doc.version !== flags.version) {
+      fail(`audio evidence version "${doc.version}" does not match release version "${flags.version}"`);
+    }
+    if (doc.renderCommit !== undefined && doc.renderCommit !== flags.commit) {
+      fail(`audio evidence renderCommit "${doc.renderCommit}" does not match release commit "${flags.commit}"`);
+    }
+    if (!Array.isArray(doc.examples) || doc.examples.length === 0) {
+      fail("audio evidence contains no examples - refusing to attach an empty audio evidence set");
+    }
+    audioExamples = doc.examples;
+    console.log(`release-manifest: audio evidence loaded (${audioExamples.length} example(s), commit-bound)`);
+  }
+
   const manifest = {
     schemaVersion: SCHEMA_VERSION,
     product: flags.product,
@@ -208,7 +292,7 @@ function cmdGenerate(flags) {
     status: "verifying",
     artifacts,
     media: { heroScreenshot },
-    audioExamples: [],
+    audioExamples,
     gaps: flags.gaps.length ? flags.gaps : [],
   };
 
@@ -282,6 +366,29 @@ function cmdFinalize(flags) {
   }
   if (m.media?.heroScreenshot) {
     checkPath("media.heroScreenshot", m.media.heroScreenshot, dirs);
+  }
+
+  // Canonical audio evidence: every rendered master / comparison file and the
+  // committed reference it was rendered from is re-hashed from disk. Web
+  // previews are checked when present. Nothing is certified that does not
+  // match its recorded hash.
+  if (Array.isArray(m.audioExamples) && m.audioExamples.length) {
+    if (m.schemaVersion !== 2) fail("audioExamples require schemaVersion 2");
+    const audioDir = flags["audio-dir"] || join(dirname(flags.manifest), "audio");
+    const webDir = flags["web-dir"] || join(audioDir, "web");
+    for (const ex of m.audioExamples) {
+      checkPath(`audio[${ex.id}].render.dryMaster`, ex.render.dryMaster, [audioDir]);
+      checkPath(`audio[${ex.id}].render.wetRawMaster`, ex.render.wetRawMaster, [audioDir]);
+      checkPath(`audio[${ex.id}].render.dryComparison`, ex.render.dryComparison, [audioDir]);
+      checkPath(`audio[${ex.id}].render.wetComparison`, ex.render.wetComparison, [audioDir]);
+      checkPath(`audio[${ex.id}].reference`, ex.reference, [""]);
+      if (ex.web) {
+        for (const k of ["dryMp3", "wetMp3"]) {
+          if (ex.web[k]) checkPath(`audio[${ex.id}].web.${k}`, ex.web[k], [webDir]);
+        }
+      }
+    }
+    console.log(`  integrity ok: ${m.audioExamples.length} audio example(s), references + masters + web previews hashed`);
   }
 
   m.status = "verified";

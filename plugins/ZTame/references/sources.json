@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "product": "ZTame",
+  "description": "Canonical reference inputs for ZTame release evidence. Each entry names a LOCAL source file (founder machine, not version-controlled), the byte-exact segment used, and its provenance. tools/release/prepare-references.py materialises the committed WAV references and their hashes into references.json. Never silently replace a source while retaining the same evidence identity - change this file, re-run the script, commit both.",
+  "sources": [
+    {
+      "id": "loop-disguise",
+      "file": "loop-disguise.wav",
+      "path": "C:/Users/khrit/Downloads/looperman-l-3395732-0434557-disguise-prod-sconthetrack.wav",
+      "startSec": 0,
+      "seconds": 10,
+      "kind": "loop",
+      "title": "Disguise (prod. sconthetrack) - full beat loop",
+      "origin": "looperman.com upload 3395732/0434557 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication"
+    },
+    {
+      "id": "loop-delight",
+      "file": "loop-delight.wav",
+      "path": "C:/Users/khrit/Downloads/looperman-l-3395732-0434558-delight-prod-sconthetrack.wav",
+      "startSec": 0,
+      "seconds": 10,
+      "kind": "loop",
+      "title": "Delight (prod. sconthetrack) - full beat loop",
+      "origin": "looperman.com upload 3395732/0434558 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication"
+    },
+    {
+      "id": "loop-uk-bass-vocal-chop",
+      "file": "loop-uk-bass-vocal-chop.wav",
+      "path": "C:/Users/khrit/Downloads/looperman-l-7424908-0433015-uk-bass-vocal-chop.wav",
+      "startSec": 0,
+      "seconds": 10,
+      "kind": "loop",
+      "title": "UK bass with vocal chop",
+      "origin": "looperman.com upload 7424908/0433015 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication"
+    },
+    {
+      "id": "loop-afro-drum-115",
+      "file": "loop-afro-drum-115.wav",
+      "path": "C:/Users/khrit/Downloads/looperman-l-8232127-0434008-115bpm-afro-drum.wav",
+      "startSec": 0,
+      "seconds": null,
+      "kind": "loop",
+      "title": "Afro drum groove 115 BPM (whole file)",
+      "origin": "looperman.com upload 8232127/0434008 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication"
+    },
+    {
+      "id": "loop-afrohouse-102",
+      "file": "loop-afrohouse-102.wav",
+      "path": "C:/Users/khrit/Downloads/looperman-l-8630321-0434339-102bpm-afrohouse-drums-with-kick.wav",
+      "startSec": 0,
+      "seconds": 10,
+      "kind": "loop",
+      "title": "Afrohouse drums with kick 102 BPM",
+      "origin": "looperman.com upload 8630321/0434339 - founder download",
+      "rights": "UNVERIFIED - looperman upload; confirm license and attribution before any public web publication"
+    },
+    {
+      "id": "oneshot-nylon-guitar-d4",
+      "file": "oneshot-nylon-guitar-d4.flac",
+      "path": "C:/Users/khrit/Documents/Image-Line/Downloads/FL Studio Mobile Factory Data/DirectWave Samples/Guitar/Nylon Guitar/Nylon Guitar d4.wav",
+      "startSec": 0,
+      "seconds": null,
+      "kind": "oneshot",
+      "title": "Nylon guitar D4 (DirectWave one-shot)",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input"
+    },
+    {
+      "id": "oneshot-bass-c2",
+      "file": "oneshot-bass-c2.flac",
+      "path": "C:/Users/khrit/Documents/Image-Line/Downloads/FL Studio Mobile Factory Data/DirectWave Samples/Guitar/Picked Bass/5String BopBass Pick_C2.wav",
+      "startSec": 0,
+      "seconds": null,
+      "kind": "oneshot",
+      "title": "Picked five-string bass C2 (DirectWave one-shot)",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input"
+    },
+    {
+      "id": "oneshot-rhodes-3",
+      "file": "oneshot-rhodes-3.flac",
+      "path": "C:/Users/khrit/Documents/Image-Line/Downloads/FL Studio Mobile Factory Data/DirectWave Samples/Keyboard/Sytrus Rhodes Piano/Rhodes Piano (3).wav",
+      "startSec": 0,
+      "seconds": null,
+      "kind": "oneshot",
+      "title": "Rhodes piano (Sytrus) one-shot",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input"
+    },
+    {
+      "id": "oneshot-strings-c4",
+      "file": "oneshot-strings-c4.flac",
+      "path": "C:/Users/khrit/Documents/Image-Line/Downloads/FL Studio Mobile Factory Data/DirectWave Samples/Orchestral/Strings Section/OSTR C4.wav",
+      "startSec": 0,
+      "seconds": null,
+      "kind": "oneshot",
+      "title": "Orchestral strings section C4 (DirectWave one-shot)",
+      "origin": "FL Studio stock content - DirectWave Samples (founder machine)",
+      "rights": "FL Studio / Image-Line stock content; used as internal CI test input"
+    }
+  ]
+}
