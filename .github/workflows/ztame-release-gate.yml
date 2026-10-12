@@ -15,6 +15,7 @@ on:
       - 'shared/**'
       - 'cmake/ZarlinoTest.cmake'
       - 'tools/release/**'
+      - '.github/workflows/ztame-release-gate.yml'
   workflow_dispatch:
 
 jobs:
