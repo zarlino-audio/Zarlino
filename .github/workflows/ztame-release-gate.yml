@@ -204,14 +204,14 @@ jobs:
         with:
           name: ZTame-v1.2.0-Windows-Standalone
           path: artifacts/ZTame-v1.2.0-Windows-Standalone.zip
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
           name: ZTame-v1.2.0-Windows-Installer
           path: artifacts/ZTame-v1.2.0-Windows-Installer.exe
-          if-no-files-found: warn
+          if-no-files-found: error
 
       # The manifest is the authoritative relationship between binaries,
       # screenshot, metadata and commit. Only a VERIFIED manifest may be
