@@ -1,0 +1,172 @@
+{
+  "factorySchemaVersion": 1,
+  "plugin": {
+    "id": "zarlino.example.vocal",
+    "name": "Example Vocal Processor",
+    "vendor": "Zarlino Audio",
+    "version": "1.0.0",
+    "effectType": "vocal-processor",
+    "channels": "mono"
+  },
+  "graph": {
+    "modules": [
+      {
+        "instanceId": "gate",
+        "moduleId": "zarlino.dynamics.gate",
+        "moduleVersion": "1.0.0",
+        "parameters": { "threshold": -45.0, "range": -30.0, "attack": 2.0, "release": 200.0, "hysteresis": 6.0 }
+      },
+      {
+        "instanceId": "highpass",
+        "moduleId": "zarlino.filter.multimode",
+        "moduleVersion": "1.0.0",
+        "parameters": { "shape": 1.0, "frequency": 90.0, "resonance": 0.707, "slope": 1.0 }
+      },
+      {
+        "instanceId": "eq",
+        "moduleId": "zarlino.eq.parametric",
+        "moduleVersion": "1.0.0",
+        "parameters": {
+          "lowShelfFreq": 180.0, "lowShelfGain": 0.0, "lowShelfQ": 0.707,
+          "peakLowFreq": 320.0, "peakLowGain": -2.5, "peakLowQ": 1.1,
+          "peakHighFreq": 3500.0, "peakHighGain": 3.0, "peakHighQ": 0.9,
+          "highShelfFreq": 9000.0, "highShelfGain": 1.5, "highShelfQ": 0.707
+        }
+      },
+      {
+        "instanceId": "comp",
+        "moduleId": "zarlino.dynamics.compressor",
+        "moduleVersion": "1.0.0",
+        "parameters": {
+          "threshold": -20.0,
+          "ratio": 3.5,
+          "attack": 8.0,
+          "release": 120.0,
+          "knee": 8.0,
+          "makeup": 4.0,
+          "detection": 0.0
+        }
+      },
+      {
+        "instanceId": "warmth",
+        "moduleId": "zarlino.saturation",
+        "moduleVersion": "1.0.0",
+        "parameters": { "drive": 0.15, "mode": 0.0, "harmReduction": 0.25 }
+      },
+      {
+        "instanceId": "ceiling",
+        "moduleId": "zarlino.limiter",
+        "moduleVersion": "1.0.0",
+        "parameters": { "ceiling": -1.0, "release": 40.0 }
+      }
+    ]
+  },
+  "parameters": [
+    {
+      "id": "gateThreshold",
+      "name": "Gate Threshold",
+      "target": "gate.threshold",
+      "range": { "min": -60.0, "max": -20.0, "default": -45.0 },
+      "unit": "dB",
+      "group": "Cleanup",
+      "exposeToHost": true
+    },
+    {
+      "id": "presence",
+      "name": "Presence",
+      "target": "eq.peakHighGain",
+      "range": { "min": -6.0, "max": 6.0, "default": 3.0 },
+      "unit": "dB",
+      "group": "Tone",
+      "exposeToHost": true
+    },
+    {
+      "id": "body",
+      "name": "Body",
+      "target": "eq.peakLowGain",
+      "range": { "min": -6.0, "max": 6.0, "default": -2.5 },
+      "unit": "dB",
+      "group": "Tone",
+      "exposeToHost": true
+    },
+    {
+      "id": "glue",
+      "name": "Glue",
+      "target": "comp.threshold",
+      "range": { "min": -36.0, "max": -8.0, "default": -20.0 },
+      "unit": "dB",
+      "group": "Dynamics",
+      "exposeToHost": true
+    },
+    {
+      "id": "warmth",
+      "name": "Warmth",
+      "target": "warmth.drive",
+      "range": { "min": 0.0, "max": 0.6, "default": 0.15 },
+      "group": "Character",
+      "exposeToHost": true
+    },
+    {
+      "id": "ceiling",
+      "name": "Ceiling",
+      "target": "ceiling.ceiling",
+      "range": { "min": -6.0, "max": 0.0, "default": -1.0 },
+      "unit": "dB",
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "mix",
+      "name": "Mix",
+      "target": "$factory.dryWet",
+      "range": { "min": 0.0, "max": 1.0, "default": 1.0 },
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "bypassed",
+      "name": "Bypass",
+      "target": "$factory.bypass",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.0 },
+      "group": "Output",
+      "exposeToHost": true
+    }
+  ],
+  "macros": [
+    {
+      "id": "clarity",
+      "name": "Clarity",
+      "defaultValue": 0.5,
+      "mappings": [
+        { "parameter": "presence", "rangeStart": 0.0, "rangeEnd": 1.0, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    },
+    {
+      "id": "weight",
+      "name": "Weight",
+      "defaultValue": 0.0,
+      "mappings": [
+        { "parameter": "warmth", "rangeStart": 0.0, "rangeEnd": 1.0, "curve": 1.0, "scale": 1.0, "invert": false },
+        { "parameter": "body", "rangeStart": 0.5, "rangeEnd": 1.0, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    },
+    {
+      "id": "compression",
+      "name": "Compression",
+      "defaultValue": 0.5,
+      "mappings": [
+        { "parameter": "glue", "rangeStart": 0.0, "rangeEnd": 0.7, "curve": 1.0, "scale": 1.0, "invert": true }
+      ]
+    }
+  ],
+  "dryWet": { "enabled": true, "defaultMix": 1.0 },
+  "bypass": { "mode": "hard", "defaultBypassed": false },
+  "ui": {
+    "accentColor": "#7ED3B2",
+    "category": "Vocal",
+    "shortDescription": "Mono vocal chain: gate, high-pass, presence EQ, glue compressor, warmth.",
+    "tags": ["vocal", "mono", "channel-strip"],
+    "layout": "vertical",
+    "parameterOrder": ["gateThreshold", "presence", "body", "glue", "warmth", "ceiling", "mix", "bypassed"]
+  }
+}

@@ -1,5 +1,7 @@
 #include "Saturator.h"
 
+#include <cstring>
+
 //==============================================================================
 // ZScorch v2.0 saturation curves — voicing notes
 // ---------------------------------------------------------------------------
@@ -210,6 +212,13 @@ void Saturator::prepare (double sampleRate, int blockSize, int channels)
     lpFilter.prepare ({ sampleRate * 4.0, static_cast<juce::uint32> (juce::jmax (1, blockSize * 4)),
                         static_cast<juce::uint32> (juce::jmax (1, channels)) });
 
+    // Prime the shared coefficient object here, on the control thread. The
+    // per-channel filters all reference this one object, so updateHarmReduction()
+    // can later write the six coefficients straight into it instead of building a
+    // new Coefficients object on the audio thread.
+    *lpFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf (
+        sampleRate * 4.0, 10000.0f, 0.707f, 1.0f);
+
     reset();
 }
 
@@ -248,9 +257,38 @@ void Saturator::updateHarmReduction (float harmReduction)
     // air survive even at maximum harmonic reduction.
     const float reductionDb = -(1.0f + juce::jlimit (0.0f, 1.0f, harmReduction) * 9.0f);
 
-    *lpFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf (
+    // Allocation-free in-place update.
+    //
+    // ArrayCoefficients returns the six raw cookbook values as a std::array (no
+    // heap traffic), but IIR::Coefficients stores a second-order section as FIVE
+    // values: the raw set with the a0 term dropped and every remaining value
+    // divided by a0 (see IIR::Coefficients::assignImpl). Reproducing that
+    // normalisation here lets us write straight into the coefficient object that
+    // prepare() primed and that every filter instance already shares.
+    const auto values = juce::dsp::IIR::ArrayCoefficients<float>::makeHighShelf (
         static_cast<double> (rate), 10000.0f, 0.707f,
         juce::Decibels::decibelsToGain (reductionDb));
+
+    auto& target = lpFilter.state->coefficients;
+
+    if (static_cast<size_t> (target.size()) == values.size() - 1)
+    {
+        const float a0 = values[values.size() / 2];
+        const float a0Inv = (a0 != 0.0f) ? (1.0f / a0) : 0.0f;
+        float* destination = target.getRawDataPointer();
+        int index = 0;
+
+        for (size_t i = 0; i < values.size(); ++i)
+            if (i != values.size() / 2)
+                destination[index++] = values[i] * a0Inv;
+    }
+    else
+    {
+        // Only reachable when updateHarmReduction() runs without prepare().
+        *lpFilter.state = *juce::dsp::IIR::Coefficients<float>::makeHighShelf (
+            static_cast<double> (rate), 10000.0f, 0.707f,
+            juce::Decibels::decibelsToGain (reductionDb));
+    }
 }
 
 //==============================================================================

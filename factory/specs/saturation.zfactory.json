@@ -1,0 +1,154 @@
+{
+  "factorySchemaVersion": 1,
+  "plugin": {
+    "id": "zarlino.example.saturation",
+    "name": "Example Saturation",
+    "vendor": "Zarlino Audio",
+    "version": "1.0.0",
+    "effectType": "saturation",
+    "channels": "stereo"
+  },
+  "graph": {
+    "modules": [
+      {
+        "instanceId": "trim",
+        "moduleId": "zarlino.gain",
+        "moduleVersion": "1.0.0",
+        "parameters": { "gainDb": 0.0, "polarity": 0.0 }
+      },
+      {
+        "instanceId": "drive",
+        "moduleId": "zarlino.saturation",
+        "moduleVersion": "1.0.0",
+        "parameters": { "drive": 0.3, "mode": 0.0, "harmReduction": 0.0 }
+      },
+      {
+        "instanceId": "tone",
+        "moduleId": "zarlino.eq.tilt",
+        "moduleVersion": "1.0.0",
+        "parameters": { "tiltDb": 0.0, "pivotHz": 1200.0 }
+      },
+      {
+        "instanceId": "level",
+        "moduleId": "zarlino.gain",
+        "moduleVersion": "1.0.0",
+        "parameters": { "gainDb": 0.0, "polarity": 0.0 }
+      },
+      {
+        "instanceId": "ceiling",
+        "moduleId": "zarlino.limiter",
+        "moduleVersion": "1.0.0",
+        "parameters": { "ceiling": -1.0, "release": 40.0 }
+      }
+    ]
+  },
+  "parameters": [
+    {
+      "id": "inputTrim",
+      "name": "Input Trim",
+      "target": "trim.gainDb",
+      "range": { "min": -12.0, "max": 12.0, "default": 0.0 },
+      "unit": "dB",
+      "group": "Input",
+      "exposeToHost": true
+    },
+    {
+      "id": "driveAmount",
+      "name": "Drive",
+      "target": "drive.drive",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.3 },
+      "group": "Character",
+      "exposeToHost": true
+    },
+    {
+      "id": "driveMode",
+      "name": "Mode",
+      "target": "drive.mode",
+      "range": { "min": 0.0, "max": 5.0, "default": 0.0 },
+      "group": "Character",
+      "exposeToHost": true
+    },
+    {
+      "id": "harmonics",
+      "name": "Harmonic Reduction",
+      "target": "drive.harmReduction",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.0 },
+      "group": "Character",
+      "exposeToHost": true
+    },
+    {
+      "id": "tone",
+      "name": "Tone",
+      "target": "tone.tiltDb",
+      "range": { "min": -9.0, "max": 9.0, "default": 0.0 },
+      "unit": "dB",
+      "group": "Tone",
+      "exposeToHost": true
+    },
+    {
+      "id": "outputTrim",
+      "name": "Output Trim",
+      "target": "level.gainDb",
+      "range": { "min": -18.0, "max": 6.0, "default": 0.0 },
+      "unit": "dB",
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "ceiling",
+      "name": "Ceiling",
+      "target": "ceiling.ceiling",
+      "range": { "min": -6.0, "max": 0.0, "default": -1.0 },
+      "unit": "dB",
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "mix",
+      "name": "Mix",
+      "target": "$factory.dryWet",
+      "range": { "min": 0.0, "max": 1.0, "default": 1.0 },
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "bypassed",
+      "name": "Bypass",
+      "target": "$factory.bypass",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.0 },
+      "group": "Output",
+      "exposeToHost": true
+    }
+  ],
+  "macros": [
+    {
+      "id": "heat",
+      "name": "Heat",
+      "defaultValue": 0.35,
+      "mappings": [
+        { "parameter": "driveAmount", "rangeStart": 0.0, "rangeEnd": 0.9, "curve": 1.4, "scale": 1.0, "invert": false },
+        { "parameter": "inputTrim", "rangeStart": 0.5, "rangeEnd": 0.75, "curve": 1.0, "scale": 1.0, "invert": false },
+        { "parameter": "outputTrim", "rangeStart": 0.75, "rangeEnd": 0.6667, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    },
+    {
+      "id": "colour",
+      "name": "Colour",
+      "defaultValue": 0.0,
+      "mappings": [
+        { "parameter": "driveMode", "rangeStart": 0.0, "rangeEnd": 1.0, "curve": 1.0, "scale": 1.0, "invert": false },
+        { "parameter": "harmonics", "rangeStart": 0.0, "rangeEnd": 0.6, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    }
+  ],
+  "dryWet": { "enabled": true, "defaultMix": 1.0 },
+  "bypass": { "mode": "hard", "defaultBypassed": false },
+  "ui": {
+    "accentColor": "#FF8A4C",
+    "category": "Saturation",
+    "shortDescription": "Six-mode saturator with tilt tone control and a safety limiter.",
+    "tags": ["saturation", "drive", "character"],
+    "layout": "vertical",
+    "parameterOrder": ["inputTrim", "driveAmount", "driveMode", "harmonics", "tone", "outputTrim", "ceiling", "mix", "bypassed"]
+  }
+}

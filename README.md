@@ -12,12 +12,14 @@ JUCE-based VST3 plugin development monorepo for Zarlino Audio.
 | `PresenceField` | Presence / spatial processor (in progress). |
 | `MyFirstEQ`, `ZAdaptiveHarmonics`, `ZPunch`, `RACK_AI` | Earlier scaffolds and planned products. |
 | `_template` | Starter template for new plugins. |
+| `factory` | **Zarlino Plugin Factory** - the deterministic factory kernel. Turns a versioned PluginSpec JSON document into a working processor (validated spec, certified modules, serial graph, parameters/macros) with no AI at runtime. See [`factory/README.md`](factory/README.md). |
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `plugins/` | One folder per plugin (each a CMake project). |
+| `factory/` | Plugin Factory kernel, certified module library, example PluginSpecs, factory tests and CLI. |
 | `shared/` | Reusable DSP/UI/licensing/test code. |
 | `specs/` | Product specifications. |
 | `docs/` | Documentation hub — start at [`docs/README.md`](docs/README.md). |

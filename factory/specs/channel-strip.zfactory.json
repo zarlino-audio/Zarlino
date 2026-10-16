@@ -1,0 +1,150 @@
+{
+  "factorySchemaVersion": 1,
+  "plugin": {
+    "id": "zarlino.example.channel-strip",
+    "name": "Example Channel Strip",
+    "vendor": "Zarlino Audio",
+    "version": "1.0.0",
+    "effectType": "channel-strip",
+    "channels": "stereo"
+  },
+  "graph": {
+    "modules": [
+      {
+        "instanceId": "input",
+        "moduleId": "zarlino.gain",
+        "moduleVersion": "1.0.0",
+        "parameters": { "gainDb": 0.0, "polarity": 0.0 }
+      },
+      {
+        "instanceId": "highpass",
+        "moduleId": "zarlino.filter.multimode",
+        "moduleVersion": "1.0.0",
+        "parameters": { "shape": 1.0, "frequency": 80.0, "resonance": 0.707, "slope": 1.0 }
+      },
+      {
+        "instanceId": "comp",
+        "moduleId": "zarlino.dynamics.compressor",
+        "moduleVersion": "1.0.0",
+        "parameters": {
+          "threshold": -18.0,
+          "ratio": 3.0,
+          "attack": 15.0,
+          "release": 180.0,
+          "knee": 6.0,
+          "makeup": 0.0,
+          "detection": 0.0
+        }
+      },
+      {
+        "instanceId": "tone",
+        "moduleId": "zarlino.eq.tilt",
+        "moduleVersion": "1.0.0",
+        "parameters": { "tiltDb": 0.0, "pivotHz": 1000.0 }
+      },
+      {
+        "instanceId": "ceiling",
+        "moduleId": "zarlino.limiter",
+        "moduleVersion": "1.0.0",
+        "parameters": { "ceiling": -1.0, "release": 60.0 }
+      }
+    ]
+  },
+  "parameters": [
+    {
+      "id": "inputTrim",
+      "name": "Input Trim",
+      "target": "input.gainDb",
+      "range": { "min": -18.0, "max": 18.0, "default": 0.0 },
+      "unit": "dB",
+      "logarithmic": false,
+      "group": "Input",
+      "exposeToHost": true
+    },
+    {
+      "id": "compress",
+      "name": "Compression",
+      "target": "comp.threshold",
+      "range": { "min": -36.0, "max": -6.0, "default": -18.0 },
+      "unit": "dB",
+      "logarithmic": false,
+      "group": "Dynamics",
+      "exposeToHost": true
+    },
+    {
+      "id": "makeup",
+      "name": "Makeup",
+      "target": "comp.makeup",
+      "range": { "min": 0.0, "max": 12.0, "default": 0.0 },
+      "unit": "dB",
+      "logarithmic": false,
+      "group": "Dynamics",
+      "exposeToHost": true
+    },
+    {
+      "id": "tone",
+      "name": "Tone",
+      "target": "tone.tiltDb",
+      "range": { "min": -6.0, "max": 6.0, "default": 0.0 },
+      "unit": "dB",
+      "logarithmic": false,
+      "group": "Tone",
+      "exposeToHost": true
+    },
+    {
+      "id": "ceiling",
+      "name": "Ceiling",
+      "target": "ceiling.ceiling",
+      "range": { "min": -6.0, "max": 0.0, "default": -1.0 },
+      "unit": "dB",
+      "logarithmic": false,
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "mix",
+      "name": "Mix",
+      "target": "$factory.dryWet",
+      "range": { "min": 0.0, "max": 1.0, "default": 1.0 },
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "bypassed",
+      "name": "Bypass",
+      "target": "$factory.bypass",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.0 },
+      "group": "Output",
+      "exposeToHost": true
+    }
+  ],
+  "macros": [
+    {
+      "id": "intensity",
+      "name": "Intensity",
+      "defaultValue": 0.5,
+      "mappings": [
+        { "parameter": "compress", "rangeStart": 0.0, "rangeEnd": 0.65, "curve": 1.0, "scale": 1.0, "invert": true },
+        { "parameter": "makeup", "rangeStart": 0.0, "rangeEnd": 0.5, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    },
+    {
+      "id": "shape",
+      "name": "Shape",
+      "defaultValue": 0.5,
+      "mappings": [
+        { "parameter": "tone", "rangeStart": 0.0, "rangeEnd": 1.0, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    }
+  ],
+  "dryWet": { "enabled": true, "defaultMix": 1.0 },
+  "bypass": { "mode": "hard", "defaultBypassed": false },
+  "ui": {
+    "accentColor": "#4C9AFF",
+    "category": "Dynamics",
+    "shortDescription": "High-pass, compressor, tilt tone control and a safety limiter.",
+    "tags": ["channel-strip", "compressor", "eq"],
+    "layout": "vertical",
+    "parameterOrder": ["inputTrim", "compress", "makeup", "tone", "ceiling", "mix", "bypassed"]
+  }
+}

@@ -28,3 +28,8 @@ add_subdirectory(plugins/ZAdaptiveHarmonics)
 add_subdirectory(plugins/ZTame)
 add_subdirectory(plugins/ZPunch)
 add_subdirectory(plugins/ZScorch)
+
+# Zarlino Plugin Factory - deterministic spec-driven plugin kernel.
+# Independent of the plugin projects; reuses shared DSP and ZScorch's saturated
+# stage through its own static library.
+add_subdirectory(factory)

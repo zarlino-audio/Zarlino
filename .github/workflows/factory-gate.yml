@@ -1,0 +1,93 @@
+name: Factory Kernel Gate
+
+# The factory kernel is the only target in this repo that turns a versioned
+# PluginSpec document into a runnable processor, so its gate proves three things:
+#   1. the kernel and its module library build,
+#   2. the factory-level automated tests pass (ctest, `Factory.Unit`),
+#   3. every committed example spec actually loads, builds and renders audio
+#      through the CLI.
+#
+# NOTE: the workflow file itself is listed in both `paths` filters. A commit that
+# touches only this file must still trigger the gate - omitting it once already
+# caused a silent no-run (see ztame-release-gate.yml history).
+on:
+  pull_request:
+    paths:
+      - 'factory/**'
+      - 'shared/dsp/**'
+      - 'shared/utils/**'
+      - 'plugins/ZScorch/Source/Saturator.h'
+      - 'plugins/ZScorch/Source/Saturator.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/factory-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'factory/**'
+      - 'shared/dsp/**'
+      - 'shared/utils/**'
+      - 'plugins/ZScorch/Source/Saturator.h'
+      - 'plugins/ZScorch/Source/Saturator.cpp'
+      - 'CMakeLists.txt'
+      - '.github/workflows/factory-gate.yml'
+  workflow_dispatch:
+
+jobs:
+  windows-factory-tests:
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
+
+      - name: Build factory kernel, test runner and CLI
+        run: cmake --build build --config Release --target Factory_Tests ZarlinoFactory_Check --parallel
+
+      # Scope the selection to `Factory.` and refuse to report a green gate when
+      # nothing was selected. Every plugin labels its own suite `release-gate`,
+      # and those executables are NOT built by this job, so the bare label would
+      # make ctest report "Not Run" for them and exit 1.
+      - name: Run factory tests
+        shell: pwsh
+        run: |
+          $listed = ctest --test-dir build -C Release -N -R '^Factory\.'
+          $listed | Write-Host
+          if (-not ($listed | Select-String -SimpleMatch 'Factory.Unit')) {
+            Write-Error 'Factory.Unit is not registered - refusing to report a green gate with nothing selected.'
+            exit 1
+          }
+          ctest --test-dir build -C Release -R '^Factory\.' --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # The tests load the committed specs from disk; this step proves the CLI
+      # does the same end to end and produces finite, non-silent audio.
+      - name: Validate and render every committed example spec
+        shell: pwsh
+        run: |
+          $cli = 'build/factory/ZarlinoFactory_Check_artefacts/Release/ZarlinoFactory_Check.exe'
+          if (-not (Test-Path $cli)) { Write-Error "factory CLI not found at $cli"; exit 1 }
+
+          & $cli --catalog
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $specs = Get-ChildItem factory/specs/*.zfactory.json
+          if ($specs.Count -lt 3) { Write-Error "expected at least 3 example specs, found $($specs.Count)"; exit 1 }
+
+          foreach ($spec in $specs) {
+            Write-Host "=== $($spec.Name) ==="
+            & $cli $spec.FullName --render --block 257
+            if ($LASTEXITCODE -ne 0) { Write-Error "example spec failed: $($spec.Name)"; exit $LASTEXITCODE }
+          }
+
+      - name: Upload ctest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-gate-ctest-log
+          path: build/Testing/Temporary/LastTest.log
+          if-no-files-found: warn
