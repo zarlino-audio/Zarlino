@@ -45,6 +45,41 @@ powershell -ExecutionPolicy Bypass -File tools\build-release-local.ps1 [-Plugin 
 - Mirrors `.github/workflows/ztame-release-gate.yml`.
 - Plugin versions are defined in each plugin's own version header (`Source/Version.h`).
 
+## Release assets in the cloud (R2) — publish, verify, roll back
+
+Publishing is part of the release gate, not a manual step. After the manifest is finalized and the
+evidence artifacts are uploaded, `ztame-release-gate.yml` runs:
+
+```powershell
+node tools/release/publish-release.mjs `
+  --manifest artifacts/release-manifest.json --base artifacts `
+  --audio-dir artifacts/audio --web-dir artifacts/audio/web `
+  --bucket zarlino-releases --account <CF_ACCOUNT_ID> --product ztame
+node tools/release/verify-website-release.mjs --product ztame --expect-commit <sha>
+```
+
+- `publish-release.mjs` refuses a manifest whose `status` is not `verified`, uploads the binaries,
+  canonical screenshot, audio masters/comparisons and web previews, then **re-downloads every object
+  and compares its SHA-256** before writing `releases/ztame/latest.json`. That pointer is the rollback
+  handle: the website resolves every stable alias through it, so a new release reaches users the moment
+  the pointer moves — verify-then-publish, never the other way round.
+- `verify-website-release.mjs` proves the DELIVERY surface: production `/api/release/ztame` must report
+  this exact commit (bounded polling absorbs the site's 60s pointer cache) and the installer alias must
+  answer 200. Requires the `CLOUDFLARE_API_TOKEN` secret and the `CF_ACCOUNT_ID` variable; both steps
+  are skipped on pull requests.
+- Roll a release back (pointer move, no redeploy, no rebuild):
+
+```powershell
+node tools/release/rollback-release.mjs --product ztame --version 1.2.0 --commit <40-char-sha> `
+  --account <CF_ACCOUNT_ID> [--dry-run]
+```
+
+  It refuses non-`verified` targets, re-downloads and SHA-256-verifies every published object of the
+  target release (the R2 REST object API has no HEAD), records what it rolled back FROM in the pointer,
+  and writes the pointer last. `--dry-run` performs all verifications without writing.
+- The bucket is private; the website Worker is the only reader, and it serves only paths listed in the
+  published pointer. Layout and alias surface: `zarlino-website/README.md`.
+
 ## Known local state
 
 - The JUCE submodule shows as modified (` M JUCE`) in `git status` **on purpose**: 
