@@ -3,13 +3,28 @@
 #
 # Targets
 #   zarlino_factory          static library: spec model, registry, graph engine,
-#                            parameter/macro algebra and the certified module
-#                            library
+#                            parameter/macro algebra, UI compiler and the
+#                            certified module library
 #   Factory_Tests            factory-level automated test runner (CTest: Factory.Unit)
 #   ZarlinoFactory_Check     CLI: load a PluginSpec from disk, validate it, build
 #                            the graph and report the result
+#   ZarlinoFactory_Generate  CLI: turn a PluginSpec into a buildable product project
+#
+# This directory is also consumed as a subdirectory by the generated product
+# projects (see factory/shell/ShellTargets.cmake), so it never assumes it owns
+# the top of the source tree: the monorepo root is ZARLINO_ROOT, which an
+# embedding project sets before add_subdirectory().
 #==============================================================================
 include(CTest)
+
+# The monorepo root, i.e. the checkout that owns JUCE/, shared/ and plugins/.
+if(NOT DEFINED ZARLINO_ROOT)
+    get_filename_component(ZARLINO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+endif()
+
+# The factory's own test runner and CLIs are part of the factory's gate, not of
+# any product that embeds the kernel. An embedding product switches them off.
+option(ZFACTORY_BUILD_TOOLS "Build the factory test runner and command line tools" ON)
 
 #------------------------------------------------------------------------------
 # Kernel + certified module library
@@ -23,6 +38,7 @@ add_library(zarlino_factory STATIC
     src/ModuleRegistry.cpp
     src/ParameterSystem.cpp
     src/GraphEngine.cpp
+    src/UiPlan.cpp
 
     modules/BuiltinModules.cpp
     modules/GainModule.cpp
@@ -39,17 +55,17 @@ add_library(zarlino_factory STATIC
 
     # Reuse of shipped DSP: the factory saturation module adapts ZScorch's
     # voiced, ADAA anti-aliased Saturator rather than re-implementing it.
-    ${CMAKE_SOURCE_DIR}/plugins/ZScorch/Source/Saturator.cpp
+    ${ZARLINO_ROOT}/plugins/ZScorch/Source/Saturator.cpp
 )
 
 target_include_directories(zarlino_factory
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/shared/dsp
-        ${CMAKE_SOURCE_DIR}/shared/utils
+        ${ZARLINO_ROOT}/shared/dsp
+        ${ZARLINO_ROOT}/shared/utils
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/modules
-        ${CMAKE_SOURCE_DIR}/plugins/ZScorch/Source
+        ${ZARLINO_ROOT}/plugins/ZScorch/Source
         ${CMAKE_CURRENT_SOURCE_DIR}/compat
 )
 
@@ -69,10 +85,13 @@ target_link_libraries(zarlino_factory
 )
 
 #------------------------------------------------------------------------------
-# Factory test runner
+# Factory test runner and command line tools. A generated product embeds the
+# kernel but not its gate, so these are skipped when the factory is a
+# subdirectory of a product project.
 #------------------------------------------------------------------------------
-juce_add_console_app(Factory_Tests)
+if(ZFACTORY_BUILD_TOOLS)
 
+juce_add_console_app(Factory_Tests)
 juce_generate_juce_header(Factory_Tests)
 
 target_sources(Factory_Tests
@@ -87,13 +106,14 @@ target_sources(Factory_Tests
         tests/SerializationTests.cpp
         tests/RealtimeSafetyTests.cpp
         tests/ExampleSpecTests.cpp
+        tests/UiPlanTests.cpp
 )
 
 target_include_directories(Factory_Tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
     # Shared Zarlino test stimulus generators (ZStressTestUtils), so the factory
     # suite exercises the same analytic and hostile signals as the plugin suites.
-    ${CMAKE_SOURCE_DIR}/shared/testing
+    ${ZARLINO_ROOT}/shared/testing
 )
 
 # The factory tests load the committed example PluginSpecs from disk, so the CI
@@ -128,3 +148,40 @@ target_link_libraries(ZarlinoFactory_Check
         zarlino_factory
         juce::juce_gui_basics
 )
+
+#------------------------------------------------------------------------------
+# CLI: turn a PluginSpec into a buildable product project
+#------------------------------------------------------------------------------
+juce_add_console_app(ZarlinoFactory_Generate)
+
+juce_generate_juce_header(ZarlinoFactory_Generate)
+
+target_sources(ZarlinoFactory_Generate PRIVATE
+    tools/Generate.cpp
+    # The generator and the plugin shell share the product identity helpers and
+    # the provenance record type, so a generated project and the binary built
+    # from it can never disagree about what they are. ProductRuntime.cpp is
+    # deliberately NOT linked here: it parses a product's embedded payload, which
+    # a generator must not need.
+    shell/src/ProductIdentity.cpp
+)
+
+# The generator writes provenance using the same record type the plugin shell
+# parses at runtime, so the two can never drift.
+target_include_directories(ZarlinoFactory_Generate PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/shell/include
+)
+
+target_compile_definitions(ZarlinoFactory_Generate PRIVATE
+    ZFACTORY_PROJECT_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shell/project"
+    ZFACTORY_SHELL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/shell"
+)
+
+target_link_libraries(ZarlinoFactory_Generate
+    PRIVATE
+        zarlino_factory
+        juce::juce_gui_basics
+        juce::juce_cryptography   # SHA-256 of the canonical specification
+)
+
+endif() # ZFACTORY_BUILD_TOOLS

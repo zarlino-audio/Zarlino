@@ -47,3 +47,5 @@ realestate-os/
 
 # python tooling cache
 __pycache__/
+work/ 
+.wrangler/ 

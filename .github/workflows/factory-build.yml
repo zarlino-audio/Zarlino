@@ -1,0 +1,420 @@
+name: Factory Product Build
+
+#==============================================================================
+# Zarlino factory - cloud build of ONE generated product.
+#
+# This is the execution arm of the factory's build lifecycle. It is invoked by
+# the Executive OS through the GitHub API (workflow_dispatch) with a build id
+# that the orchestrator has already recorded, so the durable record and the
+# GitHub run always refer to the same immutable build.
+#
+# Lifecycle states, and where they are recorded:
+#
+#   QUEUED       orchestrator, before dispatch
+#   ASSEMBLING   job `assemble`   - validate spec, freeze modules, generate project
+#   BUILDING     job `assemble`   - compile the VST3
+#   TESTING      job `assemble`   - run the generic quality gate
+#   PACKAGING    job `assemble`   - package + hash
+#   READY/FAILED job `publish`    - upload to R2, then report completion
+#
+# SECURITY
+#   The compile/test/package job receives NO secrets at all beyond the default
+#   read-only GITHUB_TOKEN: no Cloudflare credentials, no Paystack keys, no
+#   founder credentials, no signing keys. Only the final `publish` job holds a
+#   scoped R2 upload token, and it never compiles anything. Signing, when it
+#   exists, will be a third job with its own credential.
+#
+#   Nothing from the specification reaches a shell command, a compiler flag or a
+#   file path: the spec arrives as an environment variable, is written to a fixed
+#   path, and is validated by the kernel before anything is generated from it.
+#==============================================================================
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        description: 'Immutable build id assigned by the orchestrator'
+        required: true
+        type: string
+      spec_path:
+        description: 'Path to a committed PluginSpec, relative to the repository root'
+        required: false
+        type: string
+        default: ''
+      spec_json:
+        description: 'Inline PluginSpec JSON (used when spec_path is empty)'
+        required: false
+        type: string
+        default: ''
+      ui_template:
+        description: 'UI template'
+        required: true
+        type: choice
+        options: [minimal, standard, advanced]
+        default: standard
+      source_commit:
+        description: 'Source commit this build is made from (defaults to the run commit)'
+        required: false
+        type: string
+        default: ''
+      request_id:
+        description: 'Orchestrator request id, echoed back in the build record'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  #==========================================================================
+  # ASSEMBLING -> BUILDING -> TESTING -> PACKAGING
+  # No secrets. This job compiles and tests untrusted, freshly generated code
+  # and therefore holds nothing worth stealing.
+  #==========================================================================
+  assemble:
+    name: Assemble, build and gate
+    runs-on: windows-2022
+    timeout-minutes: 90
+    outputs:
+      artifact_name: ${{ steps.record.outputs.artifact_name }}
+      qa_passed: ${{ steps.gate.outputs.qa_passed }}
+      product_name: ${{ steps.record.outputs.product_name }}
+
+    steps:
+      - name: Validate build request
+        shell: pwsh
+        env:
+          BUILD_ID: ${{ inputs.build_id }}
+          SPEC_PATH: ${{ inputs.spec_path }}
+          SPEC_JSON: ${{ inputs.spec_json }}
+          UI_TEMPLATE: ${{ inputs.ui_template }}
+        run: |
+          # Inputs are validated as data before they are used anywhere. No input
+          # is ever interpolated into a command line.
+          if ($env:BUILD_ID -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{5,63}$') {
+            Write-Error "build_id '$env:BUILD_ID' is not a valid immutable build id"
+            exit 1
+          }
+          if ($env:UI_TEMPLATE -notin @('minimal','standard','advanced')) {
+            Write-Error "unsupported ui_template '$env:UI_TEMPLATE'"
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SPEC_PATH) -and [string]::IsNullOrWhiteSpace($env:SPEC_JSON)) {
+            Write-Error "one of spec_path or spec_json must be supplied"
+            exit 1
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:SPEC_PATH) -and $env:SPEC_PATH -notmatch '^[A-Za-z0-9._/-]+\.zfactory\.json$') {
+            Write-Error "spec_path must be a committed .zfactory.json path inside the repository"
+            exit 1
+          }
+          Write-Host "build $env:BUILD_ID accepted (template $env:UI_TEMPLATE)"
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      #-- ASSEMBLING ---------------------------------------------------------
+      - name: Freeze and stage the specification
+        shell: pwsh
+        env:
+          SPEC_PATH: ${{ inputs.spec_path }}
+          SPEC_JSON: ${{ inputs.spec_json }}
+        run: |
+          New-Item -ItemType Directory -Force -Path work | Out-Null
+
+          if (-not [string]::IsNullOrWhiteSpace($env:SPEC_PATH)) {
+            $resolved = (Resolve-Path -LiteralPath $env:SPEC_PATH -ErrorAction Stop).Path
+            $root = (Resolve-Path -LiteralPath '.').Path
+            if (-not $resolved.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+              Write-Error "spec_path escapes the repository"
+              exit 1
+            }
+            Copy-Item -LiteralPath $resolved -Destination work/spec.zfactory.json -Force
+          } else {
+            # Written from an environment variable, so the JSON is never parsed by
+            # the shell and can contain no command substitution.
+            [System.IO.File]::WriteAllText(
+              (Join-Path $PWD 'work/spec.zfactory.json'),
+              $env:SPEC_JSON,
+              (New-Object System.Text.UTF8Encoding($false)))
+          }
+
+          $spec = Get-Content work/spec.zfactory.json -Raw
+          if ([string]::IsNullOrWhiteSpace($spec)) { Write-Error 'staged specification is empty'; exit 1 }
+          if ($spec.Length -gt 262144) { Write-Error 'staged specification exceeds 256 KiB'; exit 1 }
+          Write-Host "staged specification: $($spec.Length) bytes"
+          Get-FileHash work/spec.zfactory.json -Algorithm SHA256 | ForEach-Object { "staged sha256: $($_.Hash.ToLower())" }
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
+
+      - name: Build the factory kernel and the generator
+        run: cmake --build build --config Release --target ZarlinoFactory_Generate ZarlinoFactory_Check --parallel
+
+      - name: Generate the product project
+        shell: pwsh
+        env:
+          UI_TEMPLATE: ${{ inputs.ui_template }}
+          BUILD_ID: ${{ inputs.build_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+          REQUEST_ID: ${{ inputs.request_id }}
+        run: |
+          $generator = 'build/factory/ZarlinoFactory_Generate_artefacts/Release/ZarlinoFactory_Generate.exe'
+          if (-not (Test-Path $generator)) { Write-Error "generator not found at $generator"; exit 1 }
+
+          $commit = $env:SOURCE_COMMIT
+          if ([string]::IsNullOrWhiteSpace($commit)) { $commit = $env:GITHUB_SHA }
+
+          & $generator --spec work/spec.zfactory.json --template $env:UI_TEMPLATE `
+                       --out work/product --build-id $env:BUILD_ID `
+                       --commit $commit --timestamp (Get-Date -AsUTC -Format 'yyyy-MM-ddTHH:mm:ssZ') `
+                       --platform windows-x86_64 --formats VST3
+          if ($LASTEXITCODE -ne 0) { Write-Error 'project generation failed'; exit $LASTEXITCODE }
+
+          if ($env:REQUEST_ID) { "request id: $env:REQUEST_ID" | Write-Host }
+          Get-ChildItem work/product -Recurse -File | ForEach-Object {
+            "  $($_.FullName.Substring((Resolve-Path '.').Path.Length + 1))"
+          }
+
+      #-- BUILDING -----------------------------------------------------------
+      - name: Compile the VST3 and the quality gate
+        shell: pwsh
+        run: |
+          $started = Get-Date
+          cmake -S work/product -B work/build -G "Visual Studio 17 2022" -A x64 -DZARLINO_ROOT="$PWD"
+          if ($LASTEXITCODE -ne 0) { Write-Error 'product configure failed'; exit $LASTEXITCODE }
+
+          $targets = @('ZarlinoProduct_*')
+          # Build every product target the generated project declares.
+          cmake --build work/build --config Release --target ALL_BUILD --parallel
+          if ($LASTEXITCODE -ne 0) { Write-Error 'product build failed'; exit $LASTEXITCODE }
+
+          $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 3)
+          "compile_seconds=$seconds" | Out-File -FilePath work/timings.env -Append -Encoding utf8
+          Write-Host "compile took $seconds s"
+          $targets | Out-Null
+
+      #-- TESTING ------------------------------------------------------------
+      - name: Run the generic quality gate
+        id: gate
+        shell: pwsh
+        run: |
+          $qa = Get-ChildItem -Path work/build -Recurse -Filter 'ZarlinoProduct_*_QA.exe' |
+                Select-Object -First 1
+          if ($null -eq $qa) { Write-Error 'the quality gate executable was not produced'; exit 1 }
+
+          $plugin = Get-ChildItem -Path work/build -Recurse -Filter '*.vst3' -Directory |
+                    Select-Object -First 1
+
+          $started = Get-Date
+
+          # The gate is run against the BUILT BUNDLE, so it exercises the artifact
+          # a host would load, not just the objects it was linked from.
+          if ($null -ne $plugin) {
+            Write-Host "gating the built bundle at $($plugin.FullName)"
+            & $qa.FullName --plugin $plugin.FullName --json work/qa-report.json
+          } else {
+            Write-Host 'no VST3 bundle found; gating the in-process product'
+            & $qa.FullName --json work/qa-report.json
+          }
+
+          $qaExit = $LASTEXITCODE
+          $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 3)
+          "test_seconds=$seconds" | Out-File -FilePath work/timings.env -Append -Encoding utf8
+
+          "qa_passed=$($qaExit -eq 0)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          if ($qaExit -ne 0) {
+            # A failed gate must be loud, and must not be mistaken for a build
+            # problem: the artifact exists, it simply must not ship.
+            Write-Error "QUALITY GATE FAILED - this artifact must not be released"
+            exit 1
+          }
+          Write-Host "quality gate passed in $seconds s"
+
+      #-- PACKAGING ----------------------------------------------------------
+      - name: Package the artifact and compute integrity hashes
+        id: record
+        if: success()
+        shell: pwsh
+        env:
+          BUILD_ID: ${{ inputs.build_id }}
+          SOURCE_COMMIT: ${{ inputs.source_commit }}
+        run: |
+          New-Item -ItemType Directory -Force -Path work/package | Out-Null
+
+          $plugin = Get-ChildItem -Path work/build -Recurse -Filter '*.vst3' -Directory |
+                    Select-Object -First 1
+          if ($null -eq $plugin) { Write-Error 'no VST3 bundle was produced'; exit 1 }
+
+          $name = $plugin.BaseName
+          "product_name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          $zip = "work/package/$name-v1.vst3.zip"
+          Compress-Archive -Path $plugin.FullName -DestinationPath $zip -CompressionLevel Optimal
+          if (-not (Test-Path $zip)) { Write-Error 'packaging failed'; exit 1 }
+
+          $pluginHash = (Get-FileHash $plugin.FullName -Algorithm SHA256).Hash.ToLower()
+          $zipInfo = Get-Item $zip
+          $zipHash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+
+          $commit = $env:SOURCE_COMMIT
+          if ([string]::IsNullOrWhiteSpace($commit)) { $commit = $env:GITHUB_SHA }
+
+          $provenance = Get-Content work/product/provenance.json -Raw
+
+          $timings = @{}
+          if (Test-Path work/timings.env) {
+            Get-Content work/timings.env | ForEach-Object {
+              $pair = $_ -split '=', 2
+              if ($pair.Count -eq 2) { $timings[$pair[0]] = [double]$pair[1] }
+            }
+          }
+
+          $qa = Get-Content work/qa-report.json -Raw
+
+          $record = [ordered]@{
+            buildRecordSchemaVersion = 2
+            buildId          = $env:BUILD_ID
+            productName      = $name
+            sourceCommit     = $commit
+            targetPlatform   = 'windows-x86_64'
+            builderImage     = 'windows-2022'
+            githubRunId      = $env:GITHUB_RUN_ID
+            githubRunAttempt = $env:GITHUB_RUN_ATTEMPT
+            status           = 'READY'
+            qaPassed         = $true
+            provenance       = ($provenance | ConvertFrom-Json)
+            qaReport         = ($qa | ConvertFrom-Json)
+            timings          = [ordered]@{
+              compileSeconds = $timings['compile_seconds']
+              testSeconds    = $timings['test_seconds']
+            }
+            artifact = [ordered]@{
+              name         = "$name-v1.vst3.zip"
+              bundleName   = "$name.vst3"
+              zipBytes     = $zipInfo.Length
+              zipSha256    = $zipHash
+              bundleSha256 = $pluginHash
+            }
+          }
+
+          $record | ConvertTo-Json -Depth 12 | Set-Content work/package/build-record.json -Encoding utf8
+          Copy-Item work/qa-report.json work/package/qa-report.json -Force
+
+          "artifact_name=$name-v1.vst3.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Write-Host "packaged $name"
+          Write-Host "  bundle sha256 $pluginHash"
+          Write-Host "  zip    sha256 $zipHash ($($zipInfo.Length) bytes)"
+
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: factory-build-${{ inputs.build_id }}
+          path: |
+            work/package/**
+            work/qa-report.json
+            work/product/provenance.json
+            work/product/ui-plan.json
+            work/product/spec.zfactory.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  #==========================================================================
+  # READY - upload to R2 and report completion.
+  #
+  # This is the only job that holds credentials, it never compiles anything, and
+  # the credential it holds can only write objects into the artifacts bucket.
+  #==========================================================================
+  publish:
+    name: Publish and report
+    needs: assemble
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: needs.assemble.outputs.qa_passed == 'true'
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download the verified build
+        uses: actions/download-artifact@v4
+        with:
+          name: factory-build-${{ inputs.build_id }}
+          path: work
+
+      - name: Verify a gate report is present
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A build with no QA report is not publishable, whatever else exists.
+          if [ ! -f work/qa-report.json ]; then
+            echo "::error::no qa-report.json in the uploaded evidence - refusing to publish"
+            exit 1
+          fi
+          if [ ! -f work/package/build-record.json ]; then
+            echo "::error::no build-record.json in the uploaded evidence - refusing to publish"
+            exit 1
+          fi
+          echo "evidence present:"
+          find work -type f | sort
+
+      - name: Upload artifacts and evidence to Zarlino R2
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.R2_BUILD_UPLOAD_TOKEN }}
+          CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          BUILD_ID: ${{ inputs.build_id }}
+          ARTIFACT_NAME: ${{ needs.assemble.outputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::R2_BUILD_UPLOAD_TOKEN is not configured - cannot publish the artifact"
+            exit 1
+          fi
+          # Every value the shell sees is either a constant or an explicit env
+          # var: nothing derived from the specification is interpolated into
+          # this script, so a product name cannot alter the command.
+          node factory/tools/r2-upload.mjs \
+            --account "$CF_ACCOUNT_ID" \
+            --bucket zarlino-artifacts \
+            --prefix "factory-builds/$BUILD_ID" \
+            --file "artifact/$ARTIFACT_NAME=work/package/$ARTIFACT_NAME" \
+            --file "qa-report.json=work/qa-report.json" \
+            --file "build-record.json=work/package/build-record.json" \
+            --file "provenance.json=work/product/provenance.json" \
+            --file "ui-plan.json=work/product/ui-plan.json" \
+            --file "spec.zfactory.json=work/product/spec.zfactory.json"
+
+      - name: Report completion to the build orchestrator
+        shell: bash
+        env:
+          BUILD_REPORT_TOKEN: ${{ secrets.BUILD_REPORT_TOKEN }}
+          OS_BASE_URL: ${{ vars.ZARLINO_OS_URL }}
+          BUILD_ID: ${{ inputs.build_id }}
+          PRODUCT_NAME: ${{ needs.assemble.outputs.product_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BUILD_REPORT_TOKEN:-}" ]; then
+            echo "::warning::BUILD_REPORT_TOKEN is not configured; the durable record will be completed by the orchestrator's sync"
+            exit 0
+          fi
+          payload=$(jq -n \
+            --arg buildId "$BUILD_ID" \
+            --arg productName "$PRODUCT_NAME" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg status "READY" \
+            --slurpfile record work/package/build-record.json \
+            '{buildId:$buildId, productName:$productName, githubRunId:$runId, status:$status, record:$record[0]}')
+
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer $BUILD_REPORT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$OS_BASE_URL/api/factory/builds/$BUILD_ID/completion"
