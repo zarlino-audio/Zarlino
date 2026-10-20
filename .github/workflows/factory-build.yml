@@ -183,7 +183,11 @@ jobs:
         shell: pwsh
         run: |
           $started = Get-Date
-          cmake -S work/product -B work/build -G "Visual Studio 17 2022" -A x64 -DZARLINO_ROOT="$PWD"
+          # Forward slashes: CMake reads backslashes in arguments as escape
+          # sequences, and a Windows checkout path such as D:\a\Zarlino\Zarlino
+          # contains \a.
+          $monorepo = ($PWD.Path -replace '\\', '/')
+          cmake -S work/product -B work/build -G "Visual Studio 17 2022" -A x64 -DZARLINO_ROOT="$monorepo"
           if ($LASTEXITCODE -ne 0) { Write-Error 'product configure failed'; exit $LASTEXITCODE }
 
           $targets = @('ZarlinoProduct_*')

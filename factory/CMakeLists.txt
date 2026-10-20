@@ -22,6 +22,12 @@ if(NOT DEFINED ZARLINO_ROOT)
     get_filename_component(ZARLINO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 endif()
 
+# A caller may pass a native Windows path (D:\a\Zarlino\Zarlino). CMake parses
+# backslashes in arguments as escape sequences, so a path segment such as \a or
+# \t silently becomes an invalid escape and the whole configure fails. Normalise
+# once, here, for every consumer.
+file(TO_CMAKE_PATH "${ZARLINO_ROOT}" ZARLINO_ROOT)
+
 # The factory's own test runner and CLIs are part of the factory's gate, not of
 # any product that embeds the kernel. An embedding product switches them off.
 option(ZFACTORY_BUILD_TOOLS "Build the factory test runner and command line tools" ON)

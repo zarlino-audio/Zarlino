@@ -21,6 +21,10 @@ function(zarlino_add_generated_product)
         message(FATAL_ERROR "zarlino_add_generated_product requires PROJECT_DIR")
     endif()
 
+    # See factory/CMakeLists.txt: a native Windows path contains backslashes that
+    # CMake would read as escape sequences.
+    file(TO_CMAKE_PATH "${ZARLINO_ROOT}" ZARLINO_ROOT)
+
     set(generated_dir "${ZGP_PROJECT_DIR}/generated")
 
     if(NOT EXISTS "${generated_dir}/ProductIdentity.cmake")
