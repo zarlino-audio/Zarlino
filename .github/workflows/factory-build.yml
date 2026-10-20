@@ -287,7 +287,7 @@ jobs:
           $sha256.Dispose()
 
           $zipInfo = Get-Item $zip
-          $zipHash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
+          $zipHash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash.ToLower()
 
           $commit = $env:SOURCE_COMMIT
           if ([string]::IsNullOrWhiteSpace($commit)) { $commit = $env:GITHUB_SHA }
