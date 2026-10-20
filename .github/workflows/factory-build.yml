@@ -20,9 +20,10 @@ name: Factory Product Build
 # SECURITY
 #   The compile/test/package job receives NO secrets at all beyond the default
 #   read-only GITHUB_TOKEN: no Cloudflare credentials, no Paystack keys, no
-#   founder credentials, no signing keys. Only the final `publish` job holds a
-#   scoped R2 upload token, and it never compiles anything. Signing, when it
-#   exists, will be a third job with its own credential.
+#   founder credentials, no signing keys. Only the final `publish` job holds the
+#   Cloudflare credential - the same one the plugin release pipeline already uses -
+#   and it never compiles anything. Signing, when it exists, will be a third job
+#   with its own credential.
 #
 #   Nothing from the specification reaches a shell command, a compiler flag or a
 #   file path: the spec arrives as an environment variable, is written to a fixed
@@ -368,14 +369,14 @@ jobs:
       - name: Upload artifacts and evidence to Zarlino R2
         shell: bash
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.R2_BUILD_UPLOAD_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
           BUILD_ID: ${{ inputs.build_id }}
           ARTIFACT_NAME: ${{ needs.assemble.outputs.artifact_name }}
         run: |
           set -euo pipefail
           if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-            echo "::error::R2_BUILD_UPLOAD_TOKEN is not configured - cannot publish the artifact"
+            echo "::error::CLOUDFLARE_API_TOKEN is not configured - cannot publish the artifact"
             exit 1
           fi
           # Every value the shell sees is either a constant or an explicit env
