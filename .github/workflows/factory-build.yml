@@ -260,7 +260,32 @@ jobs:
           Compress-Archive -Path $plugin.FullName -DestinationPath $zip -CompressionLevel Optimal
           if (-not (Test-Path $zip)) { Write-Error 'packaging failed'; exit 1 }
 
-          $pluginHash = (Get-FileHash $plugin.FullName -Algorithm SHA256).Hash.ToLower()
+          # A .vst3 bundle is a DIRECTORY, so it has no hash of its own. The
+          # bundle's integrity is the set of its files: hash every file, then hash
+          # the sorted "relative-path sha256" manifest. That is stable, covers
+          # every byte that ships, and changes if a single file inside the bundle
+          # changes - unlike hashing the archive, which also moves with the
+          # compressor.
+          $bundleFiles = @(Get-ChildItem -Path $plugin.FullName -Recurse -File | Sort-Object FullName)
+
+          if ($bundleFiles.Count -eq 0) {
+            Write-Error "the VST3 bundle at $($plugin.FullName) contains no files"
+            exit 1
+          }
+
+          $bundleManifest = @()
+          foreach ($file in $bundleFiles) {
+            $relative = $file.FullName.Substring($plugin.FullName.Length).TrimStart('\', '/').Replace('\', '/')
+            $fileHash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLower()
+            $bundleManifest += "$relative $fileHash"
+          }
+
+          $manifestText = $bundleManifest -join "`n"
+          $sha256 = [System.Security.Cryptography.SHA256]::Create()
+          $bundleDigest = ([System.BitConverter]::ToString(
+              $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($manifestText)))).Replace('-', '').ToLower()
+          $sha256.Dispose()
+
           $zipInfo = Get-Item $zip
           $zipHash = (Get-FileHash $zip.FullName -Algorithm SHA256).Hash.ToLower()
 
@@ -301,7 +326,8 @@ jobs:
               bundleName   = "$name.vst3"
               zipBytes     = $zipInfo.Length
               zipSha256    = $zipHash
-              bundleSha256 = $pluginHash
+              bundleSha256 = $bundleDigest
+              bundleFiles  = $bundleManifest
             }
           }
 
@@ -311,7 +337,7 @@ jobs:
           "artifact_name=$name-v1.vst3.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
           Write-Host "packaged $name"
-          Write-Host "  bundle sha256 $pluginHash"
+          Write-Host "  bundle digest $bundleDigest ($($bundleFiles.Count) files)"
           Write-Host "  zip    sha256 $zipHash ($($zipInfo.Length) bytes)"
 
       - name: Upload build evidence
