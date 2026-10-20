@@ -253,7 +253,10 @@ jobs:
                     Select-Object -First 1
           if ($null -eq $plugin) { Write-Error 'no VST3 bundle was produced'; exit 1 }
 
-          $name = $plugin.BaseName
+          # The bundle is a directory named "<Product>.vst3"; the product name is
+          # that name without the format suffix.
+          $name = $plugin.Name -replace '\.vst3$', ''
+          if ([string]::IsNullOrWhiteSpace($name)) { Write-Error 'could not derive the product name'; exit 1 }
           "product_name=$name" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
           $zip = "work/package/$name-v1.vst3.zip"

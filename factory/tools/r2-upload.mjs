@@ -92,7 +92,11 @@ function safeKey(key) {
 
   if (normalised.length === 0 || normalised.length > 400) return null;
   if (normalised.includes('..') || normalised.includes('\\') || normalised.includes('\0')) return null;
-  if (!/^[A-Za-z0-9._/-]+$/.test(normalised)) return null;
+  // Printable ASCII only. Product names legitimately contain spaces (a VST3
+  // bundle is named after the product), and object keys are URL-encoded per
+  // segment when the request is composed, so a space is safe. Traversal,
+  // backslashes, control characters and non-ASCII are still rejected.
+  if (!/^[\x20-\x7E]+$/.test(normalised)) return null;
   if (normalised.split('/').some((segment) => segment === '' || segment === '.')) return null;
 
   return normalised;
