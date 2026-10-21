@@ -1,4 +1,4 @@
-# Zarlino Plugin Factory — V1 production architecture and operations
+# Zarlino Plugin Factory - V1 production architecture and operations
 
 This document describes what is running, where the seams are, and what to do when
 something breaks. It is written to be followed at 2 a.m. by someone who did not
@@ -10,8 +10,8 @@ build it.
 
 A customer describes an audio processor in plain English. Zarlino turns that
 description into a **PluginSpec** (strict, versioned JSON), shows the customer
-exactly what will be built and how it will look, and — once the customer
-authorises it — compiles a Windows VST3 **entirely from certified Zarlino DSP
+exactly what will be built and how it will look, and - once the customer
+authorises it - compiles a Windows VST3 **entirely from certified Zarlino DSP
 modules** in the cloud, runs an automated audio/quality gate on the built bundle,
 and releases the artifact only if that gate passes.
 
@@ -20,39 +20,39 @@ or a file path: the only things that reach the build are numbers and identifiers
 drawn from the certified module catalogue.
 
 ```
-                       ┌──────────────────────────────────────────────┐
-  customer (browser)   │  zarlinoaudio.com  (Cloudflare Worker)       │
-  ───────────────────► │  /factory/*            Astro pages + React   │
-                       │  /api/factory/*        customer API          │
-                       │                                              │
-                       │  FactoryIdentity DO   accounts, sessions,    │
-                       │    (one, "global")    plans, payments,       │
-                       │                       rate limits, analytics │
-                       │  FactoryWorkspace DO  projects, specs,       │
-                       │    (one per customer) builds, artifacts,     │
-                       │                       usage / metering       │
-                       └───────────────┬──────────────────────────────┘
-                                       │ x-factory-gateway (service secret)
-                                       ▼
-                       ┌──────────────────────────────────────────────┐
-                       │  os.zarlinoaudio.com (Executive OS Worker)   │
-                       │  /api/factory/interpret   -> DeepSeek, metered│
-                       │  /api/factory/builds      -> GitHub dispatch  │
-                       │  /api/factory/builds/:id  -> status reconcile │
-                       │  factory_builds (durable, migration v40)      │
-                       └───────────────┬──────────────────────────────┘
-                                       │ GITHUB_TOKEN (actions:write)
-                                       ▼
-                       ┌──────────────────────────────────────────────┐
-                       │ .github/workflows/factory-build.yml          │
-                       │  assemble (NO secrets): validate spec with   │
-                       │    the C++ kernel -> generate project ->      │
-                       │    compile VST3 -> run the 19-gate quality    │
-                       │    check on the BUILT BUNDLE -> package+hash  │
-                       │  publish: upload evidence + artifact to R2,   │
-                       │    then report completion                    │
-                       └───────────────┬──────────────────────────────┘
-                                       ▼
+                       +----------------------------------------------+
+  customer (browser)   |  zarlinoaudio.com  (Cloudflare Worker)       |
+  -------------------> |  /factory/*            Astro pages + React   |
+                       |  /api/factory/*        customer API          |
+                       |                                              |
+                       |  FactoryIdentity DO   accounts, sessions,    |
+                       |    (one, "global")    plans, payments,       |
+                       |                       rate limits, analytics |
+                       |  FactoryWorkspace DO  projects, specs,       |
+                       |    (one per customer) builds, artifacts,     |
+                       |                       usage / metering       |
+                       +---------------+------------------------------+
+                                       | x-factory-gateway (service secret)
+                                       v
+                       +----------------------------------------------+
+                       |  os.zarlinoaudio.com (Executive OS Worker)   |
+                       |  /api/factory/interpret  -> DeepSeek, metered|
+                       |  /api/factory/builds     -> GitHub dispatch  |
+                       |  /api/factory/builds/:id -> status reconcile |
+                       |  factory_builds (durable, migration v40)     |
+                       +---------------+------------------------------+
+                                       | GITHUB_TOKEN (actions:write)
+                                       v
+                       +----------------------------------------------+
+                       | .github/workflows/factory-build.yml          |
+                       |  assemble (NO secrets): validate spec with   |
+                       |    the C++ kernel -> generate project ->      |
+                       |    compile VST3 -> run the 19-gate quality    |
+                       |    check on the BUILT BUNDLE -> package+hash  |
+                       |  publish: upload evidence + artifact to R2,   |
+                       |    then report completion                    |
+                       +---------------+------------------------------+
+                                       v
                        r2://zarlino-artifacts/factory-builds/<buildId>/
                          artifact/<Product>-v1.vst3.zip
                          build-record.json   (written only after the gate passed)
@@ -79,7 +79,7 @@ object, so an identifier cannot be swapped to reach someone else's data. On top
 of that, every workspace statement filters on `user_id`, and the service client
 injects `userId` at the binding (a service function cannot forget it).
 
-A cross-account read returns **404** — the same answer as a row that never
+A cross-account read returns **404** - the same answer as a row that never
 existed, so the API cannot be used to confirm that another customer's project
 exists.
 
@@ -95,7 +95,7 @@ exists.
   `/api/admin/*`. Customer code never reads it; the only route that does is
   `GET /api/factory/admin/metrics`, which requires a founder session.
 * **Executive OS founder auth** is a third, separate credential
-  (`FOUNDER_AUTH_TOKEN`). The factory gateway on the OS does **not** accept it —
+  (`FOUNDER_AUTH_TOKEN`). The factory gateway on the OS does **not** accept it -
   `/api/factory/*` on the OS requires `FACTORY_GATEWAY_SECRET` (service) or, for
   the completion callback only, `BUILD_REPORT_TOKEN`.
 * CSRF: every mutating customer route requires a same-origin `Origin` (or
@@ -138,7 +138,7 @@ npx wrangler deploy
 
 The first deploy of this version registers the two Durable Object classes
 (`[[migrations]] tag = "v1"`). The objects create their own schema on first
-touch — there is no manual migration step, and re-running it is a no-op.
+touch - there is no manual migration step, and re-running it is a no-op.
 
 ### Executive OS
 
@@ -168,7 +168,7 @@ signed out).
 | `GET /api/health` | website | 200 |
 | `GET /api/ready` | website | 200, reports capability |
 | `GET /api/factory/plans` | website | 200 JSON (public, cheap) |
-| `GET /api/factory/admin/metrics` | website (founder session) | funnel, rates, module usage |
+| `GET /api/factory/admin/metrics` | website (founder session) | funnel, rates, unit costs, module usage |
 | `GET /api/health` | OS | 200 |
 | `factory_builds` rows | OS console | no row stuck non-terminal beyond `FACTORY_MAX_BUILD_MINUTES` |
 | Doctor check `security.internal_secret` | OS | PASS (fails closed when unset) |
@@ -176,7 +176,9 @@ signed out).
 
 The funnel metrics endpoint returns signup -> prompt -> valid spec -> build
 requested -> build passed -> download -> repeat build -> paid conversion, plus
-build success rate, unsupported-request frequency and per-module usage.
+build success rate, unsupported-request frequency, per-module usage, median build
+duration, mean variable cost per build, mean AI cost per design and a modelled
+monthly contribution margin that states its utilisation inputs.
 
 ---
 
@@ -213,7 +215,7 @@ know about `factory_builds` simply ignores the table.
 
 Remove `workflow_dispatch` from `factory-build.yml` on `main`. In-flight builds
 finish; new dispatches fail at GitHub and the build is recorded `FAILED`
-(`DISPATCH_FAILED`) — never left half-built.
+(`DISPATCH_FAILED`) - never left half-built.
 
 **Recover a build stuck in a non-terminal state**
 
@@ -251,11 +253,11 @@ report, "known limitations").
 
 | Symptom | Likely cause | Action |
 |---|---|---|
-| Signups 500 | identity DO unavailable | check `wrangler tail`; DO classes are registered by the migration — confirm `[[migrations]]` is present in the deployed version |
+| Signups 500 | identity DO unavailable | check `wrangler tail`; DO classes are registered by the migration - confirm `[[migrations]]` is present in the deployed version |
 | Assistant always "unavailable" | `DEEPSEEK_API_KEY` missing/exhausted on the OS | check `GET /api/ai/exec-probe` on the OS; top up the provider account |
 | Every build fails `DISPATCH_FAILED` | `GITHUB_TOKEN` expired or lacking `actions:write` | rotate the token; verify `GET /repos/.../actions/workflows/factory-build.yml` returns 200 |
 | Builds succeed on GitHub, stay `QUEUED` in the product | OS cannot read R2 evidence | confirm the OS `ARTIFACTS` binding still points at `zarlino-artifacts` and the publish job ran |
-| Download returns 410 | artifact aged out of R2 retention | expected; ask the customer to rebuild (identical spec reuses the build if it is still present, otherwise it is recompiled) |
+| Download returns 410 | artifact aged out of R2 retention | expected; ask the customer to rebuild (an identical spec hands back the existing build if it is still present, otherwise it is recompiled) |
 | Downloads 503 | `FACTORY_ARTIFACTS` binding missing | re-deploy with the binding; no data loss |
 | Webhook 401 | wrong `PAYSTACK_SECRET_KEY` | rotate to the live secret; a `charge.success` can always be re-verified by the customer's return page |
 
