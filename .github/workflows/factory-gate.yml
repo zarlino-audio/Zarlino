@@ -14,6 +14,14 @@ on:
   pull_request:
     paths:
       - 'factory/**'
+      - 'zarlino-website/src/factory/**'
+      - 'zarlino-website/test/factory/**'
+      - 'zarlino-website/src/pages/factory/**'
+      - 'zarlino-website/src/components/factory/**'
+      - 'zarlino-website/wrangler.toml'
+      - 'zarlino-website/package.json'
+      - 'zarlino-website/package-lock.json'
+      - 'zarlino-website/tsconfig.factory.json'
       - 'shared/dsp/**'
       - 'shared/utils/**'
       - 'plugins/ZScorch/Source/Saturator.h'
@@ -24,6 +32,14 @@ on:
     branches: [main]
     paths:
       - 'factory/**'
+      - 'zarlino-website/src/factory/**'
+      - 'zarlino-website/test/factory/**'
+      - 'zarlino-website/src/pages/factory/**'
+      - 'zarlino-website/src/components/factory/**'
+      - 'zarlino-website/wrangler.toml'
+      - 'zarlino-website/package.json'
+      - 'zarlino-website/package-lock.json'
+      - 'zarlino-website/tsconfig.factory.json'
       - 'shared/dsp/**'
       - 'shared/utils/**'
       - 'plugins/ZScorch/Source/Saturator.h'
@@ -91,3 +107,71 @@ jobs:
           name: factory-gate-ctest-log
           path: build/Testing/Temporary/LastTest.log
           if-no-files-found: warn
+
+      #------------------------------------------------------------------------
+      # CATALOGUE PARITY (launch gate)
+      #
+      # The customer application validates a design and shows the build plan
+      # BEFORE a build is paid for. Its TypeScript catalogue must therefore be
+      # byte-for-byte the kernel's own manifest set. This step regenerates the
+      # catalogue from the just-built kernel and refuses a mismatch: a stale
+      # catalogue would let a customer pay for a build that cannot succeed, or
+      # refuse a design that would have worked.
+      #------------------------------------------------------------------------
+      - name: Catalogue parity with the kernel
+        shell: pwsh
+        run: |
+          $cli = 'build/factory/ZarlinoFactory_Check_artefacts/Release/ZarlinoFactory_Check.exe'
+          & $cli --catalog-json | Out-File -FilePath catalog-generated.json -Encoding utf8
+
+          $expected = Get-Content factory/catalog/modules.json -Raw
+          $actual = Get-Content catalog-generated.json -Raw
+
+          if ($expected -ne $actual) {
+            Write-Host '--- committed catalogue ---'
+            Write-Host $expected
+            Write-Host '--- generated from the kernel ---'
+            Write-Host $actual
+            Write-Error 'factory/catalog/modules.json is stale: regenerate it from ZarlinoFactory_Check --catalog-json and update zarlino-website/src/factory/catalog.ts'
+            exit 1
+          }
+          Write-Host 'catalogue matches the compiled kernel'
+
+  #==========================================================================
+  # Customer application gate (Node side of the same factory).
+  #
+  # Runs the TypeScript engine (PluginSpec validation, plan/UI compilation,
+  # entitlement rules, the store, the HTTP surface, the launch simulation and
+  # the security cases) plus the production Astro build. This is the gate that
+  # proves the thing a customer actually touches.
+  #==========================================================================
+  customer-app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: zarlino-website
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: zarlino-website/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck the factory application (strict)
+        run: npx tsc --noEmit -p tsconfig.factory.json
+
+      - name: Factory tests (unit, isolation, launch simulation, security)
+        run: npx vitest run test/factory --reporter=verbose
+
+      - name: Production site build
+        run: npm run build
+
+      - name: Worker bundle check (bindings resolve, DO classes register)
+        run: npx wrangler deploy --dry-run --outdir .wrangler/ci-dist

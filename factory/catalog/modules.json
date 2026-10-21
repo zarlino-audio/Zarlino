@@ -1,0 +1,683 @@
+[
+  {
+    "id": "zarlino.dynamics.compressor",
+    "version": "1.0.0",
+    "displayName": "Compressor",
+    "description": "Feedforward compressor with soft knee and makeup gain",
+    "category": "dynamics",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "threshold",
+        "displayName": "Threshold",
+        "unit": "dB",
+        "min": -60,
+        "max": 0,
+        "default": -18,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Dynamics"
+      },
+      {
+        "id": "ratio",
+        "displayName": "Ratio",
+        "unit": "ratio",
+        "min": 1,
+        "max": 20,
+        "default": 4,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Dynamics"
+      },
+      {
+        "id": "attack",
+        "displayName": "Attack",
+        "unit": "ms",
+        "min": 0.1,
+        "max": 200,
+        "default": 10,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Timing"
+      },
+      {
+        "id": "release",
+        "displayName": "Release",
+        "unit": "ms",
+        "min": 10,
+        "max": 2000,
+        "default": 150,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Timing"
+      },
+      {
+        "id": "knee",
+        "displayName": "Knee",
+        "unit": "dB",
+        "min": 0,
+        "max": 24,
+        "default": 6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Dynamics"
+      },
+      {
+        "id": "makeup",
+        "displayName": "Makeup",
+        "unit": "dB",
+        "min": 0,
+        "max": 24,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      },
+      {
+        "id": "detection",
+        "displayName": "Detection",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 2,
+        "group": "Detector"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.dynamics.gate",
+    "version": "1.0.0",
+    "displayName": "Gate",
+    "description": "Downward expander / noise gate with hysteresis",
+    "category": "dynamics",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "threshold",
+        "displayName": "Threshold",
+        "unit": "dB",
+        "min": -80,
+        "max": 0,
+        "default": -45,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Gate"
+      },
+      {
+        "id": "range",
+        "displayName": "Range",
+        "unit": "dB",
+        "min": -80,
+        "max": 0,
+        "default": -40,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Gate"
+      },
+      {
+        "id": "attack",
+        "displayName": "Attack",
+        "unit": "ms",
+        "min": 0.1,
+        "max": 200,
+        "default": 2,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Timing"
+      },
+      {
+        "id": "release",
+        "displayName": "Release",
+        "unit": "ms",
+        "min": 10,
+        "max": 2000,
+        "default": 200,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Timing"
+      },
+      {
+        "id": "hysteresis",
+        "displayName": "Hysteresis",
+        "unit": "dB",
+        "min": 0,
+        "max": 24,
+        "default": 6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Gate"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.eq.parametric",
+    "version": "1.0.0",
+    "displayName": "Parametric EQ",
+    "description": "Four-band parametric equaliser: low shelf, two peaks, high shelf",
+    "category": "equalizer",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "lowShelfFreq",
+        "displayName": "Low Shelf Freq",
+        "unit": "Hz",
+        "min": 20,
+        "max": 1000,
+        "default": 100,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Low"
+      },
+      {
+        "id": "lowShelfGain",
+        "displayName": "Low Shelf Gain",
+        "unit": "dB",
+        "min": -18,
+        "max": 18,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Low"
+      },
+      {
+        "id": "lowShelfQ",
+        "displayName": "Low Shelf Q",
+        "unit": "Q",
+        "min": 0.3,
+        "max": 4,
+        "default": 0.707,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Low"
+      },
+      {
+        "id": "peakLowFreq",
+        "displayName": "Low Peak Freq",
+        "unit": "Hz",
+        "min": 60,
+        "max": 8000,
+        "default": 400,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Low Mid"
+      },
+      {
+        "id": "peakLowGain",
+        "displayName": "Low Peak Gain",
+        "unit": "dB",
+        "min": -18,
+        "max": 18,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Low Mid"
+      },
+      {
+        "id": "peakLowQ",
+        "displayName": "Low Peak Q",
+        "unit": "Q",
+        "min": 0.3,
+        "max": 8,
+        "default": 0.9,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Low Mid"
+      },
+      {
+        "id": "peakHighFreq",
+        "displayName": "High Peak Freq",
+        "unit": "Hz",
+        "min": 300,
+        "max": 16000,
+        "default": 3000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "High Mid"
+      },
+      {
+        "id": "peakHighGain",
+        "displayName": "High Peak Gain",
+        "unit": "dB",
+        "min": -18,
+        "max": 18,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "High Mid"
+      },
+      {
+        "id": "peakHighQ",
+        "displayName": "High Peak Q",
+        "unit": "Q",
+        "min": 0.3,
+        "max": 8,
+        "default": 0.9,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "High Mid"
+      },
+      {
+        "id": "highShelfFreq",
+        "displayName": "High Shelf Freq",
+        "unit": "Hz",
+        "min": 2000,
+        "max": 20000,
+        "default": 8000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "High"
+      },
+      {
+        "id": "highShelfGain",
+        "displayName": "High Shelf Gain",
+        "unit": "dB",
+        "min": -18,
+        "max": 18,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "High"
+      },
+      {
+        "id": "highShelfQ",
+        "displayName": "High Shelf Q",
+        "unit": "Q",
+        "min": 0.3,
+        "max": 4,
+        "default": 0.707,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "High"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.eq.tilt",
+    "version": "1.0.0",
+    "displayName": "Tilt EQ",
+    "description": "Spectral tilt around a pivot frequency",
+    "category": "equalizer",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "tiltDb",
+        "displayName": "Tilt",
+        "unit": "dB",
+        "min": -12,
+        "max": 12,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Tone"
+      },
+      {
+        "id": "pivotHz",
+        "displayName": "Pivot",
+        "unit": "Hz",
+        "min": 200,
+        "max": 8000,
+        "default": 1000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Tone"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.filter.multimode",
+    "version": "1.0.0",
+    "displayName": "Multimode Filter",
+    "description": "Resonant low-pass / high-pass, 12 or 24 dB per octave",
+    "category": "filter",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "shape",
+        "displayName": "Shape",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 2,
+        "group": "Filter"
+      },
+      {
+        "id": "frequency",
+        "displayName": "Frequency",
+        "unit": "Hz",
+        "min": 20,
+        "max": 20000,
+        "default": 1000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Filter"
+      },
+      {
+        "id": "resonance",
+        "displayName": "Resonance",
+        "unit": "Q",
+        "min": 0.1,
+        "max": 10,
+        "default": 0.707,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Filter"
+      },
+      {
+        "id": "slope",
+        "displayName": "Slope",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 2,
+        "group": "Filter"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.gain",
+    "version": "1.0.0",
+    "displayName": "Gain",
+    "description": "Smoothed trim stage with polarity inversion",
+    "category": "utility",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "gainDb",
+        "displayName": "Gain",
+        "unit": "dB",
+        "min": -60,
+        "max": 24,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Trim"
+      },
+      {
+        "id": "polarity",
+        "displayName": "Polarity",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 2,
+        "group": "Trim"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.limiter",
+    "version": "1.0.0",
+    "displayName": "Limiter",
+    "description": "Brick-wall lookahead limiter with a fixed 1 ms window",
+    "category": "limiter",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 48,
+    "parameters": [
+      {
+        "id": "ceiling",
+        "displayName": "Ceiling",
+        "unit": "dB",
+        "min": -12,
+        "max": 0,
+        "default": -1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Limiter"
+      },
+      {
+        "id": "release",
+        "displayName": "Release",
+        "unit": "ms",
+        "min": 1,
+        "max": 500,
+        "default": 50,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Limiter"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.mix.drywet",
+    "version": "1.0.0",
+    "displayName": "Dry/Wet",
+    "description": "Parallel dry/wet blend, linear or equal-power",
+    "category": "mixing",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Blend"
+      },
+      {
+        "id": "equalPower",
+        "displayName": "Equal Power",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 2,
+        "group": "Blend"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.saturation",
+    "version": "1.0.0",
+    "displayName": "Saturation",
+    "description": "Six-mode harmonic saturator with ADAA anti-aliasing (ZScorch curves)",
+    "category": "saturation",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "drive",
+        "displayName": "Drive",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Drive"
+      },
+      {
+        "id": "mode",
+        "displayName": "Mode",
+        "unit": "",
+        "min": 0,
+        "max": 5,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 6,
+        "group": "Drive"
+      },
+      {
+        "id": "harmReduction",
+        "displayName": "Harmonic Reduction",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Tone"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.shaping.transient",
+    "version": "1.0.0",
+    "displayName": "Transient Shaper",
+    "description": "Dual-envelope transient shaper for attack and sustain",
+    "category": "shaping",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "attack",
+        "displayName": "Attack",
+        "unit": "dB",
+        "min": -24,
+        "max": 24,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Shaper"
+      },
+      {
+        "id": "sustain",
+        "displayName": "Sustain",
+        "unit": "dB",
+        "min": -24,
+        "max": 24,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Shaper"
+      },
+      {
+        "id": "attackTime",
+        "displayName": "Attack Time",
+        "unit": "ms",
+        "min": 0.5,
+        "max": 50,
+        "default": 5,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Detector"
+      },
+      {
+        "id": "releaseTime",
+        "displayName": "Release Time",
+        "unit": "ms",
+        "min": 5,
+        "max": 500,
+        "default": 100,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Detector"
+      },
+      {
+        "id": "sensitivity",
+        "displayName": "Sensitivity",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Detector"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.stereo.width",
+    "version": "1.0.0",
+    "displayName": "Stereo Width",
+    "description": "Mid/side width control with bass-mono guard",
+    "category": "stereo",
+    "certification": "CERTIFIED",
+    "channels": [
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "width",
+        "displayName": "Width",
+        "unit": "",
+        "min": 0,
+        "max": 2,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Image"
+      },
+      {
+        "id": "bassMonoAmount",
+        "displayName": "Bass Mono",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Image"
+      },
+      {
+        "id": "bassMonoFreq",
+        "displayName": "Bass Mono Freq",
+        "unit": "Hz",
+        "min": 20,
+        "max": 500,
+        "default": 120,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Image"
+      }
+    ]
+  }
+]

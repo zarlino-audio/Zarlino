@@ -13,11 +13,13 @@
 //==============================================================================
 
 #include "zfactory/GraphEngine.h"
+#include "zfactory/JsonUtil.h"
 #include "zfactory/ModuleRegistry.h"
 #include "zfactory/PluginSpec.h"
 #include "zfactory/Version.h"
 
 #include <cmath>
+#include <cstdio>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -35,6 +37,115 @@ int printCatalog (const zfactory::ModuleRegistry& registry)
     std::cout << "catalog fingerprint: 0x" << std::hex
               << registry.catalogFingerprint() << std::dec << "\n";
 
+    return 0;
+}
+
+const char* channelName (zfactory::ChannelMode mode)
+{
+    return mode == zfactory::ChannelMode::Mono ? "mono" : "stereo";
+}
+
+std::string escapeJson (const std::string& text)
+{
+    std::string out;
+    out.reserve (text.size() + 8);
+
+    for (const char c : text)
+    {
+        switch (c)
+        {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if (static_cast<unsigned char> (c) < 0x20)
+                {
+                    char buffer[8];
+                    std::snprintf (buffer, sizeof (buffer), "\\u%04x", static_cast<unsigned char> (c));
+                    out += buffer;
+                }
+                else
+                {
+                    out += c;
+                }
+        }
+    }
+
+    return out;
+}
+
+/**
+ * Compact, lossless-enough formatting for catalogue numbers: six significant
+ * digits removes float32 noise (0.707f prints as "0.707", not
+ * "0.707000017"), so the committed catalogue and the compiled one are textually
+ * identical and CI can diff them directly.
+ */
+std::string catalogNumber (float value)
+{
+    char buffer[40];
+    std::snprintf (buffer, sizeof (buffer), "%.6g", static_cast<double> (value));
+    return std::string (buffer);
+}
+
+/**
+ * Machine-readable catalogue: the single artefact the customer application's
+ * TypeScript catalogue is diffed against in CI. Field names and ordering are
+ * part of that contract - do not reorder or rename without updating
+ * zarlino-website/src/factory/catalog.ts and factory/catalog/modules.json.
+ */
+int printCatalogJson (const zfactory::ModuleRegistry& registry)
+{
+    std::cout << "[\n";
+
+    const auto& entries = registry.entries();
+
+    for (size_t i = 0; i < entries.size(); ++i)
+    {
+        const auto& manifest = entries[i].manifest;
+
+        std::cout << "  {\n";
+        std::cout << "    \"id\": \"" << escapeJson (manifest.id) << "\",\n";
+        std::cout << "    \"version\": \"" << manifest.version.to_string() << "\",\n";
+        std::cout << "    \"displayName\": \"" << escapeJson (manifest.displayName) << "\",\n";
+        std::cout << "    \"description\": \"" << escapeJson (manifest.description) << "\",\n";
+        std::cout << "    \"category\": \"" << zfactory::moduleCategoryName (manifest.category) << "\",\n";
+        std::cout << "    \"certification\": \"" << zfactory::certificationStateName (manifest.certification) << "\",\n";
+        std::cout << "    \"channels\": [";
+
+        for (size_t c = 0; c < manifest.supportedChannels.size(); ++c)
+        {
+            if (c > 0) std::cout << ", ";
+            std::cout << "\"" << channelName (manifest.supportedChannels[c]) << "\"";
+        }
+
+        std::cout << "],\n";
+        std::cout << "    \"referenceLatencySamples\": " << manifest.referenceLatencySamples << ",\n";
+        std::cout << "    \"parameters\": [\n";
+
+        for (size_t p = 0; p < manifest.parameters.size(); ++p)
+        {
+            const auto& parameter = manifest.parameters[p];
+
+            std::cout << "      { \"id\": \"" << escapeJson (parameter.id) << "\", "
+                      << "\"displayName\": \"" << escapeJson (parameter.displayName) << "\", "
+                      << "\"unit\": \"" << escapeJson (parameter.unit) << "\", "
+                      << "\"min\": " << catalogNumber (parameter.minValue) << ", "
+                      << "\"max\": " << catalogNumber (parameter.maxValue) << ", "
+                      << "\"default\": " << catalogNumber (parameter.defaultValue) << ", "
+                      << "\"logarithmic\": " << (parameter.logarithmic ? "true" : "false") << ", "
+                      << "\"stepCount\": " << (parameter.stepped ? parameter.stepCount : 0) << ", "
+                      << "\"group\": \"" << escapeJson (parameter.displayGroup) << "\" }";
+
+            std::cout << (p + 1 < manifest.parameters.size() ? ",\n" : "\n");
+        }
+
+        std::cout << "    ]\n";
+        std::cout << "  }" << (i + 1 < entries.size() ? ",\n" : "\n");
+    }
+
+    std::cout << "]\n";
     return 0;
 }
 
@@ -56,6 +167,10 @@ int main (int argc, char** argv)
         if (argument == "--catalog")
         {
             return printCatalog (builtinRegistry());
+        }
+        else if (argument == "--catalog-json")
+        {
+            return printCatalogJson (builtinRegistry());
         }
         else if (argument == "--render")
         {
@@ -88,7 +203,8 @@ int main (int argc, char** argv)
     if (specPath.empty())
     {
         std::cerr << "usage: ZarlinoFactory_Check <spec.json> [--sample-rate N] [--block N] [--render]\n"
-                  << "       ZarlinoFactory_Check --catalog\n";
+                  << "       ZarlinoFactory_Check --catalog\n"
+                  << "       ZarlinoFactory_Check --catalog-json\n";
         return 2;
     }
 
