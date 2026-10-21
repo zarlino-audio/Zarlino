@@ -226,7 +226,7 @@ runner warmth, so budget 8–15 minutes end to end including queueing.
 |---|---|
 | `zarlino-audio/zarlino-website` (customer app) | **`71622bc`** (feature `27a750d`, security `c01ff33`, catalogue fix `71622bc`) |
 | `zarlino-audio/zarlino-executive-os` (gateway) | **`5840651`** (feature `1ba6304` + key binding) |
-| `zarlino-audio/Zarlino` (kernel catalogue + gate + docs) | **`8f0e1460`** + the catalogue/compare commit that follows it |
+| `zarlino-audio/Zarlino` (kernel catalogue + gate + docs) | **`369bfd0d`** (feature `8f0e1460`, comparison + report `369bfd0d`) |
 
 Deployment is manual (as documented in `docs/factory/PLUGIN_FACTORY_V1.md`); no
 release tag has been created.
