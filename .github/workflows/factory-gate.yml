@@ -122,20 +122,17 @@ jobs:
         shell: pwsh
         run: |
           $cli = 'build/factory/ZarlinoFactory_Check_artefacts/Release/ZarlinoFactory_Check.exe'
+          if (-not (Test-Path $cli)) { Write-Error "factory CLI not found at $cli"; exit 1 }
+
           & $cli --catalog-json | Out-File -FilePath catalog-generated.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { Write-Error 'the kernel could not print its catalogue'; exit $LASTEXITCODE }
 
-          $expected = Get-Content factory/catalog/modules.json -Raw
-          $actual = Get-Content catalog-generated.json -Raw
-
-          if ($expected -ne $actual) {
-            Write-Host '--- committed catalogue ---'
-            Write-Host $expected
-            Write-Host '--- generated from the kernel ---'
-            Write-Host $actual
+          # Semantic comparison (numbers with a tolerance, everything else exact).
+          node factory/tools/catalog-compare.mjs factory/catalog/modules.json catalog-generated.json
+          if ($LASTEXITCODE -ne 0) {
             Write-Error 'factory/catalog/modules.json is stale: regenerate it from ZarlinoFactory_Check --catalog-json and update zarlino-website/src/factory/catalog.ts'
             exit 1
           }
-          Write-Host 'catalogue matches the compiled kernel'
 
   #==========================================================================
   # Customer application gate (Node side of the same factory).

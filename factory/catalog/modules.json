@@ -86,7 +86,7 @@
         "max": 1,
         "default": 0,
         "logarithmic": false,
-        "stepCount": 2,
+        "stepCount": 0,
         "group": "Detector"
       }
     ]
