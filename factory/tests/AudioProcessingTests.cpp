@@ -25,6 +25,7 @@ public:
         testSilence();
         testImpulse();
         testHostileInput();
+        testHostileInputWithDryWet();
         testResetAndReprepareCycles();
         testBypass();
         testDryWet();
@@ -291,6 +292,45 @@ private:
             block.sine (440.0, 48000.0, 0.5f);
             engine->process (block.pointers(), 2, 256);
             expect (block.allFinite(), "the graph must recover after hostile input");
+        }
+    }
+
+    void testHostileInputWithDryWet()
+    {
+        beginTest ("hostile input cannot reach the output through the dry path");
+
+        // The dry side of the mixer is copied before any module sanitises its
+        // input, so a NaN block used to survive at any mix below 100% wet. This
+        // is the only path where a module cannot clean the signal itself.
+        for (float mix : { 0.0f, 0.25f, 0.5f, 0.99f })
+        {
+            for (bool infinity : { false, true })
+            {
+                auto spec = makeFullSpec (ChannelMode::Stereo);
+                spec.dryWet.enabled = true;
+                spec.dryWet.defaultMix = mix;
+
+                auto engine = buildPrepared (spec, 48000.0, 256);
+
+                if (engine == nullptr)
+                    continue;
+
+                juce::AudioBuffer<float> source (2, 256);
+
+                if (infinity)
+                    ZStressTestUtils::generateInfBuffer (source);
+                else
+                    ZStressTestUtils::generateNaNBuffer (source);
+
+                Block block (2, 256);
+                block.copyFrom (source);
+
+                engine->process (block.pointers(), 2, 256);
+
+                expect (block.allFinite(),
+                        juce::String ("hostile input must stay finite at mix ")
+                            + juce::String (mix, 2) + (infinity ? " (infinity)" : " (NaN)"));
+            }
         }
     }
 

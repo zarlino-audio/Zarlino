@@ -25,6 +25,32 @@ FactoryError withPath (FactoryError error, std::string path)
     error.path = std::move (path);
     return error;
 }
+
+/** Replace NaN and +/-Inf with 0.0f in place.
+    Modules sanitise their own input, but the dry path of the dry/wet mixer is
+    copied from the block *before* any module runs, so hostile input would
+    otherwise reach the output through the dry side of the mix. Sanitising once
+    here covers both paths, and leaves every finite sample bit-identical. */
+void sanitiseInput (float* const* channels, int numChannels, int offset, int numSamples) noexcept
+{
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        float* data = channels[ch];
+
+        if (data == nullptr)
+            continue;
+
+        float* block = data + offset;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const float value = block[i];
+
+            if (! (value > -1.0e30f && value < 1.0e30f))
+                block[i] = 0.0f;
+        }
+    }
+}
 } // namespace
 
 //==============================================================================
@@ -438,6 +464,7 @@ void GraphEngine::process (float* const* channels, int numChannels, int numSampl
     while (remaining > 0)
     {
         const int blockSize = std::min (remaining, m_maxBlockSize);
+        sanitiseInput (channels, m_channelCount, offset, blockSize);
         processBlockInternal (channels, offset, blockSize);
         offset += blockSize;
         remaining -= blockSize;
