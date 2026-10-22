@@ -1,5 +1,11 @@
 name: Factory Product Build
 
+# The run's display name carries the immutable build id, so the orchestrator can
+# match a run to its build exactly instead of guessing from timestamps (and so a
+# human opening the Actions tab can tell which customer build they are looking
+# at). The orchestrator reads this through the runs API.
+run-name: factory-build-${{ inputs.build_id }}
+
 #==============================================================================
 # Zarlino factory - cloud build of ONE generated product.
 #
