@@ -152,12 +152,23 @@ npx wrangler secret put BUILD_REPORT_TOKEN
 npx wrangler deploy                                # applies migration v40
 ```
 
+The OS reconciles every non-terminal factory build on the 15-minute cron
+(`POST /api/_factory-reconcile`, internal credential only), so a build reaches
+TERMINAL state - and the customer sees FAILED or READY - even if they closed the
+tab. Status therefore never depends on the browser polling.
+
 ### Post-deploy acceptance
 
 `zarlino-website/scripts/post-deploy-check.mjs` consumes `routes/contract.json`,
 which now includes `/factory/`, `/factory/project/`,
 `/factory/billing/return/`, `/api/factory/plans` and `/api/factory/me` (401 when
 signed out).
+
+The factory has two CI gates, one per repository that owns the code:
+`.github/workflows/factory-gate.yml` in `zarlino-audio/Zarlino` (kernel build,
+`ctest Factory.Unit`, example-spec rendering, catalogue parity) and in
+`zarlino-audio/zarlino-website` (strict typecheck, the factory test suites, the
+Astro build, and a `wrangler deploy --dry-run` bundle check).
 
 ---
 
