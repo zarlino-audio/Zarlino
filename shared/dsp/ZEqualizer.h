@@ -203,6 +203,8 @@ public:
         for (auto& filter : m_filters)
             filter.prepare(numChannels);
 
+        resetInlineStates();
+
         // Mark every band dirty so coefficients are computed on first process
         m_anyDirty = true;
         for (size_t i = 0; i < static_cast<size_t>(NumBands); ++i)
@@ -215,6 +217,8 @@ public:
     {
         for (auto& filter : m_filters)
             filter.reset();
+
+        resetInlineStates();
     }
 
     //--------------------------------------------------------------------------
@@ -335,6 +339,20 @@ public:
     }
 
 private:
+    //--------------------------------------------------------------------------
+    // Internal state
+    //--------------------------------------------------------------------------
+
+    /// Clears the per-band, per-channel state used by processSample(). The
+    /// MultiChannelBiquad copies in m_filters carry their own state, so resetting
+    /// only those would leave the path that actually renders audio dirty.
+    void resetInlineStates() noexcept
+    {
+        for (auto& states : m_filterStates)
+            for (auto& state : states)
+                state.reset();
+    }
+
     //--------------------------------------------------------------------------
     // Internal coefficient update
     //--------------------------------------------------------------------------

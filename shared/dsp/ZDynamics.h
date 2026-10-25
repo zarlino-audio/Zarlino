@@ -335,7 +335,11 @@ public:
         }
         else
         {
-            m_gainReduction += m_releaseCoeff * (1.0f - m_gainReduction);
+            // One-pole release towards unity. The step must be
+            // (1 - coeff) * (1 - g), i.e. g = 1 + coeff * (g - 1): with coeff
+            // close to 1 the naive g += coeff * (1 - g) jumps the gain back to
+            // unity in a single sample and lets the next peak through.
+            m_gainReduction = 1.0f + m_releaseCoeff * (m_gainReduction - 1.0f);
             m_targetReduction = 1.0f;
         }
 
