@@ -1,11 +1,5 @@
 name: Factory Product Build
 
-# The run's display name carries the immutable build id, so the orchestrator can
-# match a run to its build exactly instead of guessing from timestamps (and so a
-# human opening the Actions tab can tell which customer build they are looking
-# at). The orchestrator reads this through the runs API.
-run-name: factory-build-${{ inputs.build_id }}
-
 #==============================================================================
 # Zarlino factory - cloud build of ONE generated product.
 #
@@ -364,10 +358,10 @@ jobs:
           retention-days: 90
 
   #==========================================================================
-  # READY - upload to R2 and report completion.
+  # READY - upload the artifact and evidence to KV and report completion.
   #
   # This is the only job that holds credentials, it never compiles anything, and
-  # the credential it holds can only write objects into the artifacts bucket.
+  # the credential it holds can only write values into the factory namespace.
   #==========================================================================
   publish:
     name: Publish and report
@@ -405,11 +399,12 @@ jobs:
           echo "evidence present:"
           find work -type f | sort
 
-      - name: Upload artifacts and evidence to Zarlino R2
+      - name: Upload artifacts and evidence to Zarlino KV
         shell: bash
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ vars.CF_ACCOUNT_ID }}
+          FACTORY_KV_NAMESPACE_ID: ${{ vars.FACTORY_KV_NAMESPACE_ID }}
           BUILD_ID: ${{ inputs.build_id }}
           ARTIFACT_NAME: ${{ needs.assemble.outputs.artifact_name }}
         run: |
@@ -418,12 +413,16 @@ jobs:
             echo "::error::CLOUDFLARE_API_TOKEN is not configured - cannot publish the artifact"
             exit 1
           fi
+          if [ -z "${FACTORY_KV_NAMESPACE_ID:-}" ]; then
+            echo "::error::FACTORY_KV_NAMESPACE_ID is not configured - cannot publish the artifact"
+            exit 1
+          fi
           # Every value the shell sees is either a constant or an explicit env
           # var: nothing derived from the specification is interpolated into
           # this script, so a product name cannot alter the command.
-          node factory/tools/r2-upload.mjs \
+          node factory/tools/kv-upload.mjs \
             --account "$CF_ACCOUNT_ID" \
-            --bucket zarlino-artifacts \
+            --namespace "$FACTORY_KV_NAMESPACE_ID" \
             --prefix "factory-builds/$BUILD_ID" \
             --file "artifact/$ARTIFACT_NAME=work/package/$ARTIFACT_NAME" \
             --file "qa-report.json=work/qa-report.json" \
