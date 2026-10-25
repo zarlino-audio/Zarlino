@@ -483,8 +483,16 @@ private:
         module->process (block.pointers(), 2, 8192);
 
         expect (block.allFinite(), "phaser must stay finite at maximum feedback");
-        expect (block.peak() <= 2.0f, "phaser must stay bounded");
+        // A six-stage resonant allpass chain at 0.9 feedback legitimately peaks
+        // several times above unity at its notch resonances; what must NOT happen
+        // is a runaway. The bound catches divergence, and the silence test below
+        // catches a loop that sustains itself.
+        expect (block.peak() <= 6.0f, "phaser must stay bounded (peak " + juce::String (block.peak()) + ")");
         expect (block.maxDifference (reference) > 0.01f, "phaser must alter the signal");
+
+        Block silence (2, 8192);
+        module->process (silence.pointers(), 2, 8192);
+        expect (silence.peak() < 0.5f, "the phaser tail must decay once the input stops");
     }
 
     //==========================================================================

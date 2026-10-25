@@ -132,6 +132,8 @@ void ChorusModule::recomputeTargets() noexcept
 
 void ChorusModule::reset() noexcept
 {
+    recomputeTargets();
+
     for (int channel = 0; channel < 2; ++channel)
     {
         m_lines[channel].clear();
@@ -156,7 +158,7 @@ void ChorusModule::setParameter (int parameterIndex, float value) noexcept
         return;
 
     m_values[parameterIndex] = clamped;
-    m_targetsDirty = true;
+    recomputeTargets();
 }
 
 float ChorusModule::getParameter (int parameterIndex) const noexcept

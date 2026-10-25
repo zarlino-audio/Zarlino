@@ -138,6 +138,8 @@ void PhaserModule::recomputeTargets() noexcept
 
 void PhaserModule::reset() noexcept
 {
+    recomputeTargets();
+
     for (auto& channel : m_state)
         for (auto& stage : channel)
             stage = 0.0f;
@@ -166,7 +168,7 @@ void PhaserModule::setParameter (int parameterIndex, float value) noexcept
         return;
 
     m_values[parameterIndex] = clamped;
-    m_targetsDirty = true;
+    recomputeTargets();
 }
 
 float PhaserModule::getParameter (int parameterIndex) const noexcept

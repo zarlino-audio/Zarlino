@@ -179,6 +179,8 @@ void ReverbModule::recomputeTargets() noexcept
 
 void ReverbModule::reset() noexcept
 {
+    recomputeTargets();
+
     for (int channel = 0; channel < 2; ++channel)
     {
         for (auto& comb : m_combs[channel])
@@ -210,7 +212,7 @@ void ReverbModule::setParameter (int parameterIndex, float value) noexcept
         return;
 
     m_values[parameterIndex] = clamped;
-    m_targetsDirty = true;
+    recomputeTargets();
 }
 
 float ReverbModule::getParameter (int parameterIndex) const noexcept
@@ -267,6 +269,12 @@ void ReverbModule::process (float* const* channels, int numChannels, int numSamp
 
             for (auto& comb : m_combs[channel])
                 sum += comb.process (input[channel], feedback, damping);
+
+            // Eight combs in parallel sum to eight times the input. Without this
+            // normalisation a fully-wet reverb is +18 dB, which is how a "space"
+            // control ends up sounding like a volume control - and how an extreme
+            // case ran past the factory's bounded-output contract.
+            sum *= 1.0f / static_cast<float> (kCombsPerChannel);
 
             for (auto& allpass : m_allpasses[channel])
                 sum = allpass.process (sum);

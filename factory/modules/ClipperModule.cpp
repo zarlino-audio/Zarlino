@@ -117,6 +117,8 @@ void ClipperModule::recomputeTargets() noexcept
 
 void ClipperModule::reset() noexcept
 {
+    recomputeTargets();
+
     m_driveGain.setImmediate (m_driveGain.target());
     m_ceilingGain.setImmediate (m_ceilingGain.target());
     m_mix.setImmediate (m_mix.target());
@@ -134,7 +136,7 @@ void ClipperModule::setParameter (int parameterIndex, float value) noexcept
         return;
 
     m_values[parameterIndex] = clamped;
-    m_targetsDirty = true;
+    recomputeTargets();
 }
 
 float ClipperModule::getParameter (int parameterIndex) const noexcept

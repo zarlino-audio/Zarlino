@@ -159,6 +159,8 @@ void DelayModule::recomputeTargets() noexcept
 
 void DelayModule::reset() noexcept
 {
+    recomputeTargets();
+
     for (auto& line : m_lines)
         std::fill (line.begin(), line.end(), 0.0f);
 
@@ -184,7 +186,7 @@ void DelayModule::setParameter (int parameterIndex, float value) noexcept
         return;
 
     m_values[parameterIndex] = clamped;
-    m_targetsDirty = true;
+    recomputeTargets();
 }
 
 float DelayModule::getParameter (int parameterIndex) const noexcept

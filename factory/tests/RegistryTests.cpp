@@ -84,7 +84,7 @@ private:
 
         const auto& registry = builtinRegistry();
 
-        expectEquals (static_cast<int> (registry.size()), 11);
+        expectEquals (static_cast<int> (registry.size()), 21);
 
         for (const auto& entry : registry.entries())
         {
@@ -126,7 +126,7 @@ private:
 
         expectSuccess (*this, firstCount, "first registration");
         expectSuccess (*this, secondCount, "second registration");
-        expectEquals (static_cast<int> (firstCount.value()), 11);
+        expectEquals (static_cast<int> (firstCount.value()), 21);
         expectEquals (first.catalogFingerprint(), second.catalogFingerprint());
         expectEquals (first.catalogFingerprint(), builtinRegistry().catalogFingerprint());
         expectEquals (jstr (first.describeCatalog()), jstr (second.describeCatalog()));
