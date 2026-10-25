@@ -253,12 +253,16 @@ void ReverbModule::process (float* const* channels, int numChannels, int numSamp
         const float dryLeft = left[i];
         const float dryRight = right[i];
 
+        // Write FIRST, then read `predelaySamples` back from the write head.
+        // Reading before writing makes a zero predelay read the slot that is
+        // about to be filled, so the impulse never enters the network at all -
+        // which is exactly how this looked: a silent reverb at predelay 0.
+        m_predelay[0][static_cast<size_t> (m_predelayIndex)] = flushDenormal (dryLeft);
+        m_predelay[1][static_cast<size_t> (m_predelayIndex)] = flushDenormal (dryRight);
+
         const int readIndex = (m_predelayIndex - predelaySamples + m_predelayLength) % m_predelayLength;
         const float inLeft = m_predelay[0][static_cast<size_t> (readIndex)];
         const float inRight = m_predelay[1][static_cast<size_t> (readIndex)];
-
-        m_predelay[0][static_cast<size_t> (m_predelayIndex)] = flushDenormal (dryLeft);
-        m_predelay[1][static_cast<size_t> (m_predelayIndex)] = flushDenormal (dryRight);
 
         float wet[2] { 0.0f, 0.0f };
         const float input[2] { (inLeft + inRight) * 0.5f, (inLeft + inRight) * 0.5f };

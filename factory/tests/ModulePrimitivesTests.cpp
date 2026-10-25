@@ -294,8 +294,17 @@ private:
 
         expect (aroundEcho > 0.2f, "the echo lands at 100 ms (peak " + juce::String (aroundEcho) + ")");
 
-        // The first repeat must be quieter than the input: feedback < 1.
-        expect (aroundEcho < 0.8f, "the first repeat is attenuated, not amplified");
+        // The FIRST repeat is the delayed input at unity (mix is fully wet); what
+        // feedback controls is the second and later repeats. Measure the third
+        // echo and require it to be quieter than the first.
+        float thirdEcho = 0.0f;
+
+        for (int i = expected * 3 - 50; i < expected * 3 + 200; ++i)
+            thirdEcho = std::max (thirdEcho, std::abs (block.channel (0)[i]));
+
+        expect (thirdEcho > 0.0f, "the delay must repeat more than once");
+        expect (thirdEcho < aroundEcho, "each repeat must be quieter than the last (third "
+                                            + juce::String (thirdEcho) + " vs first " + juce::String (aroundEcho) + ")");
 
         // Mix 0 is a true pass-through.
         setParameter (*module, "mix", 0.0f);
