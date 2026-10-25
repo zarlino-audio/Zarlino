@@ -347,3 +347,121 @@ host (the gate's own JUCE host pass is the automated proxy).
 * Add the per-customer export/restore tool (limitation 3).
 * Add a synthetic canary that builds a fixed spec nightly, so publish regressions
   (like the space-in-name defect) surface without a customer.
+---
+
+# LIVE PASS 2026-10-25 - what changed when the plan was downgraded
+
+This section records a production pass run against the live deployment. It
+separates what is VERIFIED (observed live, with the response) from what is
+BLOCKED (an account-level quota, not a code defect).
+
+## L1. R2 was removed from the deployment path (VERIFIED)
+
+The account's R2 subscription lapsed. Consequence: a Worker that binds an R2
+bucket can no longer be deployed at all -
+
+```
+X [ERROR] A request to the Cloudflare API (.../workers/scripts/zarlino-website/versions) failed.
+  R2 binding error for bucket 'zarlino-artifacts': Please enable R2 through the Cloudflare Dashboard. [code: 10136]
+```
+
+Every deploy of the customer site failed, so no fix could ship. Storage moved to
+KV, which the free plan includes:
+
+| Was | Now | Why |
+|---|---|---|
+| `FACTORY_ARTIFACTS` = R2 bucket `zarlino-artifacts` | KV namespace `zarlino-factory-artifacts` (`3f463262f7aa4b64a13f4b15c870b83f`) | deployable without R2 |
+| `factory/tools/r2-upload.mjs` | `factory/tools/kv-upload.mjs` | same verify-then-publish: every value is written, read back and sha256-compared before READY |
+| OS read of `build-record.json` from R2 | `factoryEvidenceStore()` over KV | identical trust rule: the record must exist and say `qaPassed && qaReport.passed` |
+| `RELEASES` R2 binding | commented out (not deleted) | `/releases/*` already answers 503 "Release storage not bound" instead of crashing; restoring the block is the whole fix |
+
+Key layout is unchanged: `factory-builds/<buildId>/{artifact/..., qa-report.json,
+build-record.json, provenance.json, ui-plan.json, spec.zfactory.json}`.
+
+## L2. Two customer-visible defects found and fixed in this pass (VERIFIED)
+
+**Build status never advanced and could lie.** A customer watched a build sit on
+"Queued for the build server" for thirteen minutes and then jump to READY, and a
+page reload froze the status entirely. Three separate causes:
+
+1. The orchestrator never advanced the durable record between QUEUED and the
+   terminal state, so ASSEMBLING/BUILDING/TESTING/PACKAGING were unreachable in
+   practice. It now reads the run's own step names (`deriveStage`) and walks the
+   record forward one legal step at a time.
+2. The run was matched to a build by creation time, so two builds dispatched in
+   the same minute could inherit each other's state or failure. The workflow now
+   sets `run-name: factory-build-<id>` and reconciliation matches it exactly.
+3. The browser polled only the build *this tab started*. It now watches the build
+   the data says is in flight, asks once immediately on load, and the project and
+   dashboard reads fold the newest in-flight builds so a reload cannot show a
+   stale state.
+
+Live evidence of the fix (build `fb_ac28ea2a2af213cd3f742214`, account B):
+`QUEUED 14:04:25 -> ASSEMBLING 14:08:08 -> BUILDING 14:08:25 -> TESTING 14:12:28
+-> READY 14:13:04`, artifact `Drum Glue-v1.vst3.zip`, 3,553,426 bytes,
+sha256 `d9b0c3a6...77d911`, QA passed.
+
+**The project endpoint served raw database rows.** The build table and the header
+download button read `buildId`, `downloadUrl` and `artifact`, none of which a raw
+row has, so the table dereferenced `undefined` as soon as a build existed. The
+project view now serialises through `buildView`, the projection `/builds/:id`
+already used.
+
+## L3. The launch blocker is a spent free-tier quota, not a defect (VERIFIED)
+
+After a real build, every request that touched a Durable Object began failing:
+
+```
+Error: Exceeded allowed rows read in Durable Objects free tier.
+```
+
+That is the account's daily Durable Object SQL row budget, shared by both workers.
+It reached the customer as a generic 500. That is now mapped to a truthful,
+retryable answer (verified live):
+
+```
+HTTP/1.1 503
+retry-after: 900
+{"error":"CAPACITY","message":"Zarlino is at capacity right now. Please try
+ again in a little while - your work is saved.","retryable":true}
+```
+
+The KV write budget was exhausted too, and that cause was ours:
+
+```
+kv-upload: FAIL PUT factory-builds/.../artifact/blob.bin -> HTTP 429
+{"errors":[{"code":10048,"message":"your account has reached the free usage limit for this operation for today"}]}
+```
+
+The 15-minute monitor sweep wrote ~20 `monitor:<target>` keys on every sweep
+(~1900 writes/day against a 1000/day allowance) and re-stored an unchanged
+DeepSeek balance 96 times a day. `monitorStateWrites` now writes only first
+observations, real transitions, pre-DOWN failures and an hourly refresh of a
+still-DOWN target.
+
+Read volume was also cut on the customer path: `usageReport` ran seven `SUM(...)`
+queries per `/me`, `/projects` and `/builds` call - the same month of usage rows
+billed seven times. One `GROUP BY kind` pass reads each row once.
+
+## L4. What is still BLOCKED and what unblocks it
+
+| Gate item | State | Unblocks on |
+|---|---|---|
+| Live signup -> build -> download on the KV path | **BLOCKED**: DO row quota and KV write quota are spent for the UTC day | the 00:00 UTC reset, then 10.1 |
+| A fresh end-to-end build proving `kv-upload.mjs` + KV download | **BLOCKED** (needs a customer session, which needs the DO) | same |
+| Paystack charge | not attempted this pass; live checkout URL is issued (`checkout.paystack.com`, GHS 199.00) | a real card |
+| FL Studio / second-host load of a *factory* artifact | **manual step not performed**; the automated headless JUCE VST3 host project was prepared but the local MSVC build did not finish in this pass | a DAW session |
+
+Quota arithmetic after this pass (free plan, per UTC day):
+
+| Resource | Free allowance | Before | After |
+|---|---|---|---|
+| DO SQL rows read | 5,000,000 | unknown (exceeded) | usage aggregation 7x -> 1x per request |
+| KV writes | 1,000 | ~1,900 from monitoring alone | ~20 + transitions + 6 per published build |
+| KV reads | 100,000 | - | one per artifact download |
+
+**Recommendation:** the free plan is not a sufficient launching pad for a product
+whose build ledger, founder console and customer app share one daily row budget.
+Workers Paid (USD 5/month) removes the row and write ceilings; the code now
+behaves correctly on either plan, and the KV path means storage costs nothing
+either way.
