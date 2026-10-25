@@ -275,8 +275,10 @@ private:
         module->reset();
 
         // A 100 ms delay at 48 kHz is 4800 samples of silence before the echo.
+        // The block must be long enough to contain several repeats: two of them
+        // need 9600 samples, so 16384 leaves room for the measurement windows.
         const int expected = 4800;
-        Block block (2, 8192);
+        Block block (2, 16384);
         block.impulse (0, 0, 0.8f);
         module->process (block.pointers(), 2, block.numSamples());
 
@@ -297,14 +299,14 @@ private:
         // The FIRST repeat is the delayed input at unity (mix is fully wet); what
         // feedback controls is the second and later repeats. Measure the third
         // echo and require it to be quieter than the first.
-        float thirdEcho = 0.0f;
+        float secondEcho = 0.0f;
 
-        for (int i = expected * 3 - 50; i < expected * 3 + 200; ++i)
-            thirdEcho = std::max (thirdEcho, std::abs (block.channel (0)[i]));
+        for (int i = expected * 2 - 50; i < expected * 2 + 200; ++i)
+            secondEcho = std::max (secondEcho, std::abs (block.channel (0)[i]));
 
-        expect (thirdEcho > 0.0f, "the delay must repeat more than once");
-        expect (thirdEcho < aroundEcho, "each repeat must be quieter than the last (third "
-                                            + juce::String (thirdEcho) + " vs first " + juce::String (aroundEcho) + ")");
+        expect (secondEcho > 0.0f, "the delay must repeat more than once");
+        expect (secondEcho < aroundEcho * 0.9f, "each repeat must be quieter than the last (second "
+                                                    + juce::String (secondEcho) + " vs first " + juce::String (aroundEcho) + ")");
 
         // Mix 0 is a true pass-through.
         setParameter (*module, "mix", 0.0f);
