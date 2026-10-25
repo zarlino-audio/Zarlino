@@ -93,6 +93,7 @@ public:
         testClipper();
         testExciter();
         testDeEsser();
+        testAnalogueEmulations();
     }
 
 private:
@@ -113,6 +114,9 @@ private:
         { "zarlino.saturation.clipper", false },
         { "zarlino.saturation.exciter", false },
         { "zarlino.dynamics.deesser", false },
+        { "zarlino.saturation.tape", false },
+        { "zarlino.saturation.tube", false },
+        { "zarlino.saturation.transformer", false },
     };
 
     //==========================================================================
@@ -774,6 +778,126 @@ private:
         bodyLevel = std::sqrt (bodyLevel / 4800.0);
 
         expect (bodyLevel > 0.45, "a 200 Hz body must be left alone (rms " + juce::String (bodyLevel) + ")");
+    }
+
+    //==========================================================================
+    void testAnalogueEmulations()
+    {
+        beginTest ("analogue emulations: each has its own character, and each is bounded");
+
+        const char* const ids[] {
+            "zarlino.saturation.tape",
+            "zarlino.saturation.tube",
+            "zarlino.saturation.transformer",
+        };
+
+        for (const char* id : ids)
+        {
+            auto module = makeModule (id, 48000.0, 2048, 2);
+            expect (module != nullptr, juce::String (id) + " must construct");
+
+            if (module == nullptr)
+                continue;
+
+            // A driven tone must stay bounded and must actually change the signal.
+            setParameter (*module, "driveDb", 12.0f);
+            setParameter (*module, "mix", 1.0f);
+            module->reset();
+
+            Block driven (2, 8192);
+            Block reference (2, 8192);
+            driven.sine (220.0, 48000.0, 0.7f);
+            reference.sine (220.0, 48000.0, 0.7f);
+
+            module->process (driven.pointers(), 2, 8192);
+
+            expect (driven.allFinite(), juce::String (id) + " must stay finite");
+            expect (driven.peak() <= 2.0f, juce::String (id) + " must stay bounded (peak " + juce::String (driven.peak()) + ")");
+            expect (driven.maxDifference (reference) > 0.01f, juce::String (id) + " must alter the signal");
+            expect (driven.rms() > 0.05, juce::String (id) + " must not silence the signal");
+
+            // Mix 0 is a true pass-through, which is the contract every module
+            // in this library keeps.
+            setParameter (*module, "mix", 0.0f);
+            module->reset();
+
+            Block dry (2, 512);
+            dry.noise (707u, 0.4f);
+            Block dryReference = dry.duplicate();
+            module->process (dry.pointers(), 2, 512);
+            expectWithinAbsoluteError (dry.maxDifference (dryReference), 0.0f, 1.0e-6f,
+                                       juce::String (id) + ": mix 0 must pass the input through unchanged");
+        }
+
+        // Asymmetry: tape and tube must generate even harmonics, which is exactly
+        // what makes them analogue rather than symmetric clippers. Measured as a
+        // DC-free half-cycle asymmetry of the output around zero.
+        for (const char* id : { "zarlino.saturation.tape", "zarlino.saturation.tube" })
+        {
+            auto module = makeModule (id, 48000.0, 8192, 1);
+            expect (module != nullptr);
+            if (module == nullptr)
+                continue;
+
+            setParameter (*module, "bias", 1.0f);
+            setParameter (*module, "driveDb", 12.0f);
+            setParameter (*module, "mix", 1.0f);
+            module->reset();
+
+            Block block (1, 8192);
+            block.sine (500.0, 48000.0, 0.6f);
+            module->process (block.pointers(), 1, 8192);
+
+            double positive = 0.0;
+            double negative = 0.0;
+
+            for (int i = 0; i < 8192; ++i)
+            {
+                const double value = block.channel (0)[i];
+                if (value > 0.0) positive += value; else negative -= value;
+            }
+
+            // With bias applied the two halves compress differently, so their
+            // summed magnitudes cannot match. A symmetric shaper would match.
+            const double imbalance = std::abs (positive - negative) / std::max (1.0e-9, positive + negative);
+            expect (imbalance > 0.02, juce::String (id) + " must be asymmetric (imbalance "
+                                          + juce::String (imbalance) + ")");
+        }
+
+        // The transformer saturates the LOW band only: a 6 kHz tone must come
+        // through essentially untouched while a 60 Hz tone is shaped.
+        {
+            auto module = makeModule ("zarlino.saturation.transformer", 48000.0, 8192, 1);
+            expect (module != nullptr);
+
+            if (module != nullptr)
+            {
+                setParameter (*module, "driveDb", 18.0f);
+                setParameter (*module, "splitHz", 150.0f);
+                setParameter (*module, "hfHz", 20000.0f);
+                setParameter (*module, "mix", 1.0f);
+                module->reset();
+
+                Block high (1, 8192);
+                Block highReference (1, 8192);
+                high.sine (6000.0, 48000.0, 0.5f);
+                highReference.sine (6000.0, 48000.0, 0.5f);
+                module->process (high.pointers(), 1, 8192);
+
+                Block low (1, 8192);
+                Block lowReference (1, 8192);
+                low.sine (60.0, 48000.0, 0.5f);
+                lowReference.sine (60.0, 48000.0, 0.5f);
+                module->process (low.pointers(), 1, 8192);
+
+                const float highChange = high.maxDifference (highReference);
+                const float lowChange = low.maxDifference (lowReference);
+
+                expect (lowChange > highChange * 2.0f,
+                        "the transformer must saturate the low band, not the top (low "
+                            + juce::String (lowChange) + " vs high " + juce::String (highChange) + ")");
+            }
+        }
     }
 };
 

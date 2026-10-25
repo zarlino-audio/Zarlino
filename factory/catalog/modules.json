@@ -1128,6 +1128,194 @@
     ]
   },
   {
+    "id": "zarlino.saturation.tape",
+    "version": "1.0.0",
+    "displayName": "Tape",
+    "description": "Tape-machine character: head bump, biased asymmetry and high-frequency loss",
+    "category": "saturation",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "driveDb",
+        "displayName": "Drive",
+        "unit": "dB",
+        "min": 0,
+        "max": 18,
+        "default": 3,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "bias",
+        "displayName": "Bias",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.25,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "bumpDb",
+        "displayName": "Head Bump",
+        "unit": "dB",
+        "min": 0,
+        "max": 6,
+        "default": 2,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Tone"
+      },
+      {
+        "id": "hfHz",
+        "displayName": "HF Loss",
+        "unit": "Hz",
+        "min": 2000,
+        "max": 20000,
+        "default": 12000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Tone"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.saturation.transformer",
+    "version": "1.0.0",
+    "displayName": "Transformer",
+    "description": "Iron colour: low-band core saturation with a passive high-frequency roll-off",
+    "category": "saturation",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "driveDb",
+        "displayName": "Drive",
+        "unit": "dB",
+        "min": 0,
+        "max": 18,
+        "default": 4,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "splitHz",
+        "displayName": "Core Split",
+        "unit": "Hz",
+        "min": 60,
+        "max": 600,
+        "default": 220,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "hfHz",
+        "displayName": "HF Roll-off",
+        "unit": "Hz",
+        "min": 3000,
+        "max": 20000,
+        "default": 14000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Tone"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.saturation.tube",
+    "version": "1.0.0",
+    "displayName": "Tube",
+    "description": "Driven tube stage with asymmetric bias and supply sag",
+    "category": "saturation",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "driveDb",
+        "displayName": "Drive",
+        "unit": "dB",
+        "min": 0,
+        "max": 24,
+        "default": 6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "bias",
+        "displayName": "Bias",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.35,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "sag",
+        "displayName": "Sag",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.3,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
     "id": "zarlino.shaping.transient",
     "version": "1.0.0",
     "displayName": "Transient Shaper",

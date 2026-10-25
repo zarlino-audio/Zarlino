@@ -68,6 +68,9 @@ add_library(zarlino_factory STATIC
     modules/ClipperModule.cpp
     modules/ExciterModule.cpp
     modules/DeEsserModule.cpp
+    modules/TapeModule.cpp
+    modules/TubeModule.cpp
+    modules/TransformerModule.cpp
 
     # Reuse of shipped DSP: the factory saturation module adapts ZScorch's
     # voiced, ADAA anti-aliased Saturator rather than re-implementing it.

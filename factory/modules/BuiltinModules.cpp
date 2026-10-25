@@ -30,6 +30,9 @@
 //   zarlino.saturation.clipper         - soft / hard / asymmetric clipper
 //   zarlino.saturation.exciter         - high-band harmonic generator
 //   zarlino.dynamics.deesser           - band-limited downward compression
+//   zarlino.saturation.tape            - tape: head bump, biased asymmetry, HF loss
+//   zarlino.saturation.tube            - tube stage with asymmetric bias and sag
+//   zarlino.saturation.transformer     - iron: low-band core saturation + HF roll-off
 //==============================================================================
 
 #include "zfactory/ModuleRegistry.h"
@@ -53,8 +56,11 @@
 #include "SaturationModule.h"
 #include "StereoWidthModule.h"
 #include "TiltEqModule.h"
+#include "TapeModule.h"
+#include "TransformerModule.h"
 #include "TremoloModule.h"
 #include "TransientShaperModule.h"
+#include "TubeModule.h"
 
 #include <memory>
 
@@ -101,7 +107,10 @@ Result<size_t> registerBuiltinModules (ModuleRegistry& registry)
         descriptorFor<MidSideModule>(),
         descriptorFor<ClipperModule>(),
         descriptorFor<ExciterModule>(),
-        descriptorFor<DeEsserModule>()
+        descriptorFor<DeEsserModule>(),
+        descriptorFor<TapeModule>(),
+        descriptorFor<TubeModule>(),
+        descriptorFor<TransformerModule>()
     };
 
     constexpr size_t count = sizeof (descriptors) / sizeof (descriptors[0]);
