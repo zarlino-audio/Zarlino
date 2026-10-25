@@ -2,6 +2,8 @@
 
 #include "ModuleSupport.h"
 
+#include "ZBiquadFilter.h"
+
 namespace zfactory
 {
 
