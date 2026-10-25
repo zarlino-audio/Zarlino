@@ -58,6 +58,16 @@ add_library(zarlino_factory STATIC
     modules/TransientShaperModule.cpp
     modules/StereoWidthModule.cpp
     modules/DryWetModule.cpp
+    modules/DelayModule.cpp
+    modules/ReverbModule.cpp
+    modules/ChorusModule.cpp
+    modules/FlangerModule.cpp
+    modules/PhaserModule.cpp
+    modules/TremoloModule.cpp
+    modules/MidSideModule.cpp
+    modules/ClipperModule.cpp
+    modules/ExciterModule.cpp
+    modules/DeEsserModule.cpp
 
     # Reuse of shipped DSP: the factory saturation module adapts ZScorch's
     # voiced, ADAA anti-aliased Saturator rather than re-implementing it.
@@ -113,6 +123,7 @@ target_sources(Factory_Tests
         tests/RealtimeSafetyTests.cpp
         tests/ExampleSpecTests.cpp
         tests/UiPlanTests.cpp
+        tests/ModulePrimitivesTests.cpp
 )
 
 target_include_directories(Factory_Tests PRIVATE

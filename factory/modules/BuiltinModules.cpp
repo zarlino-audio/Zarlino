@@ -17,20 +17,43 @@
 //   zarlino.shaping.transient          - transient shaper
 //   zarlino.stereo.width               - mid/side width with bass-mono guard
 //   zarlino.mix.drywet                 - dry/wet blend
+//
+// Wave 2 additions - the families that used to be "unsupported":
+//
+//   zarlino.delay.stereo               - stereo delay, damped feedback, ping-pong
+//   zarlino.reverb.algorithmic         - room/hall/plate network with predelay
+//   zarlino.modulation.chorus          - two-voice modulated delay
+//   zarlino.modulation.flanger         - short modulated delay with feedback
+//   zarlino.modulation.phaser          - six-stage swept allpass chain
+//   zarlino.modulation.tremolo         - amplitude modulation / auto-pan
+//   zarlino.stereo.midside             - width with a bass-mono guard
+//   zarlino.saturation.clipper         - soft / hard / asymmetric clipper
+//   zarlino.saturation.exciter         - high-band harmonic generator
+//   zarlino.dynamics.deesser           - band-limited downward compression
 //==============================================================================
 
 #include "zfactory/ModuleRegistry.h"
 
+#include "ChorusModule.h"
+#include "ClipperModule.h"
 #include "CompressorModule.h"
+#include "DeEsserModule.h"
+#include "DelayModule.h"
+#include "ExciterModule.h"
+#include "FlangerModule.h"
 #include "DryWetModule.h"
 #include "FilterModule.h"
 #include "GainModule.h"
 #include "GateModule.h"
 #include "LimiterModule.h"
+#include "MidSideModule.h"
+#include "PhaserModule.h"
 #include "ParametricEqModule.h"
+#include "ReverbModule.h"
 #include "SaturationModule.h"
 #include "StereoWidthModule.h"
 #include "TiltEqModule.h"
+#include "TremoloModule.h"
 #include "TransientShaperModule.h"
 
 #include <memory>
@@ -68,7 +91,17 @@ Result<size_t> registerBuiltinModules (ModuleRegistry& registry)
         descriptorFor<LimiterModule>(),
         descriptorFor<TransientShaperModule>(),
         descriptorFor<StereoWidthModule>(),
-        descriptorFor<DryWetModule>()
+        descriptorFor<DryWetModule>(),
+        descriptorFor<DelayModule>(),
+        descriptorFor<ReverbModule>(),
+        descriptorFor<ChorusModule>(),
+        descriptorFor<FlangerModule>(),
+        descriptorFor<PhaserModule>(),
+        descriptorFor<TremoloModule>(),
+        descriptorFor<MidSideModule>(),
+        descriptorFor<ClipperModule>(),
+        descriptorFor<ExciterModule>(),
+        descriptorFor<DeEsserModule>()
     };
 
     constexpr size_t count = sizeof (descriptors) / sizeof (descriptors[0]);

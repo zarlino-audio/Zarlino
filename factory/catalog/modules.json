@@ -1,5 +1,75 @@
 [
   {
+    "id": "zarlino.delay.stereo",
+    "version": "1.0.0",
+    "displayName": "Stereo Delay",
+    "description": "Tempo-friendly stereo delay with a damped feedback loop and ping-pong routing",
+    "category": "mixing",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "timeMs",
+        "displayName": "Time",
+        "unit": "ms",
+        "min": 1,
+        "max": 2000,
+        "default": 350,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Delay"
+      },
+      {
+        "id": "feedback",
+        "displayName": "Feedback",
+        "unit": "",
+        "min": 0,
+        "max": 0.95,
+        "default": 0.3,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Delay"
+      },
+      {
+        "id": "dampHz",
+        "displayName": "Damping",
+        "unit": "Hz",
+        "min": 400,
+        "max": 18000,
+        "default": 7000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Delay"
+      },
+      {
+        "id": "pingPong",
+        "displayName": "Ping-Pong",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 2,
+        "group": "Delay"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.25,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
     "id": "zarlino.dynamics.compressor",
     "version": "1.0.0",
     "displayName": "Compressor",
@@ -88,6 +158,65 @@
         "logarithmic": false,
         "stepCount": 0,
         "group": "Detector"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.dynamics.deesser",
+    "version": "1.0.0",
+    "displayName": "De-Esser",
+    "description": "Band-limited downward compression for sibilance and harshness",
+    "category": "dynamics",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "freqHz",
+        "displayName": "Frequency",
+        "unit": "Hz",
+        "min": 2500,
+        "max": 12000,
+        "default": 6000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Detector"
+      },
+      {
+        "id": "thresholdDb",
+        "displayName": "Threshold",
+        "unit": "dB",
+        "min": -48,
+        "max": 0,
+        "default": -24,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Detector"
+      },
+      {
+        "id": "amount",
+        "displayName": "Amount",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Reduction"
+      },
+      {
+        "id": "releaseMs",
+        "displayName": "Release",
+        "unit": "ms",
+        "min": 20,
+        "max": 400,
+        "default": 90,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Reduction"
       }
     ]
   },
@@ -516,6 +645,334 @@
     ]
   },
   {
+    "id": "zarlino.modulation.chorus",
+    "version": "1.0.0",
+    "displayName": "Chorus",
+    "description": "Two-voice modulated delay for width and thickness",
+    "category": "mixing",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "rateHz",
+        "displayName": "Rate",
+        "unit": "Hz",
+        "min": 0.05,
+        "max": 8,
+        "default": 0.6,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "depthMs",
+        "displayName": "Depth",
+        "unit": "ms",
+        "min": 0,
+        "max": 20,
+        "default": 6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "spread",
+        "displayName": "Spread",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.35,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.modulation.flanger",
+    "version": "1.0.0",
+    "displayName": "Flanger",
+    "description": "Short modulated delay with feedback for comb-filter sweeps",
+    "category": "mixing",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "rateHz",
+        "displayName": "Rate",
+        "unit": "Hz",
+        "min": 0.05,
+        "max": 8,
+        "default": 0.25,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "depthMs",
+        "displayName": "Depth",
+        "unit": "ms",
+        "min": 0.5,
+        "max": 8,
+        "default": 3,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "feedback",
+        "displayName": "Feedback",
+        "unit": "",
+        "min": -0.9,
+        "max": 0.9,
+        "default": 0.35,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.modulation.phaser",
+    "version": "1.0.0",
+    "displayName": "Phaser",
+    "description": "Six-stage swept allpass chain for swirling phase movement",
+    "category": "mixing",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "rateHz",
+        "displayName": "Rate",
+        "unit": "Hz",
+        "min": 0.05,
+        "max": 8,
+        "default": 0.4,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "centreHz",
+        "displayName": "Centre",
+        "unit": "Hz",
+        "min": 150,
+        "max": 3000,
+        "default": 700,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "depth",
+        "displayName": "Depth",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.7,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "feedback",
+        "displayName": "Feedback",
+        "unit": "",
+        "min": 0,
+        "max": 0.9,
+        "default": 0.3,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.5,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.modulation.tremolo",
+    "version": "1.0.0",
+    "displayName": "Tremolo / Pan",
+    "description": "Amplitude modulation with a stereo phase offset for auto-pan",
+    "category": "mixing",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "rateHz",
+        "displayName": "Rate",
+        "unit": "Hz",
+        "min": 0.05,
+        "max": 20,
+        "default": 4,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "depth",
+        "displayName": "Depth",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Movement"
+      },
+      {
+        "id": "shape",
+        "displayName": "Shape",
+        "unit": "",
+        "min": 0,
+        "max": 2,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 3,
+        "group": "Movement"
+      },
+      {
+        "id": "stereoPhase",
+        "displayName": "Stereo Phase",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Movement"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.reverb.algorithmic",
+    "version": "1.0.0",
+    "displayName": "Reverb",
+    "description": "Algorithmic room: damped comb network with allpass diffusion and predelay",
+    "category": "mixing",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "predelayMs",
+        "displayName": "Predelay",
+        "unit": "ms",
+        "min": 0,
+        "max": 200,
+        "default": 20,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Space"
+      },
+      {
+        "id": "size",
+        "displayName": "Size",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.55,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Space"
+      },
+      {
+        "id": "decay",
+        "displayName": "Decay",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Space"
+      },
+      {
+        "id": "damping",
+        "displayName": "Damping",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.4,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Tone"
+      },
+      {
+        "id": "width",
+        "displayName": "Width",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.8,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Tone"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.25,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
     "id": "zarlino.saturation",
     "version": "1.0.0",
     "displayName": "Saturation",
@@ -560,6 +1017,113 @@
         "logarithmic": false,
         "stepCount": 0,
         "group": "Tone"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.saturation.clipper",
+    "version": "1.0.0",
+    "displayName": "Clipper",
+    "description": "Driven soft/hard/asymmetric clipper with a hard ceiling",
+    "category": "saturation",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "driveDb",
+        "displayName": "Drive",
+        "unit": "dB",
+        "min": 0,
+        "max": 24,
+        "default": 6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "ceilingDb",
+        "displayName": "Ceiling",
+        "unit": "dB",
+        "min": -12,
+        "max": 0,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      },
+      {
+        "id": "mode",
+        "displayName": "Mode",
+        "unit": "",
+        "min": 0,
+        "max": 2,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 3,
+        "group": "Character"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.saturation.exciter",
+    "version": "1.0.0",
+    "displayName": "Exciter",
+    "description": "High-band harmonic generator for air and presence",
+    "category": "saturation",
+    "certification": "CERTIFIED",
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "freqHz",
+        "displayName": "Tune",
+        "unit": "Hz",
+        "min": 800,
+        "max": 8000,
+        "default": 3000,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "amount",
+        "displayName": "Amount",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.35,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Character"
+      },
+      {
+        "id": "mix",
+        "displayName": "Mix",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
       }
     ]
   },
@@ -630,6 +1194,42 @@
         "logarithmic": false,
         "stepCount": 0,
         "group": "Detector"
+      }
+    ]
+  },
+  {
+    "id": "zarlino.stereo.midside",
+    "version": "1.0.0",
+    "displayName": "Mid/Side Width",
+    "description": "Mid/side width with a bass-mono guard",
+    "category": "stereo",
+    "certification": "CERTIFIED",
+    "channels": [
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "width",
+        "displayName": "Width",
+        "unit": "",
+        "min": 0,
+        "max": 2,
+        "default": 1,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Width"
+      },
+      {
+        "id": "bassMonoHz",
+        "displayName": "Bass Mono",
+        "unit": "Hz",
+        "min": 20,
+        "max": 500,
+        "default": 20,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Width"
       }
     ]
   },
