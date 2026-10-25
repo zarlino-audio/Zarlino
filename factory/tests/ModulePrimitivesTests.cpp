@@ -13,16 +13,10 @@
 #include "zfactory/DspModule.h"
 #include "zfactory/ModuleRegistry.h"
 
-#include "ChorusModule.h"
-#include "ClipperModule.h"
-#include "DeEsserModule.h"
-#include "DelayModule.h"
-#include "ExciterModule.h"
-#include "FlangerModule.h"
-#include "MidSideModule.h"
-#include "PhaserModule.h"
-#include "ReverbModule.h"
-#include "TremoloModule.h"
+// No module headers here on purpose: every case is built through
+// builtinRegistry(), the same path a generated product takes. A test that
+// included the headers directly could pass while a module was unreachable from
+// the registry - which is the failure that actually matters.
 
 #include <algorithm>
 #include <cmath>
