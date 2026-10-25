@@ -762,6 +762,7 @@ ModulePrimitivesTests modulePrimitivesTests;
 
 } // namespace
 
-void registerModulePrimitivesTests() {}
-
 } // namespace zfactory
+
+// The runner calls this at global scope (see tests/Main.cpp).
+void registerModulePrimitivesTests() {}
