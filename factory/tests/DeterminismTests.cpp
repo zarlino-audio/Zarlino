@@ -155,7 +155,7 @@ private:
         expectSuccess (*this, registerBuiltinModules (first), "first registry");
         expectSuccess (*this, registerBuiltinModules (second), "second registry");
 
-        expectEquals (static_cast<int> (first.size()), 24);
+        expectEquals (static_cast<int> (first.size()), 25);
         expectEquals (first.catalogFingerprint(), second.catalogFingerprint());
         expectEquals (jstr (first.describeCatalog()), jstr (second.describeCatalog()));
 

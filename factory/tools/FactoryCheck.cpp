@@ -112,6 +112,7 @@ int printCatalogJson (const zfactory::ModuleRegistry& registry)
         std::cout << "    \"description\": \"" << escapeJson (manifest.description) << "\",\n";
         std::cout << "    \"category\": \"" << zfactory::moduleCategoryName (manifest.category) << "\",\n";
         std::cout << "    \"certification\": \"" << zfactory::certificationStateName (manifest.certification) << "\",\n";
+        std::cout << "    \"isSource\": " << (manifest.isSource ? "true" : "false") << ",\n";
         std::cout << "    \"channels\": [";
 
         for (size_t c = 0; c < manifest.supportedChannels.size(); ++c)
@@ -247,6 +248,17 @@ int main (int argc, char** argv)
 
     if (! render)
         return 0;
+
+    // A source product makes no sound from an input buffer: its input is a note.
+    // Hold middle C for the whole render, so the report measures the product
+    // rather than the silence an unplayed instrument legitimately produces.
+    const bool instrument = engine.value()->isInstrument();
+
+    if (instrument)
+    {
+        engine.value()->handleNoteOn (60, 0.8f);
+        std::cout << "input   : note 60 held (instrument)\n";
+    }
 
     // Deterministic test signal: unit impulse followed by a 440 Hz tone, so the
     // report shows both the transient behaviour and the steady-state level.

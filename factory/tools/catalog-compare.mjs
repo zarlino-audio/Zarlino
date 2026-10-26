@@ -63,6 +63,12 @@ for (const [id, left] of expectedById) {
     }
   }
 
+  // isSource decides whether the host is told the plugin accepts MIDI, so a
+  // stale value here is a silent "my instrument makes no sound" bug.
+  if (Boolean(left.isSource) !== Boolean(right.isSource)) {
+    problems.push(`${id}.isSource: committed '${Boolean(left.isSource)}' vs kernel '${Boolean(right.isSource)}'`);
+  }
+
   const leftChannels = [...(left.channels ?? [])].sort().join(",");
   const rightChannels = [...(right.channels ?? [])].sort().join(",");
   if (leftChannels !== rightChannels) problems.push(`${id}.channels: '${leftChannels}' vs '${rightChannels}'`);

@@ -51,6 +51,21 @@ void sanitiseInput (float* const* channels, int numChannels, int offset, int num
         }
     }
 }
+
+/** Zero the incoming block. Used for a source graph, whose modules write their
+    own signal: whatever the host had in the buffer must not reach the chain. */
+void clearInput (float* const* channels, int numChannels, int offset, int numSamples) noexcept
+{
+    for (int ch = 0; ch < numChannels; ++ch)
+    {
+        float* data = channels[ch];
+
+        if (data == nullptr)
+            continue;
+
+        std::memset (data + offset, 0, sizeof (float) * static_cast<size_t> (numSamples));
+    }
+}
 } // namespace
 
 //==============================================================================
@@ -137,6 +152,42 @@ Result<std::unique_ptr<GraphEngine>> GraphEngine::create (const PluginSpec& spec
 
         engine->m_modules.push_back (std::move (instance));
     }
+
+    //--------------------------------------------------------------------------
+    // 1b. Source policy. A source replaces its input, so the two kinds of plugin
+    //     cannot be mixed: an instrument without a source would be silent, and a
+    //     processor containing a source would ignore everything the host sends it.
+    //--------------------------------------------------------------------------
+    std::string sourceId;
+
+    for (const auto& instance : engine->m_modules)
+        if (instance.manifest.isSource)
+        {
+            engine->m_isSource = true;
+
+            if (sourceId.empty())
+                sourceId = instance.manifest.id;
+        }
+
+    const bool instrument = spec.effectType == EffectType::Instrument;
+
+    if (instrument && ! engine->m_isSource)
+        return Result<std::unique_ptr<GraphEngine>>::failure (
+            makeError (ErrorCode::UnsupportedValue, "$/plugin/effectType",
+                       "an 'instrument' product needs at least one source module, and this chain has none"));
+
+    if (! instrument && engine->m_isSource)
+        return Result<std::unique_ptr<GraphEngine>>::failure (
+            makeError (ErrorCode::UnsupportedValue, "$/plugin/effectType",
+                       "this chain contains the source module '" + sourceId
+                           + "' but the product is not declared as an 'instrument'"));
+
+    // An instrument generates its own signal, so there is nothing to mix it
+    // against: a Mix control on a synth would be a knob that does nothing.
+    if (instrument && spec.dryWet.enabled)
+        return Result<std::unique_ptr<GraphEngine>>::failure (
+            makeError (ErrorCode::UnsupportedValue, "$/dryWet/enabled",
+                       "an 'instrument' product has no input signal, so dry/wet must be disabled"));
 
     //--------------------------------------------------------------------------
     // 2. Bind the exposed parameters.
@@ -464,11 +515,42 @@ void GraphEngine::process (float* const* channels, int numChannels, int numSampl
     while (remaining > 0)
     {
         const int blockSize = std::min (remaining, m_maxBlockSize);
-        sanitiseInput (channels, m_channelCount, offset, blockSize);
+
+        // A source replaces its input rather than processing it, so a host buffer
+        // (or a feedback loop, or a render of a stale take) must not leak in.
+        if (m_isSource)
+            clearInput (channels, m_channelCount, offset, blockSize);
+        else
+            sanitiseInput (channels, m_channelCount, offset, blockSize);
+
         processBlockInternal (channels, offset, blockSize);
         offset += blockSize;
         remaining -= blockSize;
     }
+}
+
+void GraphEngine::handleNoteOn (int midiNote, float velocity) noexcept
+{
+    if (! m_prepared)
+        return;
+
+    for (auto& instance : m_modules)
+        instance.module->handleNoteOn (midiNote, velocity);
+}
+
+void GraphEngine::handleNoteOff (int midiNote) noexcept
+{
+    if (! m_prepared)
+        return;
+
+    for (auto& instance : m_modules)
+        instance.module->handleNoteOff (midiNote);
+}
+
+void GraphEngine::handleAllNotesOff() noexcept
+{
+    for (auto& instance : m_modules)
+        instance.module->handleAllNotesOff();
 }
 
 void GraphEngine::processBlockInternal (float* const* channels, int offset, int numSamples) noexcept
@@ -478,7 +560,9 @@ void GraphEngine::processBlockInternal (float* const* channels, int offset, int 
     for (int ch = 0; ch < m_channelCount; ++ch)
         blockChannels[ch] = channels[ch] + offset;
 
-    const bool useDryWet = m_spec.dryWet.enabled;
+    // A source graph has no meaningful dry path: its input is silence by
+    // construction, so mixing it in would only attenuate the instrument.
+    const bool useDryWet = m_spec.dryWet.enabled && ! m_isSource;
     const float mix = useDryWet ? getDryWetNormalised() : 1.0f;
     const bool needsDry = useDryWet && mix < 1.0f;
 
@@ -547,6 +631,7 @@ std::string GraphEngine::describeGraph() const
     text += " latency=" + std::to_string (m_latencySamples);
     text += " dryWet=" + std::string (m_spec.dryWet.enabled ? "on" : "off");
     text += " bypass=" + std::string (isBypassed() ? "on" : "off");
+    text += " source=" + std::string (m_isSource ? "on" : "off");
     text += "\n";
 
     for (size_t i = 0; i < m_modules.size(); ++i)

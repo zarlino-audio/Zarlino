@@ -34,7 +34,8 @@ enum class EffectType : int
     TransientShaper  = 6,
     StereoUtility    = 7,
     ChannelStrip     = 8,
-    VocalProcessor   = 9
+    VocalProcessor   = 9,
+    Instrument        = 10
 };
 
 const char* effectTypeName (EffectType type) noexcept;
@@ -53,7 +54,8 @@ enum class ModuleCategory : int
     Limiter    = 5,
     Shaping    = 6,
     Stereo     = 7,
-    Mixing     = 8
+    Mixing     = 8,
+    Source     = 9
 };
 
 const char* moduleCategoryName (ModuleCategory category) noexcept;

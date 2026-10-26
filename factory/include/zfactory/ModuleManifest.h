@@ -70,6 +70,11 @@ struct ModuleManifest
     /** Declares that process()/setParameter() never allocate, lock or block. */
     bool realtimeSafe = true;
 
+    /** The module generates audio from note events (a sound source) instead of
+        processing its input. A spec whose effectType is 'instrument' must carry
+        at least one source, and a processor chain must carry none. */
+    bool isSource = false;
+
     const ParameterManifest* findParameter (const std::string& parameterId) const;
     int indexOfParameter (const std::string& parameterId) const;   // -1 when absent
     bool supportsChannels (ChannelMode mode) const;

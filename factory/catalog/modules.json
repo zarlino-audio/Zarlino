@@ -6,6 +6,7 @@
     "description": "Tempo-friendly stereo delay with a damped feedback loop and ping-pong routing",
     "category": "mixing",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -76,6 +77,7 @@
     "description": "Feedforward compressor with soft knee and makeup gain",
     "category": "dynamics",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -168,6 +170,7 @@
     "description": "Band-limited downward compression for sibilance and harshness",
     "category": "dynamics",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -227,6 +230,7 @@
     "description": "Downward expander / noise gate with hysteresis",
     "category": "dynamics",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -297,6 +301,7 @@
     "description": "Four-band parametric equaliser: low shelf, two peaks, high shelf",
     "category": "equalizer",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -444,6 +449,7 @@
     "description": "Spectral tilt around a pivot frequency",
     "category": "equalizer",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -481,6 +487,7 @@
     "description": "Resonant low-pass / high-pass, 12 or 24 dB per octave",
     "category": "filter",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -540,6 +547,7 @@
     "description": "Smoothed trim stage with polarity inversion",
     "category": "utility",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -577,6 +585,7 @@
     "description": "Brick-wall lookahead limiter with a fixed 1 ms window",
     "category": "limiter",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -614,6 +623,7 @@
     "description": "Parallel dry/wet blend, linear or equal-power",
     "category": "mixing",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -651,6 +661,7 @@
     "description": "Two-voice modulated delay for width and thickness",
     "category": "mixing",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -710,6 +721,7 @@
     "description": "Short modulated delay with feedback for comb-filter sweeps",
     "category": "mixing",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -769,6 +781,7 @@
     "description": "Six-stage swept allpass chain for swirling phase movement",
     "category": "mixing",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -839,6 +852,7 @@
     "description": "Amplitude modulation with a stereo phase offset for auto-pan",
     "category": "mixing",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -898,6 +912,7 @@
     "description": "Algorithmic room: damped comb network with allpass diffusion and predelay",
     "category": "mixing",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -979,6 +994,7 @@
     "description": "Six-mode harmonic saturator with ADAA anti-aliasing (ZScorch curves)",
     "category": "saturation",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -1027,6 +1043,7 @@
     "description": "Driven soft/hard/asymmetric clipper with a hard ceiling",
     "category": "saturation",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -1086,6 +1103,7 @@
     "description": "High-band harmonic generator for air and presence",
     "category": "saturation",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -1134,6 +1152,7 @@
     "description": "Tape-machine character: head bump, biased asymmetry and high-frequency loss",
     "category": "saturation",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -1204,6 +1223,7 @@
     "description": "Iron colour: low-band core saturation with a passive high-frequency roll-off",
     "category": "saturation",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -1263,6 +1283,7 @@
     "description": "Driven tube stage with asymmetric bias and supply sag",
     "category": "saturation",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -1322,6 +1343,7 @@
     "description": "Dual-envelope transient shaper for attack and sustain",
     "category": "shaping",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "mono",
       "stereo"
@@ -1386,12 +1408,128 @@
     ]
   },
   {
+    "id": "zarlino.source.synth",
+    "version": "1.0.0",
+    "displayName": "Synth",
+    "description": "Eight-voice polyphonic oscillator with an amplitude envelope",
+    "category": "source",
+    "certification": "CERTIFIED",
+    "isSource": true,
+    "channels": [
+      "mono",
+      "stereo"
+    ],
+    "referenceLatencySamples": 0,
+    "parameters": [
+      {
+        "id": "wave",
+        "displayName": "Waveform",
+        "unit": "",
+        "min": 0,
+        "max": 3,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 4,
+        "group": "Voice"
+      },
+      {
+        "id": "octave",
+        "displayName": "Octave",
+        "unit": "",
+        "min": -2,
+        "max": 2,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 5,
+        "group": "Voice"
+      },
+      {
+        "id": "fineCents",
+        "displayName": "Fine",
+        "unit": "",
+        "min": -100,
+        "max": 100,
+        "default": 0,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Voice"
+      },
+      {
+        "id": "pulseWidth",
+        "displayName": "Width",
+        "unit": "",
+        "min": 0.05,
+        "max": 0.95,
+        "default": 0.5,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Voice"
+      },
+      {
+        "id": "attackMs",
+        "displayName": "Attack",
+        "unit": "ms",
+        "min": 0.5,
+        "max": 4000,
+        "default": 5,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Envelope"
+      },
+      {
+        "id": "decayMs",
+        "displayName": "Decay",
+        "unit": "ms",
+        "min": 5,
+        "max": 4000,
+        "default": 250,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Envelope"
+      },
+      {
+        "id": "sustain",
+        "displayName": "Sustain",
+        "unit": "",
+        "min": 0,
+        "max": 1,
+        "default": 0.75,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Envelope"
+      },
+      {
+        "id": "releaseMs",
+        "displayName": "Release",
+        "unit": "ms",
+        "min": 5,
+        "max": 8000,
+        "default": 220,
+        "logarithmic": true,
+        "stepCount": 0,
+        "group": "Envelope"
+      },
+      {
+        "id": "levelDb",
+        "displayName": "Level",
+        "unit": "dB",
+        "min": -48,
+        "max": 6,
+        "default": -6,
+        "logarithmic": false,
+        "stepCount": 0,
+        "group": "Output"
+      }
+    ]
+  },
+  {
     "id": "zarlino.stereo.midside",
     "version": "1.0.0",
     "displayName": "Mid/Side Width",
     "description": "Mid/side width with a bass-mono guard",
     "category": "stereo",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "stereo"
     ],
@@ -1428,6 +1566,7 @@
     "description": "Mid/side width control with bass-mono guard",
     "category": "stereo",
     "certification": "CERTIFIED",
+    "isSource": false,
     "channels": [
       "stereo"
     ],

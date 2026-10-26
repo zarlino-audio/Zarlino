@@ -109,7 +109,7 @@ public:
     bool hasEditor() const override { return true; }
 
     const juce::String getName() const override;
-    bool acceptsMidi() const override { return false; }
+    bool acceptsMidi() const override;
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
@@ -125,7 +125,6 @@ public:
 
     void getStateInformation (juce::MemoryBlock& destination) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
-
     // ---- shell API used by the editor and the QA gate ------------------------
     /** The product failed to initialise: the plugin stays silent and the editor
         shows the deterministic kernel error instead of a broken interface. */
@@ -181,6 +180,9 @@ private:
 
     bool m_engineOk = false;
     FactoryError m_engineError;
+
+    /** Route one MIDI message to the engine's note interface. Realtime safe. */
+    void deliverMidi (const juce::MidiMessage& message) noexcept;
 
     std::vector<std::unique_ptr<ShellParameter>> m_parameters;
     std::vector<int> m_controlToParameterIndex;   // control index -> host index, or -1

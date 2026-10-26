@@ -42,13 +42,14 @@ const char* effectTypeName (EffectType type) noexcept
         case EffectType::StereoUtility:   return "stereo-utility";
         case EffectType::ChannelStrip:    return "channel-strip";
         case EffectType::VocalProcessor:  return "vocal-processor";
+        case EffectType::Instrument:      return "instrument";
     }
     return "unknown";
 }
 
 bool parseEffectType (const std::string& text, EffectType& out) noexcept
 {
-    for (int i = 0; i <= static_cast<int> (EffectType::VocalProcessor); ++i)
+    for (int i = 0; i <= static_cast<int> (EffectType::Instrument); ++i)
     {
         const auto candidate = static_cast<EffectType> (i);
         if (text == effectTypeName (candidate))
@@ -73,6 +74,7 @@ const char* moduleCategoryName (ModuleCategory category) noexcept
         case ModuleCategory::Shaping:    return "shaping";
         case ModuleCategory::Stereo:     return "stereo";
         case ModuleCategory::Mixing:     return "mixing";
+        case ModuleCategory::Source:     return "source";
     }
     return "unknown";
 }

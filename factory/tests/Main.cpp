@@ -21,6 +21,7 @@ void registerRealtimeSafetyTests();
 void registerExampleSpecTests();
 void registerUiPlanTests();
 void registerModulePrimitivesTests();
+void registerInstrumentTests();
 
 int main (int argc, char** argv)
 {
@@ -37,6 +38,7 @@ int main (int argc, char** argv)
     registerExampleSpecTests();
     registerUiPlanTests();
     registerModulePrimitivesTests();
+    registerInstrumentTests();
 
     const juce::String filter = (argc > 1) ? juce::String (argv[1]) : juce::String();
 

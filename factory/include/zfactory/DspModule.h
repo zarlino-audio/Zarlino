@@ -72,6 +72,16 @@ public:
     /** Actual latency in samples after the most recent prepare(). */
     virtual int getLatencySamples() const noexcept = 0;
 
+    //--------------------------------------------------------------------------
+    // Note events. Only modules whose manifest declares `isSource`, or that
+    // shape a note-gated signal, need these; the defaults make every other
+    // module ignore MIDI, so hosts that send notes to a processor are harmless.
+    // All three are realtime safe: no allocation, no locks, no I/O.
+    //--------------------------------------------------------------------------
+    virtual void handleNoteOn (int /*midiNote*/, float /*velocity*/) noexcept {}
+    virtual void handleNoteOff (int /*midiNote*/) noexcept {}
+    virtual void handleAllNotesOff() noexcept {}
+
 protected:
     DspModule() = default;
 };

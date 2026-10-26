@@ -166,7 +166,12 @@ void TubeModule::process (float* const* channels, int numChannels, int numSample
         const float mix = m_mix.next();
 
         const float dc = std::tanh (bias);
-        const float fullScale = std::max (1.0e-3f, std::tanh (drive + bias) - dc);
+
+        // See TapeModule: normalise by the larger half-scale excursion so a bias
+        // yields asymmetry without ever exceeding full scale.
+        const float positive = std::tanh (drive + bias) - dc;
+        const float negative = dc - std::tanh (-drive + bias);
+        const float fullScale = std::max (1.0e-3f, std::max (positive, negative));
 
         float blockPeak = 0.0f;
 

@@ -187,6 +187,23 @@ public:
         }
     }
 
+    /** One sample through one channel's state. Used where a filter has to sit
+        inside a per-sample loop because a nonlinearity or a parameter ramp is
+        interleaved with it. */
+    float processSample(int channel, float x)
+    {
+        if (channel < 0 || channel >= static_cast<int>(m_states.size()))
+            return x;
+
+        BiquadState& st = m_states[static_cast<size_t>(channel)];
+        const float y = m_coeffs.b0 * x + st.z1;
+        const float new_z1 = m_coeffs.b1 * x - m_coeffs.a1 * y + st.z2;
+        const float new_z2 = m_coeffs.b2 * x - m_coeffs.a2 * y;
+        st.z1 = new_z1;
+        st.z2 = new_z2;
+        return y;
+    }
+
     void process(float* const* channelData, int numChannels, int numSamples)
     {
         assert(channelData != nullptr || numChannels == 0 || numSamples == 0);

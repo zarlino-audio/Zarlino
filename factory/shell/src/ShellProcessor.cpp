@@ -617,7 +617,6 @@ void ShellProcessor::reset()
 
 void ShellProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
-    juce::ignoreUnused (midi);
     juce::ScopedNoDenormals noDenormals;
 
     const auto numSamples = buffer.getNumSamples();
@@ -646,7 +645,54 @@ void ShellProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
     for (int channel = 0; channel < required && channel < 2; ++channel)
         channels[channel] = buffer.getWritePointer (channel);
 
+    // An instrument renders note by note: the block is split at every MIDI event
+    // so a note starts on the sample the host scheduled it, not on the block
+    // boundary. A processor chain takes the fast path and ignores MIDI entirely.
+    if (m_engine->isInstrument() && ! midi.isEmpty())
+    {
+        int position = 0;
+
+        for (const auto metadata : midi)
+        {
+            const int eventPosition = juce::jlimit (0, numSamples, metadata.samplePosition);
+
+            if (eventPosition > position)
+            {
+                m_engine->process (channels, required, eventPosition - position);
+
+                for (int channel = 0; channel < required && channel < 2; ++channel)
+                    channels[channel] += eventPosition - position;
+
+                position = eventPosition;
+            }
+
+            deliverMidi (metadata.getMessage());
+        }
+
+        if (position < numSamples)
+            m_engine->process (channels, required, numSamples - position);
+
+        return;
+    }
+
     m_engine->process (channels, required, numSamples);
+}
+
+void ShellProcessor::deliverMidi (const juce::MidiMessage& message) noexcept
+{
+    if (message.isNoteOn())
+        m_engine->handleNoteOn (message.getNoteNumber(), message.getFloatVelocity());
+    else if (message.isNoteOff())
+        m_engine->handleNoteOff (message.getNoteNumber());
+    else if (message.isAllNotesOff() || message.isAllSoundOff())
+        m_engine->handleAllNotesOff();
+}
+
+bool ShellProcessor::acceptsMidi() const
+{
+    // Only an instrument source can use notes; a processor that claimed them
+    // would make a DAW route its MIDI away from the instrument before it.
+    return m_engine != nullptr && m_engine->isInstrument();
 }
 
 void ShellProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)

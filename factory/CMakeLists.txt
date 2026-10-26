@@ -71,6 +71,7 @@ add_library(zarlino_factory STATIC
     modules/TapeModule.cpp
     modules/TubeModule.cpp
     modules/TransformerModule.cpp
+    modules/SynthModule.cpp
 
     # Reuse of shipped DSP: the factory saturation module adapts ZScorch's
     # voiced, ADAA anti-aliased Saturator rather than re-implementing it.
@@ -127,6 +128,7 @@ target_sources(Factory_Tests
         tests/ExampleSpecTests.cpp
         tests/UiPlanTests.cpp
         tests/ModulePrimitivesTests.cpp
+        tests/InstrumentTests.cpp
 )
 
 target_include_directories(Factory_Tests PRIVATE

@@ -178,6 +178,7 @@ uint64_t ModuleManifest::fingerprint() const
 
     h = hashFloat (h, cpuCostPerSample);
     h = hashInt (h, realtimeSafe ? 1 : 0);
+    h = hashInt (h, isSource ? 1 : 0);
 
     return h;
 }

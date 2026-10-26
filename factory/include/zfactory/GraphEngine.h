@@ -78,6 +78,22 @@ public:
     void reset() noexcept;
 
     //--------------------------------------------------------------------------
+    // Note events (instruments only; harmless for a processor chain).
+    //
+    // Sample-accurate note timing is the caller's job: split the block at each
+    // MIDI event, deliver the note, then process the preceding segment. The
+    // engine forwards the event to every module, which is how a source starts a
+    // voice and how a downstream note-gated module follows it.
+    //--------------------------------------------------------------------------
+    void handleNoteOn (int midiNote, float velocity) noexcept;
+    void handleNoteOff (int midiNote) noexcept;
+    void handleAllNotesOff() noexcept;
+
+    /** True when the spec contains a source module. Such a graph replaces its
+        input instead of processing it, so the host must see a synth. */
+    bool isInstrument() const noexcept { return m_isSource; }
+
+    //--------------------------------------------------------------------------
     // Audio. `channels` must carry getChannelCount() distinct channel pointers;
     // blocks larger than the prepared maximum are processed in chunks.
     //--------------------------------------------------------------------------
@@ -147,6 +163,7 @@ private:
 
     bool m_prepared = false;
     bool m_bypassed = false;
+    bool m_isSource = false;
     double m_sampleRate = 48000.0;
     int m_maxBlockSize = 0;
     int m_channelCount = 2;

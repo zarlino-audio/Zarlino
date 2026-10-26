@@ -1,0 +1,225 @@
+{
+  "factorySchemaVersion": 1,
+  "plugin": {
+    "id": "zarlino.example.instrument",
+    "name": "Example Instrument",
+    "vendor": "Zarlino Audio",
+    "version": "1.0.0",
+    "effectType": "instrument",
+    "channels": "stereo"
+  },
+  "graph": {
+    "modules": [
+      {
+        "instanceId": "voice",
+        "moduleId": "zarlino.source.synth",
+        "moduleVersion": "1.0.0",
+        "parameters": {
+          "wave": 0.0,
+          "octave": 0.0,
+          "fineCents": 0.0,
+          "pulseWidth": 0.5,
+          "attackMs": 6.0,
+          "decayMs": 420.0,
+          "sustain": 0.65,
+          "releaseMs": 260.0,
+          "levelDb": -6.0
+        }
+      },
+      {
+        "instanceId": "tone",
+        "moduleId": "zarlino.filter.multimode",
+        "moduleVersion": "1.0.0",
+        "parameters": { "shape": 0.0, "frequency": 4200.0, "resonance": 0.9, "slope": 0.0 }
+      },
+      {
+        "instanceId": "ensemble",
+        "moduleId": "zarlino.modulation.chorus",
+        "moduleVersion": "1.0.0",
+        "parameters": { "rateHz": 0.4, "depthMs": 5.0, "spread": 0.7, "mix": 0.25 }
+      },
+      {
+        "instanceId": "room",
+        "moduleId": "zarlino.reverb.algorithmic",
+        "moduleVersion": "1.0.0",
+        "parameters": { "predelayMs": 18.0, "size": 0.5, "decay": 0.55, "damping": 0.45, "width": 0.8, "mix": 0.22 }
+      },
+      {
+        "instanceId": "ceiling",
+        "moduleId": "zarlino.limiter",
+        "moduleVersion": "1.0.0",
+        "parameters": { "ceiling": -1.0, "release": 60.0 }
+      }
+    ]
+  },
+  "parameters": [
+    {
+      "id": "waveform",
+      "name": "Waveform",
+      "target": "voice.wave",
+      "range": { "min": 0.0, "max": 3.0, "default": 0.0 },
+      "group": "Voice",
+      "exposeToHost": true
+    },
+    {
+      "id": "octave",
+      "name": "Octave",
+      "target": "voice.octave",
+      "range": { "min": -2.0, "max": 2.0, "default": 0.0 },
+      "group": "Voice",
+      "exposeToHost": true
+    },
+    {
+      "id": "fine",
+      "name": "Fine",
+      "target": "voice.fineCents",
+      "range": { "min": -100.0, "max": 100.0, "default": 0.0 },
+      "group": "Voice",
+      "exposeToHost": true
+    },
+    {
+      "id": "brightness",
+      "name": "Brightness",
+      "target": "tone.frequency",
+      "range": { "min": 60.0, "max": 16000.0, "default": 4200.0 },
+      "unit": "Hz",
+      "group": "Tone",
+      "logarithmic": true,
+      "exposeToHost": true
+    },
+    {
+      "id": "resonance",
+      "name": "Resonance",
+      "target": "tone.resonance",
+      "range": { "min": 0.3, "max": 8.0, "default": 0.9 },
+      "unit": "Q",
+      "group": "Tone",
+      "exposeToHost": true
+    },
+    {
+      "id": "attack",
+      "name": "Attack",
+      "target": "voice.attackMs",
+      "range": { "min": 0.5, "max": 4000.0, "default": 6.0 },
+      "unit": "ms",
+      "group": "Envelope",
+      "logarithmic": true,
+      "exposeToHost": true
+    },
+    {
+      "id": "decay",
+      "name": "Decay",
+      "target": "voice.decayMs",
+      "range": { "min": 5.0, "max": 4000.0, "default": 420.0 },
+      "unit": "ms",
+      "group": "Envelope",
+      "logarithmic": true,
+      "exposeToHost": true
+    },
+    {
+      "id": "sustain",
+      "name": "Sustain",
+      "target": "voice.sustain",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.65 },
+      "group": "Envelope",
+      "exposeToHost": true
+    },
+    {
+      "id": "release",
+      "name": "Release",
+      "target": "voice.releaseMs",
+      "range": { "min": 5.0, "max": 8000.0, "default": 260.0 },
+      "unit": "ms",
+      "group": "Envelope",
+      "logarithmic": true,
+      "exposeToHost": true
+    },
+    {
+      "id": "chorusMix",
+      "name": "Ensemble",
+      "target": "ensemble.mix",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.25 },
+      "group": "Space",
+      "exposeToHost": true
+    },
+    {
+      "id": "roomMix",
+      "name": "Room",
+      "target": "room.mix",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.22 },
+      "group": "Space",
+      "exposeToHost": true
+    },
+    {
+      "id": "level",
+      "name": "Level",
+      "target": "voice.levelDb",
+      "range": { "min": -24.0, "max": 6.0, "default": -6.0 },
+      "unit": "dB",
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "ceiling",
+      "name": "Ceiling",
+      "target": "ceiling.ceiling",
+      "range": { "min": -6.0, "max": 0.0, "default": -1.0 },
+      "unit": "dB",
+      "group": "Output",
+      "exposeToHost": true
+    },
+    {
+      "id": "bypassed",
+      "name": "Bypass",
+      "target": "$factory.bypass",
+      "range": { "min": 0.0, "max": 1.0, "default": 0.0 },
+      "group": "Output",
+      "exposeToHost": true
+    }
+  ],
+  "macros": [
+    {
+      "id": "colour",
+      "name": "Colour",
+      "defaultValue": 0.3,
+      "mappings": [
+        { "parameter": "brightness", "rangeStart": 0.35, "rangeEnd": 0.8, "curve": 1.0, "scale": 1.0, "invert": false },
+        { "parameter": "resonance", "rangeStart": 0.2, "rangeEnd": 0.45, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    },
+    {
+      "id": "space",
+      "name": "Space",
+      "defaultValue": 0.25,
+      "mappings": [
+        { "parameter": "chorusMix", "rangeStart": 0.0, "rangeEnd": 0.5, "curve": 1.0, "scale": 1.0, "invert": false },
+        { "parameter": "roomMix", "rangeStart": 0.0, "rangeEnd": 0.6, "curve": 1.0, "scale": 1.0, "invert": false }
+      ]
+    }
+  ],
+  "dryWet": { "enabled": false, "defaultMix": 1.0 },
+  "bypass": { "mode": "hard", "defaultBypassed": false },
+  "ui": {
+    "accentColor": "#7FC8FF",
+    "category": "Instrument",
+    "shortDescription": "Eight-voice subtractive instrument with ensemble and room.",
+    "tags": ["instrument", "synth", "keys"],
+    "layout": "vertical",
+    "parameterOrder": [
+      "waveform",
+      "octave",
+      "fine",
+      "brightness",
+      "resonance",
+      "attack",
+      "decay",
+      "sustain",
+      "release",
+      "chorusMix",
+      "roomMix",
+      "level",
+      "ceiling",
+      "bypassed"
+    ]
+  }
+}

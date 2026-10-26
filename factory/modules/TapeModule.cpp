@@ -189,10 +189,6 @@ void TapeModule::process (float* const* channels, int numChannels, int numSample
 {
     sanitiseBlock (channels, numChannels, numSamples);
 
-    // The bump is a filter, so it runs over the whole block; saturation and the
-    // HF loss are per-sample because they carry state.
-    m_headBump.process (channels, numChannels, numSamples);
-
     for (int channel = 0; channel < numChannels && channel < 2; ++channel)
     {
         float* data = channels[channel];
@@ -209,11 +205,25 @@ void TapeModule::process (float* const* channels, int numChannels, int numSample
 
             const float dry = data[i];
             const float dc = std::tanh (bias);
+
             // Full-scale input maps to full-scale output whatever the drive, so
-            // the control changes character instead of loudness.
-            const float fullScale = std::max (1.0e-3f, std::tanh (drive + bias) - dc);
+            // the control changes character instead of loudness. The divisor is
+            // the LARGER of the two half-scale excursions: a bias makes the
+            // positive and negative halves compress differently (that is the
+            // even-harmonic asymmetry tape is wanted for), but normalising each
+            // half by its own limit would cancel the asymmetry and normalising
+            // by the positive half alone lets a large bias make the negative
+            // half tens of dB louder than full scale.
+            const float positive = std::tanh (drive + bias) - dc;
+            const float negative = dc - std::tanh (-drive + bias);
+            const float fullScale = std::max (1.0e-3f, std::max (positive, negative));
 
             float wet = (std::tanh (dry * drive + bias) - dc) / fullScale;
+
+            // The reproduce head reads the recorded tape, so its resonance
+            // belongs after the saturation - and inside the wet path, so that
+            // mix 0 is a true pass-through.
+            wet = m_headBump.processSample (channel, wet);
 
             m_hfState[channel] += hf * (wet - m_hfState[channel]);
             wet = m_hfState[channel];

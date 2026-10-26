@@ -61,6 +61,7 @@
 #include "TremoloModule.h"
 #include "TransientShaperModule.h"
 #include "TubeModule.h"
+#include "SynthModule.h"
 
 #include <memory>
 
@@ -110,7 +111,8 @@ Result<size_t> registerBuiltinModules (ModuleRegistry& registry)
         descriptorFor<DeEsserModule>(),
         descriptorFor<TapeModule>(),
         descriptorFor<TubeModule>(),
-        descriptorFor<TransformerModule>()
+        descriptorFor<TransformerModule>(),
+        descriptorFor<SynthModule>()
     };
 
     constexpr size_t count = sizeof (descriptors) / sizeof (descriptors[0]);

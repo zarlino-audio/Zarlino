@@ -192,8 +192,31 @@ double rmsOf (const juce::AudioBuffer<float>& buffer)
     return count > 0 ? std::sqrt (sum / static_cast<double> (count)) : 0.0;
 }
 
+/** Note the QA gate holds down while it wants a source product to make sound.
+    Middle C, comfortable velocity: nothing about the gate depends on pitch. */
+constexpr int kQaNote = 60;
+constexpr float kQaVelocity = 0.8f;
+
+/** Fill `midi` with the single event one rendered block needs. An instrument
+    makes no sound without a note, so a gate that measures signal must hold one
+    down and a gate that measures silence must release it. A processor ignores
+    MIDI entirely, so this is a no-op for every product built before instruments
+    existed. */
+void fillMidi (juce::MidiBuffer& midi, bool instrument, bool holdNotes)
+{
+    midi.clear();
+
+    if (! instrument)
+        return;
+
+    midi.addEvent (holdNotes ? juce::MidiMessage::noteOn (1, kQaNote, kQaVelocity)
+                             : juce::MidiMessage::noteOff (1, kQaNote),
+                   0);
+}
+
 /** Process a buffer in blocks of at most `blockSize`, the way a host does. */
-void render (juce::AudioProcessor& processor, juce::AudioBuffer<float>& buffer, int blockSize)
+void render (juce::AudioProcessor& processor, juce::AudioBuffer<float>& buffer, int blockSize,
+             bool instrument, bool holdNotes)
 {
     juce::MidiBuffer midi;
 
@@ -203,6 +226,7 @@ void render (juce::AudioProcessor& processor, juce::AudioBuffer<float>& buffer, 
 
         juce::AudioBuffer<float> slice (buffer.getArrayOfWritePointers(),
                                         buffer.getNumChannels(), offset, count);
+        fillMidi (midi, instrument, holdNotes);
         processor.processBlock (slice, midi);
 
         offset += count;
@@ -214,7 +238,10 @@ class GateRunner
 {
 public:
     GateRunner (ShellProcessor& processor, QaReport& report, juce::String& pluginPath)
-        : m_processor (processor), m_report (report), m_pluginPath (pluginPath)
+        : m_processor (processor),
+          m_report (report),
+          m_pluginPath (pluginPath),
+          m_instrument (processor.acceptsMidi())
     {
     }
 
@@ -229,6 +256,7 @@ public:
         // testing nothing at all.
         gated ([this] { gateProcessingSmoke(); });
         gated ([this] { gateSilence(); });
+        gated ([this] { gateInstrumentNotes(); });
         gated ([this] { gateImpulse(); });
         gated ([this] { gateNonFiniteInput(); });
         gated ([this] { gateExtremeParameters(); });
@@ -314,6 +342,13 @@ private:
 
     int channels() const { return m_processor.product().channelCount(); }
 
+    /** Render with the note state this gate needs. Notes are held by default so
+        an instrument gate measures the product rather than silence. */
+    void renderBlock (juce::AudioBuffer<float>& buffer, int blockSize, bool holdNotes = true)
+    {
+        render (m_processor, buffer, blockSize, m_instrument, holdNotes);
+    }
+
     const UiPlan& plan() const { return m_processor.product().plan(); }
 
     //==========================================================================
@@ -381,7 +416,7 @@ private:
         juce::AudioBuffer<float> buffer (channels(), blockSize * 4);
         fillNoise (buffer, 0x5eed1234);
 
-        render (m_processor, buffer, blockSize);
+        renderBlock (buffer, blockSize);
 
         const auto finite = isFinite (buffer);
         const auto peak = peakOf (buffer);
@@ -415,7 +450,9 @@ private:
         juce::AudioBuffer<float> buffer (channels(), blockSize * 4);
         buffer.clear();
 
-        render (m_processor, buffer, blockSize);
+        // For a source product the equivalent of "silent input" is "no note
+        // held": it must not drone, self-oscillate or leak its last voice.
+        renderBlock (buffer, blockSize, false);
 
         const auto peak = peakOf (buffer);
 
@@ -433,6 +470,18 @@ private:
     //==========================================================================
     void gateImpulse()
     {
+        if (m_instrument)
+        {
+            GateResult result;
+            result.id = "audio.impulse";
+            result.title = "Impulse";
+            result.skipped = true;
+            result.detail = "a source product has no impulse response; "
+                            "instrument.note covers onset and release instead";
+            m_report.add (std::move (result));
+            return;
+        }
+
         constexpr double sampleRate = 48000.0;
         constexpr int blockSize = 128;
 
@@ -445,7 +494,7 @@ private:
         for (int channel = 0; channel < channels(); ++channel)
             buffer.setSample (channel, 0, 1.0f);
 
-        render (m_processor, buffer, blockSize);
+        renderBlock (buffer, blockSize);
 
         if (! isFinite (buffer))
         {
@@ -505,7 +554,7 @@ private:
                         buffer.setSample (channel, sample, 1.0e-40f * ((sample % 2) ? 1.0f : -1.0f));
             }
 
-            render (m_processor, buffer, blockSize);
+            renderBlock (buffer, blockSize);
 
             if (! isFinite (buffer))
             {
@@ -555,7 +604,7 @@ private:
             juce::AudioBuffer<float> buffer (channels(), blockSize * 4);
             fillSine (buffer, 220.0, sampleRate, 0.5f);
 
-            render (m_processor, buffer, blockSize);
+            renderBlock (buffer, blockSize);
 
             if (! isFinite (buffer))
             {
@@ -608,6 +657,7 @@ private:
             fillSine (buffer, 440.0, sampleRate, 0.3f);
 
             juce::MidiBuffer midi;
+            fillMidi (midi, m_instrument, true);
             m_processor.processBlock (buffer, midi);
 
             if (! isFinite (buffer))
@@ -706,7 +756,7 @@ private:
             juce::AudioBuffer<float> buffer (channels(), 2048);
             fillSine (buffer, 1000.0, rate, 0.5f);
 
-            render (m_processor, buffer, 512);
+            renderBlock (buffer, 512);
 
             if (! isFinite (buffer))
             {
@@ -732,7 +782,7 @@ private:
             juce::AudioBuffer<float> buffer (channels(), size * 3);
             fillNoise (buffer, 0xabcdefu + static_cast<uint32_t> (size));
 
-            render (m_processor, buffer, size);
+            renderBlock (buffer, size);
 
             if (! isFinite (buffer))
             {
@@ -747,7 +797,7 @@ private:
         {
             juce::AudioBuffer<float> oversized (channels(), 8192);
             fillNoise (oversized, 0x1234u);
-            render (m_processor, oversized, 8192);
+            renderBlock (oversized, 8192);
 
             if (! isFinite (oversized))
             {
@@ -775,7 +825,7 @@ private:
             juce::AudioBuffer<float> buffer (channels(), 1024);
             fillNoise (buffer, 0x9e3779b9u);
 
-            render (m_processor, buffer, 256);
+            renderBlock (buffer, 256);
 
             if (! isFinite (buffer))
             {
@@ -872,7 +922,7 @@ private:
             juce::AudioBuffer<float> buffer;
             buffer.makeCopyOf (original);
 
-            render (m_processor, buffer, blockSize);
+            renderBlock (buffer, blockSize);
 
             // The kernel's hard bypass skips the whole chain and passes the input
             // through untouched. The block is processed in place and the shell
@@ -984,7 +1034,7 @@ private:
 
         juce::AudioBuffer<float> buffer (channels(), blockSize * 2);
         fillSine (buffer, 440.0, sampleRate, 0.5f);
-        render (m_processor, buffer, blockSize);
+        renderBlock (buffer, blockSize);
 
         if (! isFinite (buffer))
         {
@@ -1096,7 +1146,7 @@ private:
         juce::AudioBuffer<float> buffer (channels(), blockSize * 8);
         fillSine (buffer, 1000.0, sampleRate, 0.5f);
 
-        render (m_processor, buffer, blockSize);
+        renderBlock (buffer, blockSize);
 
         if (! isFinite (buffer))
         {
@@ -1139,6 +1189,7 @@ private:
         for (int block = 0; block < blocks; ++block)
         {
             fillNoise (buffer, 0x77u + static_cast<uint32_t> (block));
+            fillMidi (midi, m_instrument, true);
             m_processor.processBlock (buffer, midi);
         }
 
@@ -1191,10 +1242,12 @@ private:
         juce::AudioBuffer<float> buffer (channels(), blockSize);
         juce::MidiBuffer midi;
 
-        // One second of driven input at full scale.
+        // One second of driven input at full scale. For an instrument that means
+        // a held note: its "input" is the note, not the buffer.
         for (int block = 0; block < static_cast<int> (sampleRate / blockSize); ++block)
         {
             fillNoise (buffer, 0x2468u + static_cast<uint32_t> (block));
+            fillMidi (midi, m_instrument, true);
             m_processor.processBlock (buffer, midi);
 
             if (! isFinite (buffer))
@@ -1212,6 +1265,7 @@ private:
         for (int block = 0; block < 400; ++block)   // ~2.1 s
         {
             buffer.clear();
+            fillMidi (midi, m_instrument, false);
             m_processor.processBlock (buffer, midi);
 
             if (! isFinite (buffer))
@@ -1247,6 +1301,166 @@ private:
         pass ("realtime.tail", "Tail decays to silence",
               "decayed from peak " + juce::String (peakAtStart, 5)
                   + " to rms " + juce::String (rmsAtEnd, 10));
+    }
+
+    //==========================================================================
+    /** An instrument's input is MIDI, so the audio contract is "no note, no
+     *  sound": idle silence, audible while a note is held, silent again once it
+     *  is released, and still playable afterwards. This is the source-product
+     *  counterpart of the impulse and tail gates, which measure a signal the
+     *  host supplies and an instrument therefore never sees. */
+    void gateInstrumentNotes()
+    {
+        if (! m_instrument)
+        {
+            GateResult result;
+            result.id = "instrument.note";
+            result.title = "Note response";
+            result.skipped = true;
+            result.detail = "not an instrument product";
+            m_report.add (std::move (result));
+            return;
+        }
+
+        constexpr double sampleRate = 48000.0;
+        constexpr int blockSize = 256;
+
+        m_processor.prepareToPlay (sampleRate, blockSize);
+        m_processor.reset();
+
+        juce::AudioBuffer<float> buffer (channels(), blockSize);
+        juce::MidiBuffer midi;
+
+        // An instrument sustains for as long as a note is held, so the release
+        // phase must actually send the note off: rendering silence into a held
+        // voice proves nothing. `lastPeak` is the final block, which is what the
+        // release assertion needs; `peak`/`rms` are the loudest block.
+        enum NoteGate { noNote, noteDown, noteUp };
+
+        struct Rendered
+        {
+            bool finite = true;
+            float peak = 0.0f;
+            double rms = 0.0;
+            float lastPeak = 0.0f;
+        };
+
+        auto renderBlocks = [&] (int blocks, NoteGate gate) -> Rendered
+        {
+            Rendered out;
+
+            for (int block = 0; block < blocks; ++block)
+            {
+                buffer.clear();
+                midi.clear();
+
+                if (gate == noteDown)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, kQaNote, kQaVelocity), 0);
+                else if (gate == noteUp)
+                    midi.addEvent (juce::MidiMessage::noteOff (1, kQaNote), 0);
+
+                m_processor.processBlock (buffer, midi);
+
+                if (! isFinite (buffer))
+                {
+                    out.finite = false;
+                    return out;
+                }
+
+                out.peak = juce::jmax (out.peak, peakOf (buffer));
+                out.rms = juce::jmax (out.rms, rmsOf (buffer));
+                out.lastPeak = peakOf (buffer);
+            }
+
+            return out;
+        };
+
+        // 1. No note: an instrument must not drone or self-oscillate.
+        const auto idle = renderBlocks (8, noNote);
+
+        if (! idle.finite)
+        {
+            fail ("instrument.note", "Note response", "the idle product produced a non-finite sample");
+            return;
+        }
+
+        if (idle.peak > 1.0e-6f)
+        {
+            fail ("instrument.note", "Note response",
+                  "the product made sound with no note held (peak " + juce::String (idle.peak, 8) + ")");
+            return;
+        }
+
+        // 2. A held note must be audible.
+        const auto held = renderBlocks (static_cast<int> (sampleRate * 0.5 / blockSize), noteDown);
+
+        if (! held.finite)
+        {
+            fail ("instrument.note", "Note response", "a held note produced a non-finite sample");
+            return;
+        }
+
+        if (held.rms < 1.0e-4)
+        {
+            fail ("instrument.note", "Note response",
+                  "a held note produced no audible signal (rms " + juce::String (held.rms, 8) + ")");
+            return;
+        }
+
+        if (held.peak > 4.0f)
+        {
+            fail ("instrument.note", "Note response",
+                  "a held note drove the output to " + juce::String (held.peak, 3)
+                      + ", which is not a usable level");
+            return;
+        }
+
+        // 3. Release: the tail must settle back to silence.
+        const auto released = renderBlocks (static_cast<int> (sampleRate * 4.0 / blockSize), noteUp);
+
+        if (! released.finite)
+        {
+            fail ("instrument.note", "Note response", "the release produced a non-finite sample");
+            return;
+        }
+
+        if (released.lastPeak > 1.0e-4f)
+        {
+            fail ("instrument.note", "Note response",
+                  "the product never fell silent after note off (residual peak "
+                      + juce::String (released.lastPeak, 8) + ")");
+            return;
+        }
+
+        // 4. The next note must still play, so the voice was genuinely freed.
+        const auto retriggered = renderBlocks (static_cast<int> (sampleRate * 0.25 / blockSize), noteDown);
+
+        if (! retriggered.finite)
+        {
+            fail ("instrument.note", "Note response", "a repeated note produced a non-finite sample");
+            return;
+        }
+
+        if (retriggered.rms < held.rms * 0.25)
+        {
+            fail ("instrument.note", "Note response",
+                  "a second note after release was much quieter than the first (rms "
+                      + juce::String (retriggered.rms, 6) + " vs " + juce::String (held.rms, 6) + ")");
+            return;
+        }
+
+        midi.clear();
+
+        GateResult result;
+        result.id = "instrument.note";
+        result.title = "Note response";
+        result.passed = true;
+        result.detail = ("idle silent, held note rms " + juce::String (held.rms, 5)
+                         + " peak " + juce::String (held.peak, 4) + ", released to "
+                         + juce::String (released.lastPeak, 8) + ", retriggered at rms "
+                         + juce::String (retriggered.rms, 5))
+                            .toStdString();
+        m_report.add (std::move (result));
     }
 
     //==========================================================================
@@ -1301,7 +1515,7 @@ private:
         juce::AudioBuffer<float> buffer (channels(), blockSize * 16);
         fillSine (buffer, 500.0, sampleRate, 4.0f);   // deliberately +12 dB over full scale
 
-        render (m_processor, buffer, blockSize);
+        renderBlock (buffer, blockSize);
 
         if (! isFinite (buffer))
         {
@@ -1433,6 +1647,8 @@ private:
     ShellProcessor& m_processor;
     QaReport& m_report;
     juce::String& m_pluginPath;
+    /** True when the product is a source: gates then drive it with notes. */
+    const bool m_instrument;
 };
 
 } // namespace

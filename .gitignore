@@ -26,6 +26,10 @@ tools/keys/*private*.pem
 # Local build trees (any suffix)
 /build-*/
 /build_*/
+
+# Locally generated product projects (verification only, never repository content)
+/work-*/
+/catalog-generated.json
 # Session scratch at repo root
 /_*.txt
 /*.bak
